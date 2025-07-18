@@ -1,4 +1,4 @@
-package ghttp
+package gresty
 
 import (
 	"context"
@@ -6,33 +6,29 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/protocol"
 	"resty.dev/v3"
 )
 
-type ClientConfig struct {
-	Module  string        `yaml:"module"`
-	Host    string        `yaml:"host"`
-	Timeout time.Duration `yaml:"timeout"`
-	Retry   int           `yaml:"retry"`
+type Client struct {
+	config      protocol.HttpClientConfig
+	logger      glog.Logger
+	restyClient *resty.Client
+	once        sync.Once
 }
 
-type Client struct {
-	Config ClientConfig
-	logger glog.Logger
-	client *resty.Client
-	once   sync.Once
+type ClientOption func(*Client)
+
+func WithConfig(cfg protocol.HttpClientConfig) ClientOption {
+	return func(c *Client) {
+		c.config = cfg
+	}
 }
 
 // NewClient 创建一个新的 HTTP 客户端
-func NewClient(cfg *ClientConfig) *Client {
+func NewClient(cfg protocol.HttpClientConfig) *Client {
 	client := &Client{
-		Config: getDefaultConfig(),
-	}
-
-	if cfg != nil {
-		client = &Client{
-			Config: *cfg,
-		}
+		config: cfg,
 	}
 	client.init()
 	return client
@@ -45,26 +41,26 @@ func (c *Client) init() {
 		client := resty.New()
 
 		// 设置超时
-		if c.Config.Timeout > 0 {
-			client.SetTimeout(c.Config.Timeout)
+		if c.config.Timeout > 0 {
+			client.SetTimeout(c.config.Timeout)
 		}
 
 		// 设置重试
-		if c.Config.Retry > 0 {
-			client.SetRetryCount(c.Config.Retry)
+		if c.config.Retry > 0 {
+			client.SetRetryCount(c.config.Retry)
 		}
 
 		// 设置基础配置
-		if c.Config.Module != "" {
-			client.SetHeader("module", c.Config.Module)
+		if c.config.Module != "" {
+			client.SetHeader("module", c.config.Module)
 		}
-		if c.Config.Host != "" {
-			client.SetBaseURL(c.Config.Host)
+		if c.config.Host != "" {
+			client.SetBaseURL(c.config.Host)
 		}
 
 		// 初始化 logger
 		logCfg := glog.GetLoggerConfig()
-		logCfg.Module = c.Config.Module
+		logCfg.Module = c.config.Module
 		if logger, err := glog.GetLogger(logCfg, glog.WithCallerSkip(1)); err != nil {
 			c.logger = glog.GetDefaultLogger()
 		} else {
@@ -74,32 +70,25 @@ func (c *Client) init() {
 		// 添加日志中间件
 		client.AddResponseMiddleware(LoggingMiddleware(c))
 
-		c.client = client
+		c.restyClient = client
 	})
 }
 
-// R 创建一个新的请求，支持 context
-func (c *Client) R(ctx context.Context) *resty.Request {
-	if c.client == nil {
+// NewRequest 创建一个新的请求，支持 context
+func (c *Client) NewRequest(ctx context.Context) *resty.Request {
+	if c.restyClient == nil {
 		c.init()
 	}
-	return c.client.R().SetContext(ctx)
+	return c.restyClient.R().SetContext(ctx)
 }
 
-func (c *Client) RWithResult(ctx context.Context, result any) *resty.Request {
-	if c.client == nil {
+func (c *Client) NewRequestWithResult(ctx context.Context, result any) *resty.Request {
+	if c.restyClient == nil {
 		c.init()
 	}
-	return c.client.R().
+	return c.restyClient.R().
 		SetContext(ctx).
 		SetResult(result)
-}
-
-func getDefaultConfig() ClientConfig {
-	return ClientConfig{
-		Module: "httpClient",
-		Retry:  3,
-	}
 }
 
 // LoggingMiddleware 返回一个日志中间件
@@ -111,7 +100,7 @@ func LoggingMiddleware(client *Client) func(restyClient *resty.Client, resp *res
 		responseBody := resp.Result()
 		fields := []any{
 			glog.KeyProto, glog.ValueProtoHttp,
-			glog.KeyHost, client.Config.Host,
+			glog.KeyHost, client.config.Host,
 			glog.KeyUri, resp.Request.URL,
 			glog.KeyMethod, resp.Request.Method,
 			glog.KeyHttpStatusCode, resp.StatusCode(),
