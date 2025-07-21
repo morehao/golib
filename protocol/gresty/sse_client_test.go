@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -22,7 +23,7 @@ type EventData struct {
 
 func TestSSEGet(t *testing.T) {
 	// 初始化 SSE 客户端
-	client := NewSSEClient(&SSEClientConfig{
+	client := NewSSEClient(&protocol.SSEClientConfig{
 		Module: "testModule",
 		Host:   "127.0.0.1",
 		Retry:  3,
