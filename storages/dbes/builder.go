@@ -1,10 +1,15 @@
 package dbes
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"strings"
+
 	jsoniter "github.com/json-iterator/go"
 )
 
-type Map = map[string]interface{}
+type Map = map[string]any
 
 // Builder ES DSL构造器
 type Builder struct {
@@ -14,28 +19,28 @@ type Builder struct {
 // NewBuilder 创建新的DSL构造器
 func NewBuilder() *Builder {
 	return &Builder{
-		body: make(map[string]interface{}),
+		body: make(map[string]any),
 	}
 }
 
 // Set 通用设置方法，支持链式调用
-func (b *Builder) Set(key string, value interface{}) *Builder {
+func (b *Builder) Set(key string, value any) *Builder {
 	b.body[key] = value
 	return b
 }
 
 // SetQuery 设置查询条件
-func (b *Builder) SetQuery(query interface{}) *Builder {
+func (b *Builder) SetQuery(query any) *Builder {
 	return b.Set("query", query)
 }
 
 // SetAggs 设置聚合
-func (b *Builder) SetAggs(aggs interface{}) *Builder {
+func (b *Builder) SetAggs(aggs any) *Builder {
 	return b.Set("aggs", aggs)
 }
 
 // SetSort 设置排序
-func (b *Builder) SetSort(sort interface{}) *Builder {
+func (b *Builder) SetSort(sort any) *Builder {
 	return b.Set("sort", sort)
 }
 
@@ -55,18 +60,30 @@ func (b *Builder) SetSource(fields []string) *Builder {
 }
 
 // SetHighlight 设置高亮
-func (b *Builder) SetHighlight(highlight interface{}) *Builder {
+func (b *Builder) SetHighlight(highlight any) *Builder {
 	return b.Set("highlight", highlight)
 }
 
 // Build 构建DSL
-func (b *Builder) Build() map[string]interface{} {
+func (b *Builder) Build() map[string]any {
 	return b.body
 }
 
 // BuildBytes 构建并返回 []byte
 func (b *Builder) BuildBytes() ([]byte, error) {
 	return jsoniter.Marshal(b.body)
+}
+
+func (b *Builder) BuildReader() (io.Reader, error) {
+	if b.body == nil || len(b.body) == 0 {
+		return strings.NewReader("{}"), nil
+	}
+
+	bodyBytes, err := jsoniter.Marshal(b.body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal body to JSON: %w", err)
+	}
+	return bytes.NewReader(bodyBytes), nil
 }
 
 func BuildSortField(field string, order string) Map {
@@ -129,7 +146,7 @@ func BuildHighlightField(fields []string, options ...HighlightOption) Map {
 		opt.apply(cfg)
 	}
 
-	fieldMap := make(map[string]interface{})
+	fieldMap := make(map[string]any)
 	for _, field := range fields {
 		fieldMap[field] = Map{}
 	}
@@ -141,10 +158,10 @@ func BuildHighlightField(fields []string, options ...HighlightOption) Map {
 	)
 }
 
-// BuildMap 用于构造map[string]interface{}的辅助方法
+// BuildMap 用于构造map[string]any的辅助方法
 // kvs 为连续的 key-value 对，key 必须是 string 类型，如 ["key", "value", "key2", "value2", ...]
-func BuildMap(kvs ...interface{}) Map {
-	m := make(map[string]interface{})
+func BuildMap(kvs ...any) Map {
+	m := make(map[string]any)
 	for i := 0; i < len(kvs); i += 2 {
 		if i+1 >= len(kvs) {
 			// 如果没有成对，跳过
