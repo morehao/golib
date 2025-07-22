@@ -75,7 +75,7 @@ func (b *Builder) BuildBytes() ([]byte, error) {
 }
 
 func (b *Builder) BuildReader() (io.Reader, error) {
-	if b.body == nil || len(b.body) == 0 {
+	if len(b.body) == 0 {
 		return strings.NewReader("{}"), nil
 	}
 
