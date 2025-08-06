@@ -1,31 +1,24 @@
-package ghttp
+package gresty
 
 import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/protocol"
 	"resty.dev/v3"
 )
 
-type SSEClientConfig struct {
-	Module        string        `yaml:"service"`
-	Host          string        `yaml:"host"`
-	RetryWaitTime time.Duration `yaml:"retry_timeout"`
-	Retry         int           `yaml:"retry"`
-}
-
 type SSEClient struct {
-	Config SSEClientConfig
+	Config protocol.SSEClientConfig
 	logger glog.Logger
 	es     *resty.EventSource
 	once   sync.Once
 }
 
 // NewSSEClient 创建实例
-func NewSSEClient(cfg *SSEClientConfig) *SSEClient {
+func NewSSEClient(cfg *protocol.SSEClientConfig) *SSEClient {
 	client := &SSEClient{
 		Config: getDefaultSSEConfig(),
 	}
@@ -102,8 +95,8 @@ func (client *SSEClient) NewMessageHandler(ctx context.Context) resty.EventMessa
 	}
 }
 
-func getDefaultSSEConfig() SSEClientConfig {
-	return SSEClientConfig{
+func getDefaultSSEConfig() protocol.SSEClientConfig {
+	return protocol.SSEClientConfig{
 		Module: "httpSSE",
 		Retry:  3,
 	}
