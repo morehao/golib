@@ -30,7 +30,7 @@ func (b *Builder) Set(key string, value any) *Builder {
 }
 
 // SetQuery 设置查询条件
-func (b *Builder) SetQuery(query any) *Builder {
+func (b *Builder) SetQuery(query Map) *Builder {
 	return b.Set("query", query)
 }
 
