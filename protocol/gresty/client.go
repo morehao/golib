@@ -31,7 +31,7 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 			Module:  cfg.Module,
 			Host:    cfg.Host,
 			Timeout: cfg.Timeout,
-			Retry:   cfg.Retry,
+			Retry:   cfg.MaxRetry,
 		}
 	}
 

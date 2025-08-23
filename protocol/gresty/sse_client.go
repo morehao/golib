@@ -37,8 +37,8 @@ func (client *SSEClient) init() {
 		if client.Config.RetryWaitTime > 0 {
 			es.SetRetryWaitTime(client.Config.RetryWaitTime)
 		}
-		if client.Config.Retry > 0 {
-			es.SetRetryCount(client.Config.Retry)
+		if client.Config.MaxRetry > 0 {
+			es.SetRetryCount(client.Config.MaxRetry)
 		}
 		if client.Config.Module != "" {
 			es.SetHeader("module", client.Config.Module)
@@ -97,7 +97,7 @@ func (client *SSEClient) NewMessageHandler(ctx context.Context) resty.EventMessa
 
 func getDefaultSSEConfig() protocol.SSEClientConfig {
 	return protocol.SSEClientConfig{
-		Module: "httpSSE",
-		Retry:  3,
+		Module:   "httpSSE",
+		MaxRetry: 3,
 	}
 }

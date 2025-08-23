@@ -12,10 +12,10 @@ import (
 
 func TestRequestWithResult(t *testing.T) {
 	cfg := &protocol.HttpClientConfig{
-		Module:  "httpbin",
-		Host:    "http://httpbin.org",
-		Timeout: 5 * time.Second,
-		Retry:   3,
+		Module:   "httpbin",
+		Host:     "http://httpbin.org",
+		Timeout:  5 * time.Second,
+		MaxRetry: 3,
 	}
 	client := NewClient(cfg)
 	ctx := context.Background()
