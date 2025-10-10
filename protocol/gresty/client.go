@@ -127,7 +127,7 @@ func LoggingMiddleware(client *Client) func(restyClient *resty.Client, resp *res
 		fields := []any{
 			glog.KeyProto, glog.ValueProtoHttp,
 			glog.KeyHost, client.Host,
-			glog.KeyUri, resp.Request.URL,
+			glog.KeyUrl, resp.Request.URL,
 			glog.KeyMethod, resp.Request.Method,
 			glog.KeyHttpStatusCode, resp.StatusCode(),
 			glog.KeyRequestBody, resp.Request.Body,

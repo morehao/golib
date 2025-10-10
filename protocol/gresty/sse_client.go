@@ -68,7 +68,7 @@ func (client *SSEClient) NewOpenHandler(ctx context.Context) resty.EventOpenFunc
 		client.logger.Infow(ctx, "Http SSE Open",
 			glog.KeyProto, glog.ValueProtoHttp,
 			glog.KeyHost, client.Config.Host,
-			glog.KeyUri, url,
+			glog.KeyUrl, url,
 		)
 	}
 }
