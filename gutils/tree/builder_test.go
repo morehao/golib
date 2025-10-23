@@ -1,578 +1,315 @@
 package tree
 
 import (
+	"context"
+	"fmt"
 	"testing"
 )
 
-// ============ 测试用的简单节点结构 ============
-
-type SimpleNode struct {
-	ID       string
-	ParentID string
+// TestNode 测试用的节点结构
+type TestNode struct {
+	ID       uint
+	ParentID uint
 	Name     string
 	Order    int
-	children []TreeNode[string]
+	Children []TreeNode[uint]
 }
 
-func (n *SimpleNode) GetKey() string                          { return n.ID }
-func (n *SimpleNode) GetParentKey() string                    { return n.ParentID }
-func (n *SimpleNode) IsRoot() bool                            { return n.ParentID == "" }
-func (n *SimpleNode) GetChildren() []TreeNode[string]         { return n.children }
-func (n *SimpleNode) SetChildren(children []TreeNode[string]) { n.children = children }
-func (n *SimpleNode) GetID() uint                             { return uint(n.Order) }
-func (n *SimpleNode) GetName() string                         { return n.Name }
-
-// ============ 辅助测试函数 ============
-
-func assertEq(t *testing.T, expected, actual interface{}, msg string) {
-	t.Helper()
-	if expected != actual {
-		t.Errorf("%s: expected %v, got %v", msg, expected, actual)
-	}
-}
-
-func assertLen(t *testing.T, slice interface{}, expected int, msg string) {
-	t.Helper()
-	var actual int
-	switch v := slice.(type) {
-	case []*SimpleNode:
-		actual = len(v)
-	case []TreeNode[string]:
-		actual = len(v)
-	default:
-		t.Errorf("assertLen: unsupported type %T", slice)
-		return
-	}
-	if actual != expected {
-		t.Errorf("%s: expected length %d, got %d", msg, expected, actual)
-	}
-}
-
-func assertTrue(t *testing.T, condition bool, msg string) {
-	t.Helper()
-	if !condition {
-		t.Errorf("%s: condition is false", msg)
-	}
-}
-
-// ============ 基础功能测试 ============
-
-func TestTreeBuilder_EmptyNodes(t *testing.T) {
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build([]*SimpleNode{})
-
-	assertLen(t, result, 0, "Empty input should return empty result")
-}
-
-func TestTreeBuilder_SingleRoot(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	assertEq(t, "1", result[0].ID, "Root ID")
-	assertEq(t, "Root", result[0].Name, "Root name")
-	assertLen(t, result[0].GetChildren(), 0, "Root should have no children")
-}
-
-func TestTreeBuilder_SimpleTree(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "1", Name: "Child1", Order: 2},
-		{ID: "3", ParentID: "1", Name: "Child2", Order: 3},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	assertEq(t, "1", result[0].ID, "Root ID")
-
-	children := result[0].GetChildren()
-	assertLen(t, children, 2, "Root should have two children")
-	assertEq(t, "2", children[0].(*SimpleNode).ID, "First child ID")
-	assertEq(t, "3", children[1].(*SimpleNode).ID, "Second child ID")
-}
-
-func TestTreeBuilder_MultipleRoots(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root1", Order: 1},
-		{ID: "2", ParentID: "", Name: "Root2", Order: 2},
-		{ID: "3", ParentID: "1", Name: "Child1", Order: 3},
-		{ID: "4", ParentID: "2", Name: "Child2", Order: 4},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 2, "Should have two roots")
-	assertEq(t, "1", result[0].ID, "First root ID")
-	assertEq(t, "2", result[1].ID, "Second root ID")
-
-	// 验证子节点
-	assertLen(t, result[0].GetChildren(), 1, "First root should have one child")
-	assertLen(t, result[1].GetChildren(), 1, "Second root should have one child")
-}
-
-func TestTreeBuilder_DeepTree(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "1", Name: "Level1", Order: 2},
-		{ID: "3", ParentID: "2", Name: "Level2", Order: 3},
-		{ID: "4", ParentID: "3", Name: "Level3", Order: 4},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-
-	// 验证树的深度
-	level1 := result[0].GetChildren()
-	assertLen(t, level1, 1, "Level 1 should have one child")
-
-	level2 := level1[0].(*SimpleNode).GetChildren()
-	assertLen(t, level2, 1, "Level 2 should have one child")
-
-	level3 := level2[0].(*SimpleNode).GetChildren()
-	assertLen(t, level3, 1, "Level 3 should have one child")
-
-	assertEq(t, "4", level3[0].(*SimpleNode).ID, "Deepest node ID")
-}
-
-func TestTreeBuilder_ComplexTree(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "1", Name: "Child1", Order: 2},
-		{ID: "3", ParentID: "1", Name: "Child2", Order: 3},
-		{ID: "4", ParentID: "2", Name: "GrandChild1", Order: 4},
-		{ID: "5", ParentID: "2", Name: "GrandChild2", Order: 5},
-		{ID: "6", ParentID: "3", Name: "GrandChild3", Order: 6},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	root := result[0]
-
-	// 验证第一层子节点
-	children := root.GetChildren()
-	assertLen(t, children, 2, "Root should have two children")
-
-	// 验证第二层子节点
-	child1Children := children[0].(*SimpleNode).GetChildren()
-	assertLen(t, child1Children, 2, "Child1 should have two children")
-
-	child2Children := children[1].(*SimpleNode).GetChildren()
-	assertLen(t, child2Children, 1, "Child2 should have one child")
-}
-
-// ============ 排序功能测试 ============
-
-type SimpleNodeOrderComparator struct{}
-
-func (c SimpleNodeOrderComparator) Compare(a, b *SimpleNode) int {
-	if a.Order < b.Order {
-		return -1
-	} else if a.Order > b.Order {
-		return 1
-	}
-	return 0
-}
-
-func TestTreeBuilder_WithOrderComparator(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 3},
-		{ID: "2", ParentID: "1", Name: "Child3", Order: 30},
-		{ID: "3", ParentID: "1", Name: "Child1", Order: 10},
-		{ID: "4", ParentID: "1", Name: "Child2", Order: 20},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](SimpleNodeOrderComparator{}),
-	)
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	children := result[0].GetChildren()
-	assertLen(t, children, 3, "Should have three children")
-
-	// 验证按 Order 排序
-	assertEq(t, 10, children[0].(*SimpleNode).Order, "First child order")
-	assertEq(t, 20, children[1].(*SimpleNode).Order, "Second child order")
-	assertEq(t, 30, children[2].(*SimpleNode).Order, "Third child order")
-}
-
-func TestTreeBuilder_WithIDComparator(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 3},
-		{ID: "2", ParentID: "1", Name: "Child3", Order: 30},
-		{ID: "3", ParentID: "1", Name: "Child1", Order: 10},
-		{ID: "4", ParentID: "1", Name: "Child2", Order: 20},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](IDComparator[*SimpleNode]{}),
-	)
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	children := result[0].GetChildren()
-	assertLen(t, children, 3, "Should have three children")
-
-	// 验证按 Order (GetID返回Order) 排序
-	assertEq(t, uint(10), children[0].(*SimpleNode).GetID(), "First child ID")
-	assertEq(t, uint(20), children[1].(*SimpleNode).GetID(), "Second child ID")
-	assertEq(t, uint(30), children[2].(*SimpleNode).GetID(), "Third child ID")
-}
-
-func TestTreeBuilder_WithNameComparator(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "1", Name: "Charlie", Order: 2},
-		{ID: "3", ParentID: "1", Name: "Alice", Order: 3},
-		{ID: "4", ParentID: "1", Name: "Bob", Order: 4},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](NameComparator[*SimpleNode]{}),
-	)
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	children := result[0].GetChildren()
-	assertLen(t, children, 3, "Should have three children")
-
-	// 验证按名称字母序排序
-	assertEq(t, "Alice", children[0].(*SimpleNode).Name, "First child name")
-	assertEq(t, "Bob", children[1].(*SimpleNode).Name, "Second child name")
-	assertEq(t, "Charlie", children[2].(*SimpleNode).Name, "Third child name")
-}
-
-func TestTreeBuilder_RecursiveSorting(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "1", Name: "Child2", Order: 20},
-		{ID: "3", ParentID: "1", Name: "Child1", Order: 10},
-		{ID: "4", ParentID: "2", Name: "GrandChild2", Order: 202},
-		{ID: "5", ParentID: "2", Name: "GrandChild1", Order: 201},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](SimpleNodeOrderComparator{}),
-	)
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-
-	// 验证第一层排序
-	children := result[0].GetChildren()
-	assertLen(t, children, 2, "Should have two children")
-	assertEq(t, 10, children[0].(*SimpleNode).Order, "First child order")
-	assertEq(t, 20, children[1].(*SimpleNode).Order, "Second child order")
-
-	// 验证第二层排序
-	grandChildren := children[1].(*SimpleNode).GetChildren()
-	assertLen(t, grandChildren, 2, "Should have two grandchildren")
-	assertEq(t, 201, grandChildren[0].(*SimpleNode).Order, "First grandchild order")
-	assertEq(t, 202, grandChildren[1].(*SimpleNode).Order, "Second grandchild order")
-}
-
-func TestTreeBuilder_CompositeComparator(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "1", Name: "Bob", Order: 20},
-		{ID: "3", ParentID: "1", Name: "Alice", Order: 20},
-		{ID: "4", ParentID: "1", Name: "Charlie", Order: 10},
-	}
-
-	// 先按 Order，再按 Name
-	compositeComp := NewCompositeComparator[*SimpleNode](
-		SimpleNodeOrderComparator{},
-		NameComparator[*SimpleNode]{},
-	)
-
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](compositeComp),
-	)
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	children := result[0].GetChildren()
-	assertLen(t, children, 3, "Should have three children")
-
-	// Charlie (Order=10) 应该排在最前面
-	assertEq(t, "Charlie", children[0].(*SimpleNode).Name, "First child name")
-
-	// Alice 和 Bob 的 Order 相同(20)，按名称排序
-	assertEq(t, "Alice", children[1].(*SimpleNode).Name, "Second child name")
-	assertEq(t, "Bob", children[2].(*SimpleNode).Name, "Third child name")
-}
-
-// ============ 错误处理测试 ============
-
-func TestTreeBuilder_MissingParent(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "999", Name: "Orphan", Order: 2}, // 父节点不存在
-	}
-
-	var capturedNodeKey, capturedParentKey string
-	errorHandlerCalled := false
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-
-	result := builder.Build(nodes)
-
-	// 只有 Root 节点被添加到树中
-	assertLen(t, result, 1, "Should have one root")
-	assertEq(t, "1", result[0].ID, "Root ID")
-
-	// 验证错误处理函数被调用
-	assertTrue(t, errorHandlerCalled, "Error handler should be called")
-	assertEq(t, "2", capturedNodeKey, "Captured node key")
-	assertEq(t, "999", capturedParentKey, "Captured parent key")
-}
-
-func TestTreeBuilder_MultipleOrphans(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "999", Name: "Orphan1", Order: 2},
-		{ID: "3", ParentID: "888", Name: "Orphan2", Order: 3},
-	}
-
-	errorCount := 0
-	builder := NewTreeBuilder[string, *SimpleNode]()
-
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	assertEq(t, 2, errorCount, "Error handler should be called twice")
-}
-
-// ============ 边界情况测试 ============
-
-func TestTreeBuilder_AllRoots(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root1", Order: 3},
-		{ID: "2", ParentID: "", Name: "Root2", Order: 1},
-		{ID: "3", ParentID: "", Name: "Root3", Order: 2},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](SimpleNodeOrderComparator{}),
-	)
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 3, "Should have three roots")
-	// 验证排序
-	assertEq(t, 1, result[0].Order, "First root order")
-	assertEq(t, 2, result[1].Order, "Second root order")
-	assertEq(t, 3, result[2].Order, "Third root order")
-}
-
-func TestTreeBuilder_NoRoots(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "999", Name: "Child1", Order: 1},
-		{ID: "2", ParentID: "999", Name: "Child2", Order: 2},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build(nodes)
-
-	// 所有节点都找不到父节点
-	assertLen(t, result, 0, "Should have no roots")
-}
-
-func TestTreeBuilder_DuplicateKeys(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "1", Name: "Child1", Order: 2},
-		{ID: "2", ParentID: "1", Name: "Child2", Order: 3}, // 重复的 ID
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	children := result[0].GetChildren()
-	// 后面的节点会覆盖前面的节点
-	assertLen(t, children, 1, "Should have one child")
-	assertEq(t, "Child2", children[0].(*SimpleNode).Name, "Should keep the last duplicate")
-}
-
-// ============ 整数类型 Key 测试 ============
-
-type IntKeyNode struct {
-	ID       int64
-	ParentID int64
-	Name     string
-	children []TreeNode[int64]
-}
-
-func (n *IntKeyNode) GetKey() int64                          { return n.ID }
-func (n *IntKeyNode) GetParentKey() int64                    { return n.ParentID }
-func (n *IntKeyNode) IsRoot() bool                           { return n.ParentID == 0 }
-func (n *IntKeyNode) GetChildren() []TreeNode[int64]         { return n.children }
-func (n *IntKeyNode) SetChildren(children []TreeNode[int64]) { n.children = children }
-func (n *IntKeyNode) GetID() uint                            { return uint(n.ID) }
-
-func TestTreeBuilder_IntegerKeys(t *testing.T) {
-	nodes := []*IntKeyNode{
-		{ID: 1, ParentID: 0, Name: "Root"},
-		{ID: 2, ParentID: 1, Name: "Child1"},
-		{ID: 3, ParentID: 1, Name: "Child2"},
-	}
-
-	builder := NewTreeBuilder[int64, *IntKeyNode]()
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	assertEq(t, int64(1), result[0].ID, "Root ID")
-	assertLen(t, result[0].GetChildren(), 2, "Root should have two children")
-}
-
-// ============ 实际场景测试 ============
-
-func TestTreeBuilder_FileSystem(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "root", ParentID: "", Name: "/", Order: 1},
-		{ID: "usr", ParentID: "root", Name: "usr", Order: 2},
-		{ID: "etc", ParentID: "root", Name: "etc", Order: 3},
-		{ID: "bin", ParentID: "usr", Name: "bin", Order: 4},
-		{ID: "bash", ParentID: "bin", Name: "bash", Order: 5},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode]()
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	assertEq(t, "/", result[0].Name, "Root name")
-
-	// 验证 /usr 和 /etc
-	children := result[0].GetChildren()
-	assertLen(t, children, 2, "Should have two directories")
-
-	// 验证 /usr/bin
-	usr := children[0].(*SimpleNode)
-	assertEq(t, "usr", usr.Name, "usr directory")
-	usrChildren := usr.GetChildren()
-	assertLen(t, usrChildren, 1, "/usr should have one child")
-
-	bin := usrChildren[0].(*SimpleNode)
-	assertEq(t, "bin", bin.Name, "bin directory")
-
-	// 验证 /usr/bin/bash
-	binChildren := bin.GetChildren()
-	assertLen(t, binChildren, 1, "/usr/bin should have one file")
-	assertEq(t, "bash", binChildren[0].(*SimpleNode).Name, "bash file")
-}
-
-func TestTreeBuilder_Organization(t *testing.T) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "CEO", Order: 1},
-		{ID: "2", ParentID: "1", Name: "CTO", Order: 2},
-		{ID: "3", ParentID: "1", Name: "CFO", Order: 3},
-		{ID: "4", ParentID: "2", Name: "Dev Team", Order: 4},
-		{ID: "5", ParentID: "2", Name: "QA Team", Order: 5},
-		{ID: "6", ParentID: "3", Name: "Accounting", Order: 6},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](SimpleNodeOrderComparator{}),
-	)
-	result := builder.Build(nodes)
-
-	assertLen(t, result, 1, "Should have one root")
-	ceo := result[0]
-	assertEq(t, "CEO", ceo.Name, "CEO name")
-
-	// 验证 CTO 和 CFO
-	executives := ceo.GetChildren()
-	assertLen(t, executives, 2, "CEO should have two direct reports")
-
-	cto := executives[0].(*SimpleNode)
-	assertEq(t, "CTO", cto.Name, "CTO name")
-
-	// 验证 Dev Team 和 QA Team
-	ctoTeams := cto.GetChildren()
-	assertLen(t, ctoTeams, 2, "CTO should have two teams")
-	assertEq(t, "Dev Team", ctoTeams[0].(*SimpleNode).Name, "First team")
-	assertEq(t, "QA Team", ctoTeams[1].(*SimpleNode).Name, "Second team")
-}
-
-// ============ Benchmark 测试 ============
-
-func BenchmarkTreeBuilder_Small(b *testing.B) {
-	nodes := []*SimpleNode{
-		{ID: "1", ParentID: "", Name: "Root", Order: 1},
-		{ID: "2", ParentID: "1", Name: "Child1", Order: 2},
-		{ID: "3", ParentID: "1", Name: "Child2", Order: 3},
-		{ID: "4", ParentID: "2", Name: "GrandChild1", Order: 4},
-	}
-
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](SimpleNodeOrderComparator{}),
-	)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = builder.Build(nodes)
-	}
-}
-
-func BenchmarkTreeBuilder_Medium(b *testing.B) {
-	nodes := make([]*SimpleNode, 100)
-	nodes[0] = &SimpleNode{ID: "0", ParentID: "", Name: "Root", Order: 0}
-
-	for i := 1; i < 100; i++ {
-		parentID := "0"
-		if i > 10 {
-			parentID = nodes[(i-1)/10].ID
-		}
-		nodes[i] = &SimpleNode{
-			ID:       string(rune('0' + i)),
-			ParentID: parentID,
-			Name:     "Node",
-			Order:    i,
+func (n *TestNode) GetKey() uint                          { return n.ID }
+func (n *TestNode) GetParentID() uint                     { return n.ParentID }
+func (n *TestNode) GetParentKey() uint                    { return n.ParentID }
+func (n *TestNode) SetChildren(children []TreeNode[uint]) { n.Children = children }
+func (n *TestNode) GetChildren() []TreeNode[uint]         { return n.Children }
+func (n *TestNode) IsRoot() bool                          { return n.ParentID == 0 }
+func (n *TestNode) GetID() uint                           { return n.ID }
+func (n *TestNode) GetName() string                       { return n.Name }
+func (n *TestNode) GetOrder() int                         { return n.Order }
+
+// 辅助函数：打印层级结构
+func printLevelNodes(levelMap map[int][]*TestNode) {
+	maxLevel := -1
+	for level := range levelMap {
+		if level > maxLevel {
+			maxLevel = level
 		}
 	}
 
-	builder := NewTreeBuilder[string, *SimpleNode](
-		WithComparator[string](SimpleNodeOrderComparator{}),
-	)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = builder.Build(nodes)
+	for i := 0; i <= maxLevel; i++ {
+		nodes := levelMap[i]
+		fmt.Printf("Level %d: ", i)
+		for j, node := range nodes {
+			if j > 0 {
+				fmt.Print(", ")
+			}
+			fmt.Printf("%s(ID:%d)", node.Name, node.ID)
+		}
+		fmt.Println()
 	}
 }
 
-func BenchmarkTreeBuilder_WithoutSort(b *testing.B) {
-	nodes := make([]*SimpleNode, 100)
-	nodes[0] = &SimpleNode{ID: "0", ParentID: "", Name: "Root", Order: 0}
-
-	for i := 1; i < 100; i++ {
-		parentID := "0"
-		if i > 10 {
-			parentID = nodes[(i-1)/10].ID
-		}
-		nodes[i] = &SimpleNode{
-			ID:       string(rune('0' + i)),
-			ParentID: parentID,
-			Name:     "Node",
-			Order:    i,
-		}
+// TestBasicTreeBuild 测试基本的树构建
+func TestBasicTreeBuild(t *testing.T) {
+	nodes := []*TestNode{
+		{ID: 1, ParentID: 0, Name: "Root", Order: 1},
+		{ID: 2, ParentID: 1, Name: "Child1", Order: 2},
+		{ID: 3, ParentID: 1, Name: "Child2", Order: 1},
+		{ID: 4, ParentID: 2, Name: "GrandChild1", Order: 1},
+		{ID: 5, ParentID: 2, Name: "GrandChild2", Order: 2},
 	}
 
-	builder := NewTreeBuilder[string, *SimpleNode]()
+	builder := NewTreeBuilder[uint, *TestNode]()
+	roots := builder.Build(nodes)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = builder.Build(nodes)
+	if len(roots) != 1 {
+		t.Errorf("Expected 1 root, got %d", len(roots))
+	}
+
+	// 测试层级输出
+	levelMap := builder.GetNodesByLevel(roots)
+
+	fmt.Println("\n=== Basic Tree Structure ===")
+	printLevelNodes(levelMap)
+
+	// 验证层级
+	if len(levelMap[0]) != 1 {
+		t.Errorf("Level 0: expected 1 node, got %d", len(levelMap[0]))
+	}
+	if len(levelMap[1]) != 2 {
+		t.Errorf("Level 1: expected 2 nodes, got %d", len(levelMap[1]))
+	}
+	if len(levelMap[2]) != 2 {
+		t.Errorf("Level 2: expected 2 nodes, got %d", len(levelMap[2]))
+	}
+
+	// 验证最大层级
+	maxLevel := builder.GetMaxLevel(roots)
+	if maxLevel != 2 {
+		t.Errorf("Expected max level 2, got %d", maxLevel)
+	}
+}
+
+// TestTreeWithSorting 测试带排序的树构建
+func TestTreeWithSorting(t *testing.T) {
+	nodes := []*TestNode{
+		{ID: 1, ParentID: 0, Name: "Root", Order: 1},
+		{ID: 2, ParentID: 1, Name: "Child1", Order: 3},
+		{ID: 3, ParentID: 1, Name: "Child2", Order: 1},
+		{ID: 4, ParentID: 1, Name: "Child3", Order: 2},
+	}
+
+	// 使用 Order 排序
+	builder := NewTreeBuilder[uint, *TestNode](
+		WithComparator[uint, *TestNode](OrderComparator[*TestNode, uint]{}),
+	)
+	roots := builder.Build(nodes)
+
+	fmt.Println("\n=== Tree with Order Sorting ===")
+	levelMap := builder.GetNodesByLevel(roots)
+	printLevelNodes(levelMap)
+
+	// 验证排序顺序
+	children := roots[0].GetChildren()
+	if len(children) != 3 {
+		t.Errorf("Expected 3 children, got %d", len(children))
+	}
+
+	// 验证是否按 Order 排序
+	child1 := children[0].(*TestNode)
+	child2 := children[1].(*TestNode)
+	child3 := children[2].(*TestNode)
+
+	if child1.Order != 1 || child2.Order != 2 || child3.Order != 3 {
+		t.Errorf("Children not sorted by order: %d, %d, %d", child1.Order, child2.Order, child3.Order)
+	}
+}
+
+// TestMultipleRoots 测试多根节点
+func TestMultipleRoots(t *testing.T) {
+	nodes := []*TestNode{
+		{ID: 1, ParentID: 0, Name: "Root1", Order: 2},
+		{ID: 2, ParentID: 0, Name: "Root2", Order: 1},
+		{ID: 3, ParentID: 1, Name: "Child1-1", Order: 1},
+		{ID: 4, ParentID: 2, Name: "Child2-1", Order: 1},
+	}
+
+	builder := NewTreeBuilder[uint, *TestNode](
+		WithComparator[uint, *TestNode](OrderComparator[*TestNode, uint]{}),
+	)
+	roots := builder.Build(nodes)
+
+	fmt.Println("\n=== Multiple Roots ===")
+	levelMap := builder.GetNodesByLevel(roots)
+	printLevelNodes(levelMap)
+
+	if len(roots) != 2 {
+		t.Errorf("Expected 2 roots, got %d", len(roots))
+	}
+
+	// 验证根节点排序
+	if roots[0].GetOrder() != 1 || roots[1].GetOrder() != 2 {
+		t.Errorf("Roots not sorted correctly")
+	}
+}
+
+// TestOrphanNodesIgnore 测试孤儿节点（忽略策略）
+func TestOrphanNodesIgnore(t *testing.T) {
+	nodes := []*TestNode{
+		{ID: 1, ParentID: 0, Name: "Root", Order: 1},
+		{ID: 2, ParentID: 1, Name: "Child1", Order: 1},
+		{ID: 3, ParentID: 999, Name: "Orphan", Order: 1}, // 孤儿节点
+	}
+
+	errorCalled := false
+	builder := NewTreeBuilder[uint, *TestNode](
+		WithOrphanStrategy[uint, *TestNode](IgnoreOrphans),
+		WithErrorHandler[uint, *TestNode](func(ctx context.Context, nodeKey, parentKey uint, err error) {
+			errorCalled = true
+			fmt.Printf("Error handler called for node %d, parent %d\n", nodeKey, parentKey)
+		}),
+	)
+
+	roots := builder.Build(nodes)
+
+	fmt.Println("\n=== Orphan Nodes (Ignore) ===")
+	levelMap := builder.GetNodesByLevel(roots)
+	printLevelNodes(levelMap)
+
+	if !errorCalled {
+		t.Error("Error handler should have been called for orphan node")
+	}
+
+	if len(roots) != 1 {
+		t.Errorf("Expected 1 root (orphan ignored), got %d", len(roots))
+	}
+}
+
+// TestOrphanNodesCollect 测试孤儿节点（收集策略）
+func TestOrphanNodesCollect(t *testing.T) {
+	nodes := []*TestNode{
+		{ID: 1, ParentID: 0, Name: "Root", Order: 1},
+		{ID: 2, ParentID: 1, Name: "Child1", Order: 1},
+		{ID: 3, ParentID: 999, Name: "Orphan", Order: 2}, // 孤儿节点
+	}
+
+	builder := NewTreeBuilder[uint, *TestNode](
+		WithOrphanStrategy[uint, *TestNode](CollectOrphans),
+	)
+
+	roots := builder.Build(nodes)
+
+	fmt.Println("\n=== Orphan Nodes (Collect) ===")
+	levelMap := builder.GetNodesByLevel(roots)
+	printLevelNodes(levelMap)
+
+	if len(roots) != 2 {
+		t.Errorf("Expected 2 roots (including orphan), got %d", len(roots))
+	}
+}
+
+// TestCompositeComparator 测试组合比较器
+func TestCompositeComparator(t *testing.T) {
+	nodes := []*TestNode{
+		{ID: 1, ParentID: 0, Name: "Root", Order: 1},
+		{ID: 2, ParentID: 1, Name: "B", Order: 1},
+		{ID: 3, ParentID: 1, Name: "A", Order: 1},
+		{ID: 4, ParentID: 1, Name: "C", Order: 2},
+	}
+
+	// 先按 Order 排序，再按 Name 排序
+	compositeComp := NewCompositeComparator[*TestNode, uint](
+		OrderComparator[*TestNode, uint]{},
+		NameComparator[*TestNode, uint]{},
+	)
+
+	builder := NewTreeBuilder[uint, *TestNode](
+		WithComparator[uint, *TestNode](compositeComp),
+	)
+
+	roots := builder.Build(nodes)
+
+	fmt.Println("\n=== Composite Comparator (Order then Name) ===")
+	levelMap := builder.GetNodesByLevel(roots)
+	printLevelNodes(levelMap)
+
+	children := roots[0].GetChildren()
+	// Order=1 的节点应该按 Name 排序：A, B
+	// Order=2 的节点：C
+	child1 := children[0].(*TestNode)
+	child2 := children[1].(*TestNode)
+	child3 := children[2].(*TestNode)
+
+	if child1.Name != "A" || child2.Name != "B" || child3.Name != "C" {
+		t.Errorf("Expected order A, B, C, got %s, %s, %s", child1.Name, child2.Name, child3.Name)
+	}
+}
+
+// TestDeepTree 测试深层树结构
+func TestDeepTree(t *testing.T) {
+	nodes := []*TestNode{
+		{ID: 1, ParentID: 0, Name: "Level0", Order: 1},
+		{ID: 2, ParentID: 1, Name: "Level1", Order: 1},
+		{ID: 3, ParentID: 2, Name: "Level2", Order: 1},
+		{ID: 4, ParentID: 3, Name: "Level3", Order: 1},
+		{ID: 5, ParentID: 4, Name: "Level4", Order: 1},
+	}
+
+	builder := NewTreeBuilder[uint, *TestNode]()
+	roots := builder.Build(nodes)
+
+	fmt.Println("\n=== Deep Tree (5 levels) ===")
+	levelMap := builder.GetNodesByLevel(roots)
+	printLevelNodes(levelMap)
+
+	maxLevel := builder.GetMaxLevel(roots)
+	if maxLevel != 4 {
+		t.Errorf("Expected max level 4, got %d", maxLevel)
+	}
+
+	// 验证每层只有一个节点
+	for i := 0; i <= 4; i++ {
+		if len(levelMap[i]) != 1 {
+			t.Errorf("Level %d: expected 1 node, got %d", i, len(levelMap[i]))
+		}
+	}
+}
+
+// TestEmptyNodes 测试空节点列表
+func TestEmptyNodes(t *testing.T) {
+	builder := NewTreeBuilder[uint, *TestNode]()
+	roots := builder.Build([]*TestNode{})
+
+	if len(roots) != 0 {
+		t.Errorf("Expected 0 roots for empty input, got %d", len(roots))
+	}
+
+	maxLevel := builder.GetMaxLevel(roots)
+	if maxLevel != -1 {
+		t.Errorf("Expected max level -1 for empty tree, got %d", maxLevel)
+	}
+}
+
+// TestBuildWithMap 测试 BuildWithMap 方法
+func TestBuildWithMap(t *testing.T) {
+	nodes := []*TestNode{
+		{ID: 1, ParentID: 0, Name: "Root", Order: 1},
+		{ID: 2, ParentID: 1, Name: "Child1", Order: 1},
+		{ID: 3, ParentID: 1, Name: "Child2", Order: 2},
+	}
+
+	builder := NewTreeBuilder[uint, *TestNode]()
+	roots, nodeMap := builder.BuildWithMap(nodes)
+
+	if len(roots) != 1 {
+		t.Errorf("Expected 1 root, got %d", len(roots))
+	}
+
+	if len(nodeMap) != 3 {
+		t.Errorf("Expected 3 nodes in map, got %d", len(nodeMap))
+	}
+
+	// 验证可以通过 ID 快速访问节点
+	node2, exists := nodeMap[2]
+	if !exists || node2.Name != "Child1" {
+		t.Error("Node map lookup failed")
 	}
 }
