@@ -98,8 +98,8 @@ func TestTreeWithSorting(t *testing.T) {
 	}
 
 	// 使用 Order 排序
-	builder := NewTreeBuilder[uint, *TestNode](
-		WithComparator[uint, *TestNode](OrderComparator[*TestNode, uint]{}),
+	builder := NewTreeBuilder(
+		WithComparator(OrderComparator[*TestNode, uint]{}),
 	)
 	roots := builder.Build(nodes)
 
@@ -132,9 +132,7 @@ func TestMultipleRoots(t *testing.T) {
 		{ID: 4, ParentID: 2, Name: "Child2-1", Order: 1},
 	}
 
-	builder := NewTreeBuilder[uint, *TestNode](
-		WithComparator[uint, *TestNode](OrderComparator[*TestNode, uint]{}),
-	)
+	builder := NewTreeBuilder(WithComparator(OrderComparator[*TestNode, uint]{}))
 	roots := builder.Build(nodes)
 
 	fmt.Println("\n=== Multiple Roots ===")
@@ -160,7 +158,7 @@ func TestOrphanNodesIgnore(t *testing.T) {
 	}
 
 	errorCalled := false
-	builder := NewTreeBuilder[uint, *TestNode](
+	builder := NewTreeBuilder(
 		WithOrphanStrategy[uint, *TestNode](IgnoreOrphans),
 		WithErrorHandler[uint, *TestNode](func(ctx context.Context, nodeKey, parentKey uint, err error) {
 			errorCalled = true
@@ -191,7 +189,7 @@ func TestOrphanNodesCollect(t *testing.T) {
 		{ID: 3, ParentID: 999, Name: "Orphan", Order: 2}, // 孤儿节点
 	}
 
-	builder := NewTreeBuilder[uint, *TestNode](
+	builder := NewTreeBuilder(
 		WithOrphanStrategy[uint, *TestNode](CollectOrphans),
 	)
 
@@ -221,8 +219,8 @@ func TestCompositeComparator(t *testing.T) {
 		NameComparator[*TestNode, uint]{},
 	)
 
-	builder := NewTreeBuilder[uint, *TestNode](
-		WithComparator[uint, *TestNode](compositeComp),
+	builder := NewTreeBuilder(
+		WithComparator(compositeComp),
 	)
 
 	roots := builder.Build(nodes)
