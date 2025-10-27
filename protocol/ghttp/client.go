@@ -51,11 +51,11 @@ type Result struct {
 }
 
 func (client *Client) Get(ctx context.Context, path string, opt RequestOption) (*Result, error) {
-	return nil, nil
+	return client.httpDo(ctx, http.MethodGet, path, opt)
 }
 
 func (client *Client) Post(ctx context.Context, path string, opt RequestOption) (*Result, error) {
-	return nil, nil
+	return client.httpDo(ctx, http.MethodPost, path, opt)
 }
 
 func (client *Client) httpDo(ctx context.Context, method, path string, opt RequestOption) (*Result, error) {
@@ -84,13 +84,20 @@ func (client *Client) httpDo(ctx context.Context, method, path string, opt Reque
 	}
 	body, fields, err := client.do(ctx, request, &opt)
 	reqData, respData := client.formatLogMsg(urlData, body.Response)
-	glog.Debugw(ctx, "http"+method+"request",
+	glog.Debugw(ctx, "http "+method+" request",
 		glog.KV(glog.KeyService, client.Service),
 		glog.KV(glog.KeyUrl, reqURL),
 		glog.KV(glog.KeyHttpParams, reqData),
 		glog.KV(glog.KeyHttpResponseCode, body.HttpCode),
+		glog.KV(glog.KeyHttpResponse, string(respData)),
 	)
-	return nil, nil
+
+	msg := "http request success"
+	if err != nil {
+		msg = err.Error()
+	}
+	glog.Infow(ctx, msg, fields)
+	return &body, err
 }
 
 func (client *Client) makeRequest(ctx context.Context, method, url string, data io.Reader, opts RequestOption) (*http.Request, error) {
