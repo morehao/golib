@@ -82,13 +82,7 @@ func (l *esLog) LogRoundTrip(req *http.Request, res *http.Response, err error, s
 		}
 		var resBody map[string]any
 		if err := jsoniter.Unmarshal(bodyBytes, &resBody); err == nil {
-			if hits, ok := resBody["hits"].(map[string]any); ok {
-				if total, ok := hits["total"].(map[string]any); ok {
-					if value, ok := total["value"].(float64); ok {
-						affectedRows = int(value)
-					}
-				}
-			}
+			affectedRows = l.parseAffectedRows(method, resBody)
 		}
 		fields = append(fields,
 			glog.KeyAffectedRows, affectedRows,
@@ -108,4 +102,65 @@ func (l *esLog) RequestBodyEnabled() bool {
 
 func (l *esLog) ResponseBodyEnabled() bool {
 	return true
+}
+
+// parseAffectedRows 根据不同的操作类型解析受影响的行数
+func (l *esLog) parseAffectedRows(method string, resBody map[string]any) int {
+	switch method {
+	case http.MethodGet, http.MethodPost:
+		// 查询操作：从 hits.total.value 获取
+		if hits, ok := resBody["hits"].(map[string]any); ok {
+			if total, ok := hits["total"].(map[string]any); ok {
+				if value, ok := total["value"].(float64); ok {
+					return int(value)
+				}
+			}
+		}
+
+		// _update_by_query 或 _delete_by_query 操作
+		if updated, ok := resBody["updated"].(float64); ok {
+			return int(updated)
+		}
+		if deleted, ok := resBody["deleted"].(float64); ok {
+			return int(deleted)
+		}
+
+		// _bulk 批量操作
+		if items, ok := resBody["items"].([]interface{}); ok {
+			count := 0
+			for _, item := range items {
+				if itemMap, ok := item.(map[string]any); ok {
+					// 遍历可能的操作类型：index, create, update, delete
+					for _, op := range []string{"index", "create", "update", "delete"} {
+						if opResult, ok := itemMap[op].(map[string]any); ok {
+							// 检查操作是否成功（status 2xx）
+							if status, ok := opResult["status"].(float64); ok && status >= 200 && status < 300 {
+								count++
+							}
+						}
+					}
+				}
+			}
+			return count
+		}
+
+	case http.MethodPut, http.MethodDelete:
+		// 单个文档的索引、更新或删除操作
+		if result, ok := resBody["result"].(string); ok {
+			// result 可能是 "created", "updated", "deleted", "noop" 等
+			if result == "created" || result == "updated" || result == "deleted" {
+				return 1
+			}
+		}
+
+		// 也可能是 _update_by_query 或 _delete_by_query
+		if updated, ok := resBody["updated"].(float64); ok {
+			return int(updated)
+		}
+		if deleted, ok := resBody["deleted"].(float64); ok {
+			return int(deleted)
+		}
+	}
+
+	return 0
 }
