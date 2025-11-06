@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/morehao/golib/gutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -13,51 +12,99 @@ func TestCreateToken(t *testing.T) {
 	type CustomData struct {
 		Role string `json:"role"`
 	}
+	
 	signKey := "secret"
-	// uuid := uuid.NewString()
 	uuid := "123456"
 	now := time.Now()
 	expiresAt := time.Now().Add(24 * time.Hour)
-	issuedAt := time.Now()
 
+	// 使用新的泛型 API
 	claims := NewClaims(
-		WithCustomData(CustomData{Role: "admin"}),
-		WithIssuer("example.com"),
-		WithSubject("user123"),
-		WithAudience("audience1", "audience2"),
-		WithNotBefore(now),
-		WithExpiresAt(expiresAt),
-		WithIssuedAt(issuedAt),
-		WithID(uuid),
+		"user123",                          // subject (必填)
+		expiresAt,                          // expiresAt (必填)
+		CustomData{Role: "admin"},          // customData (必填)
+		WithIssuer[CustomData]("example.com"), // 可选
+		WithAudience[CustomData]("audience1", "audience2"), // 可选
+		WithNotBefore[CustomData](now),     // 可选
+		WithID[CustomData](uuid),           // 可选
 	)
+	
 	token, err := CreateToken(signKey, claims)
 	assert.Nil(t, err)
 	t.Log(token)
 }
 
 func TestParseToken(t *testing.T) {
-	token := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJleGFtcGxlLmNvbSIsInN1YiI6InVzZXIxMjMiLCJhdWQiOlsiYXVkaWVuY2UxIiwiYXVkaWVuY2UyIl0sImV4cCI6MTcyMzgwOTY4NCwibmJmIjoxNzIzNzIzMjg0LCJpYXQiOjE3MjM3MjMyODQsImp0aSI6IjEyMzQ1NiIsImN1c3RvbURhdGEiOnsicm9sZSI6ImFkbWluIn19.9a3KdeiA3Z9fK1pi2NrE-1nM3BVC4DdBY57GfGaCuts"
-	signKey := "secret"
-	type CustomerData struct {
+	// 先创建一个 token
+	type CustomData struct {
 		CompanyId uint64 `json:"companyId"`
 		Role      string `json:"role"`
 	}
-	type CustomerClaims struct {
-		CustomerData CustomerData `json:"customData"`
-		jwt.RegisteredClaims
-	}
-	var claims CustomerClaims
-	err := ParseToken(signKey, token, &claims)
+	
+	signKey := "secret"
+	expiresAt := time.Now().Add(24 * time.Hour)
+	
+	// 创建 token
+	claims := NewClaims(
+		"user123",
+		expiresAt,
+		CustomData{CompanyId: 1001, Role: "admin"},
+		WithIssuer[CustomData]("example.com"),
+	)
+	
+	token, err := CreateToken(signKey, claims)
 	assert.Nil(t, err)
-	t.Log(gutils.ToJsonString(claims))
-	t.Log(claims.CustomerData.Role)
+	t.Log("Created token:", token)
+	
+	// 解析 token
+	var parsedClaims Claims[CustomData]
+	err = ParseToken(signKey, token, &parsedClaims)
+	assert.Nil(t, err)
+	t.Log(gutils.ToJsonString(parsedClaims))
+	t.Log("Role:", parsedClaims.CustomData.Role)
+	t.Log("CompanyId:", parsedClaims.CustomData.CompanyId)
+	
+	// 验证数据
+	assert.Equal(t, "admin", parsedClaims.CustomData.Role)
+	assert.Equal(t, uint64(1001), parsedClaims.CustomData.CompanyId)
+	assert.Equal(t, "user123", parsedClaims.Subject)
 }
 
 func TestRenewToken(t *testing.T) {
+	type CustomData struct {
+		Role string `json:"role"`
+	}
+	
 	signKey := "secret"
-	newExpirationTime := 2 * time.Hour
-	token := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJleGFtcGxlLmNvbSIsInN1YiI6InVzZXIxMjMiLCJhdWQiOlsiYXVkaWVuY2UxIiwiYXVkaWVuY2UyIl0sImV4cCI6MTcyMzgwOTY4NCwibmJmIjoxNzIzNzIzMjg0LCJpYXQiOjE3MjM3MjMyODQsImp0aSI6IjEyMzQ1NiIsImN1c3RvbURhdGEiOnsicm9sZSI6ImFkbWluIn19.9a3KdeiA3Z9fK1pi2NrE-1nM3BVC4DdBY57GfGaCuts"
-	newToken, err := RenewToken(signKey, token, newExpirationTime)
+	expiresAt := time.Now().Add(1 * time.Hour)
+	
+	// 创建原始 token
+	claims := NewClaims(
+		"user123",
+		expiresAt,
+		CustomData{Role: "admin"},
+		WithIssuer[CustomData]("example.com"),
+		WithID[CustomData]("123456"),
+	)
+	
+	token, err := CreateToken(signKey, claims)
 	assert.Nil(t, err)
-	t.Log(newToken)
+	t.Log("Original token:", token)
+	
+	// 续期 token
+	newExpirationTime := 2 * time.Hour
+	newToken, err := RenewToken(signKey, token, newExpirationTime, CustomData{})
+	assert.Nil(t, err)
+	t.Log("Renewed token:", newToken)
+	
+	// 验证新 token
+	var newClaims Claims[CustomData]
+	err = ParseToken(signKey, newToken, &newClaims)
+	assert.Nil(t, err)
+	t.Log(gutils.ToJsonString(newClaims))
+	
+	// 验证数据保留
+	assert.Equal(t, "admin", newClaims.CustomData.Role)
+	assert.Equal(t, "user123", newClaims.Subject)
+	assert.Equal(t, "example.com", newClaims.Issuer)
 }
