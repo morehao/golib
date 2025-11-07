@@ -98,7 +98,10 @@ func analysisTplFiles(cfg CommonConfig, defaultTargetFilename string) ([]TplAnal
 
 		layerParentDir := rootDir
 		// 构造生成文件所在目录的名称
-		if customLayerParentDir, ok := cfg.LayerParentDirMap[defaultLayerName]; ok {
+		// 优先使用映射后的 layerName，如果找不到再使用原始的 defaultLayerName
+		if customLayerParentDir, ok := cfg.LayerParentDirMap[layerName]; ok {
+			layerParentDir = filepath.Join(layerParentDir, customLayerParentDir)
+		} else if customLayerParentDir, ok := cfg.LayerParentDirMap[defaultLayerName]; ok {
 			layerParentDir = filepath.Join(layerParentDir, customLayerParentDir)
 		}
 		var targetDir string

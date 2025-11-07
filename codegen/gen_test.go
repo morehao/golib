@@ -20,14 +20,17 @@ func TestGenModuleCode(t *testing.T) {
 	tplDir := fmt.Sprintf("%s/tplExample/module", workDir)
 	rootDir := fmt.Sprintf("%s/tmp", workDir)
 	layerParentDirMap := map[LayerName]string{
-		LayerNameModel: "model",
-		LayerNameDao:   "dao",
+		LayerNameModel:      "model",
+		LayerNameDao:        "dao",
+		LayerNameController: "internal",
+		LayerNameDto:        "internal",
+		LayerNameService:    "internal",
 	}
-	layerNameMap := map[LayerName]LayerName{
-		LayerNameCode:  "code",
-		LayerNameModel: "mysqlmodel",
-		LayerNameDao:   "mysqldao",
-	}
+	// layerNameMap := map[LayerName]LayerName{
+	// 	LayerNameCode:  "code",
+	// 	LayerNameModel: "mysqlmodel",
+	// 	LayerNameDao:   "mysqldao",
+	// }
 	LayerPrefixMap := map[LayerName]LayerPrefix{
 		LayerNameService: "srv",
 	}
@@ -37,8 +40,8 @@ func TestGenModuleCode(t *testing.T) {
 			TplDir:            tplDir,
 			RootDir:           rootDir,
 			LayerParentDirMap: layerParentDirMap,
-			LayerNameMap:      layerNameMap,
-			LayerPrefixMap:    LayerPrefixMap,
+			// LayerNameMap:      layerNameMap,
+			LayerPrefixMap: LayerPrefixMap,
 		},
 		TableName: "user",
 	}
