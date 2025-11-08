@@ -19,6 +19,17 @@ func GenRequestID() string {
 	return requestId
 }
 
+// GetRequestID 从 context 中获取 requestId
+func GetRequestID(ctx context.Context) string {
+	requestIdVal := ctx.Value(KeyRequestId)
+	if requestIdVal == nil {
+		return ""
+	}
+
+	requestId, _ := requestIdVal.(string)
+	return requestId
+}
+
 func FormatRequestTime(time time.Time) string {
 	return time.Format("2006-01-02 15:04:05.999999")
 }

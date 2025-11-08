@@ -24,9 +24,9 @@ type EventData struct {
 func TestSSEGet(t *testing.T) {
 	// 初始化 SSE 客户端
 	client := NewSSEClient(&protocol.SSEClientConfig{
-		Module: "testModule",
-		Host:   "127.0.0.1",
-		Retry:  3,
+		Module:   "testModule",
+		Host:     "127.0.0.1",
+		MaxRetry: 3,
 	})
 
 	counter := 0

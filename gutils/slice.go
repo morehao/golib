@@ -41,3 +41,29 @@ func SliceContain[T comparable](slice []T, element T) bool {
 	}
 	return false
 }
+
+// SliceGroup 根据给定的容量将切片分组
+func SliceGroup[T any](slice []T, groupSize int) [][]T {
+	if groupSize <= 0 {
+		return nil
+	}
+
+	length := len(slice)
+	if length == 0 {
+		return [][]T{}
+	}
+
+	groupCount := (length + groupSize - 1) / groupSize
+	groups := make([][]T, 0, groupCount)
+	for i := 0; i < length; i += groupSize {
+		end := i + groupSize
+		if end > length {
+			end = length
+		}
+		chunk := make([]T, end-i)
+		copy(chunk, slice[i:end])
+		groups = append(groups, chunk)
+	}
+
+	return groups
+}
