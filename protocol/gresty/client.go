@@ -66,7 +66,7 @@ func (c *Client) init() {
 		// 初始化 logger
 		logCfg := glog.GetLoggerConfig()
 		logCfg.Module = c.Module
-		if logger, err := glog.GetLogger(logCfg, glog.WithCallerSkip(6)); err != nil {
+		if logger, err := glog.NewLogger(logCfg, glog.WithCallerSkip(6)); err != nil {
 			c.logger = glog.GetDefaultLogger()
 			c.logger.Warnf(context.Background(), "Http client get logger fail, error: %v", err)
 		} else {

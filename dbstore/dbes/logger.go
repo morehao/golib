@@ -12,7 +12,7 @@ import (
 )
 
 func newEsLogger(cfg *ESConfig) (*esLog, error) {
-	l, err := glog.GetLogger(cfg.loggerConfig, glog.WithCallerSkip(8))
+	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(8))
 	if err != nil {
 		return nil, err
 	}

@@ -23,12 +23,15 @@ func InitLogger(cfg *LogConfig, opts ...Option) error {
 	return nil
 }
 
-func GetLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
+// NewLogger 创建并返回一个全新的logger实例
+// 每次调用都会创建完全独立的logger实例，不会复用已有实例
+func NewLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
+	// 确保每次都创建全新的logger实例，避免callerSkip累加等问题
 	logger, err := newZapLogger(cfg, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return &loggerInstance{Logger: logger}, nil
+	return logger, nil
 }
 
 func GetDefaultLogger() Logger {
