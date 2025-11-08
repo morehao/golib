@@ -167,26 +167,6 @@ func (l *zapLogger) Fatalw(ctx context.Context, msg string, kvs ...any) {
 	l.ctxLogw(FatalLevel, ctx, msg, kvs...)
 }
 
-func (l *zapLogger) getLogger(opts ...Option) (Logger, error) {
-	cfg := &optConfig{}
-	for _, opt := range opts {
-		opt.apply(cfg)
-	}
-
-	// 创建新的 logger
-	logger := l.logger
-
-	// 如果设置了 callerSkip，添加 caller skip
-	if cfg.callerSkip > 0 {
-		logger = logger.WithOptions(zap.AddCallerSkip(cfg.callerSkip))
-	}
-
-	return &zapLogger{
-		logger: logger,
-		cfg:    l.cfg,
-	}, nil
-}
-
 func (l *zapLogger) Close() {
 	_ = l.logger.Sugar().Sync()
 }
@@ -271,5 +251,6 @@ func (l *zapLogger) extraFields(ctx context.Context) []any {
 			fields = append(fields, zap.Any(key, v))
 		}
 	}
+
 	return fields
 }

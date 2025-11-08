@@ -46,7 +46,7 @@ func (client *SSEClient) init() {
 
 		logCfg := glog.GetLoggerConfig()
 		logCfg.Module = client.Config.Module
-		if logger, err := glog.GetLogger(logCfg, glog.WithCallerSkip(1)); err != nil {
+		if logger, err := glog.NewLogger(logCfg, glog.WithCallerSkip(1)); err != nil {
 			client.logger = glog.GetDefaultLogger()
 		} else {
 			client.logger = logger

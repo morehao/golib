@@ -77,7 +77,7 @@ func TestInit(t *testing.T) {
 		}
 
 		// 验证 console logger
-		logger, getLoggerErr := GetLogger(config)
+		logger, getLoggerErr := NewLogger(config)
 		assert.Nil(t, getLoggerErr)
 		if logger == nil {
 			t.Error("Console logger not initialized")
@@ -182,7 +182,7 @@ func TestExtraKeys(t *testing.T) {
 	t.Log("Initializing logger with extra keys")
 
 	// 获取模块级别的 logger
-	logger, getLoggerErr := GetLogger(config)
+	logger, getLoggerErr := NewLogger(config)
 	if getLoggerErr != nil {
 		t.Fatalf("failed to get logger: %v", getLoggerErr)
 	}

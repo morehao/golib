@@ -34,7 +34,7 @@ func newOrmLogger(cfg *ormConfig) (*ormLogger, error) {
 	if cfg.Service == "" {
 		s = cfg.Database
 	}
-	l, err := glog.GetLogger(cfg.loggerConfig, glog.WithCallerSkip(5))
+	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(5))
 	if err != nil {
 		return nil, err
 	}
