@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	dbTypeMysql = "mysql"
+	dbTypeMysql     = "mysql"
+	dbTypePostgresql = "postgres"
 
 	ColumnKeyPRI = "PRI" // 主键
 )
@@ -32,6 +33,23 @@ type mysqlTableColumn struct {
 	Extra                  string         `gorm:"column:EXTRA"`                    // 列的额外信息，如 auto_increment
 	Privileges             string         `gorm:"column:PRIVILEGES"`               // 与列相关的权限，如 select,insert,update,references
 	GenerationExpression   sql.NullString `gorm:"column:GENERATION_EXPRESSION"`    // 生成列的表达式
+}
+
+// postgresqlTableColumn represents a column in the INFORMATION_SCHEMA.COLUMNS table for PostgreSQL
+type postgresqlTableColumn struct {
+	ColumnName             string         `gorm:"column:column_name"`              // 列名
+	DataType               string         `gorm:"column:data_type"`                // 列的数据类型，如integer
+	UdtName                string         `gorm:"column:udt_name"`                 // PostgreSQL 用户定义类型名，通常与 data_type 相同
+	IsNullable             string         `gorm:"column:is_nullable"`              // 列是否允许 NULL 值。可能的值为 YES 或 NO
+	ColumnDefault          sql.NullString `gorm:"column:column_default"`          // 列的默认值
+	CharacterMaximumLength sql.NullInt64  `gorm:"column:character_maximum_length"` // 字符串列的最大长度
+	NumericPrecision       sql.NullInt64  `gorm:"column:numeric_precision"`        // 数值列的精度
+	NumericScale           sql.NullInt64  `gorm:"column:numeric_scale"`            // 数值列的小数位数
+	DatetimePrecision      sql.NullInt64  `gorm:"column:datetime_precision"`      // 日期时间列的精度
+	OrdinalPosition        int64          `gorm:"column:ordinal_position"`         // 列在表中的位置，从 1 开始
+	TableSchema            string         `gorm:"column:table_schema"`            // 表所在的 schema
+	TableName              string         `gorm:"column:table_name"`              // 表名
+	ColumnComment          string         `gorm:"column:column_comment"`          // 列的注释（通过 JOIN pg_description 获取）
 }
 
 type ModelField struct {
@@ -71,4 +89,25 @@ func getDbName(db *gorm.DB) (dbName string, err error) {
 		return "", err
 	}
 	return entity.DbName, nil
+}
+
+func getPostgresqlDbName(db *gorm.DB) (dbName string, err error) {
+	var entity struct {
+		DbName string `gorm:"column:current_database"`
+	}
+	if err = db.Raw("SELECT current_database() AS current_database").Scan(&entity).Error; err != nil {
+		return "", err
+	}
+	return entity.DbName, nil
+}
+
+func getPostgresqlTableList(db *gorm.DB, schemaName string) (tableList TableList, err error) {
+	if schemaName == "" {
+		schemaName = "public"
+	}
+	getTableSql := fmt.Sprintf("SELECT table_name FROM information_schema.tables WHERE table_schema = '%s' AND table_type = 'BASE TABLE';", schemaName)
+	if err = db.Raw(getTableSql).Scan(&tableList).Error; err != nil {
+		return nil, err
+	}
+	return tableList, nil
 }

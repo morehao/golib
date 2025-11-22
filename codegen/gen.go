@@ -32,8 +32,11 @@ func (impl *generatorImpl) AnalysisModuleTpl(db *gorm.DB, cfg *ModuleCfg) (*Modu
 	case dbTypeMysql:
 		inst := &mysqlImpl{}
 		return inst.GetModuleTemplateParam(db, cfg)
+	case dbTypePostgresql:
+		inst := &postgresqlImpl{}
+		return inst.GetModuleTemplateParam(db, cfg)
 	default:
-		return nil, fmt.Errorf("unsupported database type")
+		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 }
 
