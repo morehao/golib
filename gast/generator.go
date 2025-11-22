@@ -87,7 +87,7 @@ func AddMethodToInterfaceInFile(file, interfaceName, receiverTypeName, methodNam
 func AddContentToFunc(functionFilepath, functionName, content string) error {
 	// 解析整个文件
 	fileSet := token.NewFileSet()
-	node, parseErr := parser.ParseFile(fileSet, functionFilepath, nil, parser.AllErrors)
+	node, parseErr := parser.ParseFile(fileSet, functionFilepath, nil, parser.ParseComments)
 	if parseErr != nil {
 		return fmt.Errorf("failed to parse file: %w", parseErr)
 	}
