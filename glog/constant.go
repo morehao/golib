@@ -93,13 +93,6 @@ const (
 	WriterFile    WriterType = "file"
 )
 
-type RotateIntervalType string
-
-const (
-	RotateIntervalTypeHour RotateIntervalType = "hour"
-	RotateIntervalTypeDay  RotateIntervalType = "day"
-)
-
 const (
 	defaultServiceName   = "app"
 	defaultModuleName    = "default"

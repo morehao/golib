@@ -8,14 +8,6 @@
  */
 package glog
 
-// RotateUnit 日志切割的时间单位
-type RotateUnit string
-
-const (
-	RotateUnitDay  RotateUnit = "day"
-	RotateUnitHour RotateUnit = "hour"
-)
-
 // LogConfig 模块级别的日志配置
 type LogConfig struct {
 	// Service 服务名
@@ -26,14 +18,18 @@ type LogConfig struct {
 	Level Level `json:"level" yaml:"level"`
 	// Writer 日志输出类型
 	Writer WriterType `json:"writer" yaml:"writer"`
-	// RotateInterval 日志切割周期，单位为天
-	RotateInterval RotateIntervalType `json:"rotate_interval" yaml:"rotate_interval"`
 	// Dir 日志文件目录
 	Dir string `json:"dir" yaml:"dir"`
 	// ExtraKeys 需要从上下文中提取的额外字段
 	ExtraKeys []string `json:"extra_keys" yaml:"extra_keys"`
-	// RotateUnit 日志切割的时间单位
-	RotateUnit RotateUnit `json:"rotate_unit" yaml:"rotate_unit"`
+	// MaxSize 单个日志文件的最大大小（MB），超过则切割，默认 100
+	MaxSize int `json:"max_size" yaml:"max_size"`
+	// MaxBackups 保留的旧日志文件数量，默认 10
+	MaxBackups int `json:"max_backups" yaml:"max_backups"`
+	// MaxAge 保留日志文件的最大天数，默认 7
+	MaxAge int `json:"max_age" yaml:"max_age"`
+	// Compress 是否压缩旧日志文件，默认 false
+	Compress bool `json:"compress" yaml:"compress"`
 }
 
 func GetDefaultLogConfig() *LogConfig {
@@ -43,6 +39,9 @@ func GetDefaultLogConfig() *LogConfig {
 		Level:      DebugLevel,
 		Writer:     WriterConsole,
 		Dir:        defaultLogDir,
-		RotateUnit: RotateUnitDay,
+		MaxSize:    100,
+		MaxBackups: 10,
+		MaxAge:     7,
+		Compress:   false,
 	}
 }

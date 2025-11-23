@@ -11,11 +11,10 @@ import (
 func TestInitMysql(t *testing.T) {
 	defer glog.Close()
 	logCfg := &glog.LogConfig{
-		Service:        "test",
-		Level:          glog.DebugLevel,
-		Writer:         glog.WriterConsole,
-		RotateInterval: glog.RotateIntervalTypeDay,
-		ExtraKeys:      []string{glog.KeyRequestId},
+		Service:   "test",
+		Level:     glog.DebugLevel,
+		Writer:    glog.WriterConsole,
+		ExtraKeys: []string{glog.KeyRequestId},
 	}
 
 	initLogErr := glog.InitLogger(logCfg)

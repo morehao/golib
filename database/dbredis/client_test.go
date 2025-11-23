@@ -13,11 +13,10 @@ import (
 func TestInitRedis(t *testing.T) {
 	defer glog.Close()
 	logCfg := &glog.LogConfig{
-		Service:        "app",
-		Level:          glog.DebugLevel,
-		Writer:         glog.WriterConsole,
-		RotateInterval: glog.RotateIntervalTypeDay,
-		ExtraKeys:      []string{glog.KeyRequestId},
+		Service:   "app",
+		Level:     glog.DebugLevel,
+		Writer:    glog.WriterConsole,
+		ExtraKeys: []string{glog.KeyRequestId},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)
