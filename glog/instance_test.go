@@ -217,89 +217,58 @@ func TestLogFormat(t *testing.T) {
 	Errorf(ctx, "error format: %s", "value")
 }
 
-func TestRotateUnit(t *testing.T) {
-	// 创建临时目录
-	tempDir := "log/glog-test"
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+// TestLogRotation 测试日志切割功能
+func TestLogRotation(t *testing.T) {
+	tempDir := "log/glog-rotation-test"
+	defer os.RemoveAll(tempDir)
+
+	// 设置较小的 MaxSize 以便触发轮转
+	config := &LogConfig{
+		Service:    "rotation-test",
+		Level:      InfoLevel,
+		Writer:     WriterFile,
+		Dir:        tempDir,
+		MaxSize:    1, // 1MB，便于触发轮转
+		MaxBackups: 5,
+		MaxAge:     7,
+		Compress:   false,
 	}
-	// defer os.RemoveAll(tempDir)
 
-	// 使用固定的时间戳
-	now := time.Now()
+	err := InitLogger(config)
+	assert.Nil(t, err)
 
-	// 测试按天切割
-	t.Run("TestRotateUnitDay", func(t *testing.T) {
-		config := &LogConfig{
-			Service:    "test",
-			Level:      InfoLevel,
-			Writer:     WriterFile,
-			Dir:        tempDir,
-			RotateUnit: RotateUnitDay,
+	ctx := context.Background()
+
+	// 写入大量数据以触发日志切割
+	largeMessage := strings.Repeat("x", 200*1024) // 每条消息 200KB
+	for i := 0; i < 10; i++ {
+		Info(ctx, fmt.Sprintf("large message %d: %s", i, largeMessage))
+	}
+
+	// 等待缓冲区刷新和日志切割
+	time.Sleep(2 * time.Second)
+
+	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
+	baseFile := filepath.Join(expectedDir, "rotation-test_full.log")
+
+	// 验证当前日志文件存在
+	assert.True(t, fileExists(baseFile), "Current log file should exist")
+
+	// 检查是否有轮转后的文件（文件名包含时间戳）
+	files, err := os.ReadDir(expectedDir)
+	assert.Nil(t, err)
+
+	// 查找轮转后的文件（格式：rotation-test_full-时间戳.log）
+	rotated := false
+	for _, file := range files {
+		if strings.Contains(file.Name(), "rotation-test_full-") && strings.HasSuffix(file.Name(), ".log") {
+			rotated = true
+			break
 		}
+	}
 
-		// 初始化日志器
-		InitLogger(config)
+	// 验证是否发生了日志切割
+	assert.True(t, rotated, "Log rotation should occur when file size exceeds MaxSize")
 
-		// 记录日志
-		ctx := context.Background()
-		Info(ctx, "test message")
-
-		// 验证日志文件是否存在
-		expectedDir := filepath.Join(tempDir, now.Format("20060102"))
-		expectedFile := filepath.Join(expectedDir, "test_full.log")
-		if !fileExists(expectedFile) {
-			t.Errorf("Expected log file %s does not exist", expectedFile)
-		}
-	})
-
-	// 测试按小时切割
-	t.Run("TestRotateUnitHour", func(t *testing.T) {
-		config := &LogConfig{
-			Service:    "test",
-			Level:      InfoLevel,
-			Writer:     WriterFile,
-			Dir:        tempDir,
-			RotateUnit: RotateUnitHour,
-		}
-
-		// 初始化日志器
-		InitLogger(config)
-
-		// 记录日志
-		ctx := context.Background()
-		Info(ctx, "test message")
-
-		// 验证日志文件是否存在
-		expectedDir := filepath.Join(tempDir, now.Format("20060102"))
-		expectedFile := filepath.Join(expectedDir, fmt.Sprintf("test_full_%s.log", now.Format("15")))
-		if !fileExists(expectedFile) {
-			t.Errorf("Expected log file %s does not exist", expectedFile)
-		}
-	})
-
-	// 测试默认值
-	t.Run("TestDefaultRotateUnit", func(t *testing.T) {
-		config := &LogConfig{
-			Service: "app",
-			Level:   InfoLevel,
-			Writer:  WriterFile,
-			Dir:     tempDir,
-		}
-
-		// 初始化日志器
-		InitLogger(config)
-
-		// 记录日志
-		ctx := context.Background()
-		Info(ctx, "test message")
-
-		// 验证日志文件是否存在
-		rootDir, _ := os.Getwd()
-		expectedDir := filepath.Join(rootDir, tempDir, now.Format("20060102"))
-		expectedFile := filepath.Join(expectedDir, "app_full.log")
-		if !fileExists(expectedFile) {
-			t.Errorf("Expected log file %s does not exist", expectedFile)
-		}
-	})
+	Close()
 }

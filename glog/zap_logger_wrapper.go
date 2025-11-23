@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type gZapEncoder struct {
@@ -83,34 +84,37 @@ func getZapFileWriter(cfg *LogConfig, fileSuffix string) (zapcore.WriteSyncer, e
 		_ = os.MkdirAll(dir, os.ModePerm)
 	}
 
-	// 根据 RotateUnit 确定日志文件名的时间格式
-	var timeFormat string
-	switch cfg.RotateUnit {
-	case RotateUnitHour:
-		timeFormat = "15" // 只包含小时
-	default:
-		timeFormat = "" // 不包含时间
-	}
-
-	// 构建日志文件名
-	var logFilename string
-	if timeFormat != "" {
-		logFilename = fmt.Sprintf("%s_%s_%s.log", cfg.Service, fileSuffix, time.Now().Format(timeFormat))
-	} else {
-		logFilename = fmt.Sprintf("%s_%s.log", cfg.Service, fileSuffix)
-	}
-
+	// 构建日志文件名（固定格式，由 lumberjack 处理切割）
+	logFilename := fmt.Sprintf("%s_%s.log", cfg.Service, fileSuffix)
 	logFilepath := path.Join(dir, logFilename)
 
-	// 打开日志文件
-	file, openErr := os.OpenFile(logFilepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if openErr != nil {
-		return nil, openErr
+	// 设置 lumberjack 的默认值
+	maxSize := cfg.MaxSize
+	if maxSize <= 0 {
+		maxSize = 100 // 默认 100MB
+	}
+	maxBackups := cfg.MaxBackups
+	if maxBackups <= 0 {
+		maxBackups = 10 // 默认保留 10 个文件
+	}
+	maxAge := cfg.MaxAge
+	if maxAge <= 0 {
+		maxAge = 7 // 默认保留 7 天
+	}
+
+	// 使用 lumberjack 实现日志切割和清理
+	lumberjackLogger := &lumberjack.Logger{
+		Filename:   logFilepath,
+		MaxSize:    maxSize,    // 单个日志文件的最大大小（MB）
+		MaxBackups: maxBackups, // 保留的旧日志文件数量
+		MaxAge:     maxAge,     // 保留日志文件的最大天数
+		Compress:   cfg.Compress, // 是否压缩旧日志文件
+		LocalTime:  true,         // 使用本地时间
 	}
 
 	// 创建带缓冲的写入器
 	writer := &zapcore.BufferedWriteSyncer{
-		WS:            zapcore.AddSync(file),
+		WS:            zapcore.AddSync(lumberjackLogger),
 		Size:          256 * 1024,
 		FlushInterval: time.Second * 5,
 		Clock:         nil,
