@@ -13,17 +13,11 @@ import (
 // routerGroup: Gin 路由组
 // appName: 应用名称，如 "demoapp"
 func RegisterSwagger(routerGroup *gin.RouterGroup, appName string) {
-	basePath := routerGroup.BasePath()
-	docsPath := fmt.Sprintf("%s/docs/*any", appName)
-	redocsPath := fmt.Sprintf("%s/redocs", appName)
-	
+	docsPath := "docs/*any"
+	redocsPath := "redocs"
+
 	// 构建 Swagger JSON 的完整 URL
-	var swaggerURL string
-	if basePath == "" || basePath == "/" {
-		swaggerURL = fmt.Sprintf("/%s.docs/doc.json", appName)
-	} else {
-		swaggerURL = fmt.Sprintf("%s/%s.docs/doc.json", basePath, appName)
-	}
+	swaggerURL := fmt.Sprintf("/%s/docs/doc.json", appName)
 
 	routerGroup.GET(docsPath, ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.InstanceName(appName)))
 	routerGroup.GET(redocsPath, ReDocHandler(appName, swaggerURL))
@@ -57,4 +51,3 @@ func ReDocHandler(appName, swaggerURL string) gin.HandlerFunc {
 		c.String(http.StatusOK, html)
 	}
 }
-

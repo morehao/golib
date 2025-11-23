@@ -1,4 +1,4 @@
-package gconsts
+package gconstant
 
 const (
 	ApiVersionV1 = "v1"
