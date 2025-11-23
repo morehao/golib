@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/gutils"
+	"github.com/morehao/golib/gutil"
 )
 
 func TestNewClaims(t *testing.T) {
@@ -20,16 +20,16 @@ func TestNewClaims(t *testing.T) {
 	notBefore := time.Now()
 
 	claims := NewClaims(
-		"user123",                          // subject (必填)
-		expiresAt,                          // expiresAt (必填)
-		CustomData{Role: "admin"},          // customData (必填)
+		"user123",                             // subject (必填)
+		expiresAt,                             // expiresAt (必填)
+		CustomData{Role: "admin"},             // customData (必填)
 		WithIssuer[CustomData]("example.com"), // 可选
 		WithAudience[CustomData]("audience1", "audience2"), // 可选
-		WithNotBefore[CustomData](notBefore), // 可选
-		WithID[CustomData]("unique-id-12345"), // 可选
+		WithNotBefore[CustomData](notBefore),               // 可选
+		WithID[CustomData]("unique-id-12345"),              // 可选
 	)
 
-	t.Log(gutils.ToJsonString(claims))
+	t.Log(gutil.ToJsonString(claims))
 }
 
 // TestNewClaimsSimple 测试简化版本（只使用必填参数）
@@ -48,7 +48,7 @@ func TestNewClaimsSimple(t *testing.T) {
 		},
 	)
 
-	t.Log(gutils.ToJsonString(claims))
+	t.Log(gutil.ToJsonString(claims))
 }
 
 // TestNewClaimsEmpty 测试空自定义数据
@@ -63,5 +63,5 @@ func TestNewClaimsEmpty(t *testing.T) {
 		WithIssuer[EmptyData]("my-service"),
 	)
 
-	t.Log(gutils.ToJsonString(claims))
+	t.Log(gutil.ToJsonString(claims))
 }

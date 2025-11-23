@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/morehao/golib/gutils"
+	"github.com/morehao/golib/gutil"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -19,5 +19,5 @@ func TestLoadConfig(t *testing.T) {
 	}
 	var config Config
 	LoadConfig("./config_example.yaml", &config)
-	fmt.Println(gutils.ToJsonString(config))
+	fmt.Println(gutil.ToJsonString(config))
 }

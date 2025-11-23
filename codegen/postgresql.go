@@ -3,7 +3,7 @@ package codegen
 import (
 	"fmt"
 
-	"github.com/morehao/golib/gutils"
+	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 )
 
@@ -40,7 +40,7 @@ func (impl *postgresqlImpl) GetModuleTemplateParam(db *gorm.DB, cfg *ModuleCfg) 
 			ModelFields:     modelFieldList,
 		})
 	}
-	structName := gutils.SnakeToPascal(cfg.TableName)
+	structName := gutil.SnakeToPascal(cfg.TableName)
 	res := &ModuleTplAnalysisRes{
 		PackageName:     cfg.PackageName,
 		TableName:       cfg.TableName,
@@ -104,7 +104,7 @@ func (impl *postgresqlImpl) getModelField(db *gorm.DB, schemaName string, cfg *M
 		columnType := impl.buildColumnType(v)
 
 		item := ModelField{
-			FieldName:    gutils.SnakeToPascal(v.ColumnName),
+			FieldName:    gutil.SnakeToPascal(v.ColumnName),
 			FieldType:    columnTypeMap[v.UdtName],
 			ColumnName:   v.ColumnName,
 			ColumnType:   columnType,
@@ -168,15 +168,15 @@ func (impl *postgresqlImpl) buildColumnType(col postgresqlTableColumn) string {
 
 var postgresqlDefaultColumnTypeMap = map[string]string{
 	// 整数类型
-	"int2":        "int16",  // smallint
-	"int4":        "int32",  // integer
-	"int8":        "int64",  // bigint
+	"int2":        "int16", // smallint
+	"int4":        "int32", // integer
+	"int8":        "int64", // bigint
 	"smallint":    "int16",
 	"integer":     "int32",
 	"bigint":      "int64",
-	"serial":      "int32",  // serial
-	"bigserial":   "int64",  // bigserial
-	"smallserial": "int16",  // smallserial
+	"serial":      "int32", // serial
+	"bigserial":   "int64", // bigserial
+	"smallserial": "int16", // smallserial
 
 	// 浮点类型
 	"real":             "float32", // real
@@ -188,7 +188,7 @@ var postgresqlDefaultColumnTypeMap = map[string]string{
 
 	// 布尔类型
 	"bool":    "bool",
-	"boolean":  "bool",
+	"boolean": "bool",
 
 	// 字符类型
 	"char":    "string",
@@ -198,12 +198,12 @@ var postgresqlDefaultColumnTypeMap = map[string]string{
 	"name":    "string", // PostgreSQL 系统类型
 
 	// 日期时间类型
-	"date":         "time.Time",
-	"time":         "time.Time",
-	"timetz":       "time.Time", // time with time zone
-	"timestamp":    "time.Time",
-	"timestamptz":  "time.Time", // timestamp with time zone
-	"interval":     "time.Duration",
+	"date":        "time.Time",
+	"time":        "time.Time",
+	"timetz":      "time.Time", // time with time zone
+	"timestamp":   "time.Time",
+	"timestamptz": "time.Time", // timestamp with time zone
+	"interval":    "time.Duration",
 
 	// JSON 类型
 	"json":  "json.RawMessage",
@@ -216,18 +216,18 @@ var postgresqlDefaultColumnTypeMap = map[string]string{
 	"uuid": "string", // 或者使用 "github.com/google/uuid".UUID
 
 	// 数组类型（基础类型）
-	"_int2":     "[]int16",   // smallint[]
-	"_int4":     "[]int32",   // integer[]
-	"_int8":     "[]int64",   // bigint[]
-	"_text":     "[]string",  // text[]
-	"_varchar":  "[]string",  // varchar[]
-	"_bool":     "[]bool",    // boolean[]
-	"_float4":   "[]float32", // real[]
-	"_float8":   "[]float64", // double precision[]
+	"_int2":    "[]int16",   // smallint[]
+	"_int4":    "[]int32",   // integer[]
+	"_int8":    "[]int64",   // bigint[]
+	"_text":    "[]string",  // text[]
+	"_varchar": "[]string",  // varchar[]
+	"_bool":    "[]bool",    // boolean[]
+	"_float4":  "[]float32", // real[]
+	"_float8":  "[]float64", // double precision[]
 
 	// 网络地址类型
-	"inet":  "string", // IP 地址
-	"cidr":  "string", // 网络地址
+	"inet":    "string", // IP 地址
+	"cidr":    "string", // 网络地址
 	"macaddr": "string", // MAC 地址
 
 	// 几何类型
@@ -240,8 +240,8 @@ var postgresqlDefaultColumnTypeMap = map[string]string{
 	"circle":  "string", // 圆
 
 	// 其他类型
-	"money": "string", // 货币类型
-	"xml":   "string", // XML 类型
+	"money":    "string", // 货币类型
+	"xml":      "string", // XML 类型
 	"tsvector": "string", // 全文搜索向量
 	"tsquery":  "string", // 全文搜索查询
 }

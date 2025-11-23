@@ -3,7 +3,7 @@ package codegen
 import (
 	"fmt"
 
-	"github.com/morehao/golib/gutils"
+	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 )
 
@@ -43,7 +43,7 @@ func (impl *mysqlImpl) GetModuleTemplateParam(db *gorm.DB, cfg *ModuleCfg) (*Mod
 			ModelFields:     modelFieldList,
 		})
 	}
-	structName := gutils.SnakeToPascal(cfg.TableName)
+	structName := gutil.SnakeToPascal(cfg.TableName)
 	res := &ModuleTplAnalysisRes{
 		PackageName:     cfg.PackageName,
 		TableName:       cfg.TableName,
@@ -66,7 +66,7 @@ func (impl *mysqlImpl) getModelField(db *gorm.DB, dbName string, cfg *ModuleCfg)
 	var modelFieldList []ModelField
 	for _, v := range entities {
 		item := ModelField{
-			FieldName:    gutils.SnakeToPascal(v.ColumnName),
+			FieldName:    gutil.SnakeToPascal(v.ColumnName),
 			FieldType:    columnTypeMap[v.DataType],
 			ColumnName:   v.ColumnName,
 			ColumnType:   v.ColumnType,

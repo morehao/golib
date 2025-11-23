@@ -1,4 +1,4 @@
-package gutils
+package gutil
 
 import (
 	"reflect"
@@ -42,21 +42,21 @@ func TestSliceGroup(t *testing.T) {
 			},
 		},
 		{
-			name:  "tail remainder",
-			slice: []int{1, 2, 3, 4, 5},
-			group: 2,
+			name:     "tail remainder",
+			slice:    []int{1, 2, 3, 4, 5},
+			group:    2,
 			expected: [][]int{{1, 2}, {3, 4}, {5}},
 		},
 		{
 			name:     "empty slice",
-			slice:   []int{},
-			group:   4,
+			slice:    []int{},
+			group:    4,
 			expected: [][]int{},
 		},
 		{
 			name:     "invalid group size",
-			slice:   []int{1, 2, 3},
-			group:   0,
+			slice:    []int{1, 2, 3},
+			group:    0,
 			expected: nil,
 		},
 	}
