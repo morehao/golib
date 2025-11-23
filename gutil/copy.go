@@ -1,4 +1,4 @@
-package gutils
+package gutil
 
 import "maps"
 

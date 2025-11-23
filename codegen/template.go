@@ -10,7 +10,7 @@ import (
 	"text/template"
 
 	"github.com/morehao/golib/gast"
-	"github.com/morehao/golib/gutils"
+	"github.com/morehao/golib/gutil"
 )
 
 const (
@@ -75,7 +75,7 @@ func analysisTplFiles(cfg CommonConfig, defaultTargetFilename string) ([]TplAnal
 	rootDir := cfg.RootDir
 	for _, tplFilename := range tplFilenameList {
 		// 判断是否是模板文件
-		if gutils.GetFileExtension(tplFilename) != tplFileExtension {
+		if gutil.GetFileExtension(tplFilename) != tplFileExtension {
 			continue
 		}
 
@@ -108,24 +108,24 @@ func analysisTplFiles(cfg CommonConfig, defaultTargetFilename string) ([]TplAnal
 		if defaultLayerPrefix.String() == "" {
 			targetDir = filepath.Join(layerParentDir, string(layerName))
 		} else {
-			targetFileParentDir := fmt.Sprintf("%s%s", layerPrefix, strings.ToLower(gutils.SnakeToPascal(cfg.PackageName)))
+			targetFileParentDir := fmt.Sprintf("%s%s", layerPrefix, strings.ToLower(gutil.SnakeToPascal(cfg.PackageName)))
 			targetDir = filepath.Join(layerParentDir, string(layerName), targetFileParentDir)
 		}
 
 		// 构造生成文件的文件名称
-		originFilename := gutils.TrimFileExtension(gutils.TrimFileExtension(tplFilename))
+		originFilename := gutil.TrimFileExtension(gutil.TrimFileExtension(tplFilename))
 		var targetFilename string
 		switch defaultLayerName {
 		case LayerNameRequest, LayerNameResponse:
 			targetFilename = fmt.Sprintf("%s%s", originFilename, goFileExtension)
 		case LayerNameRouter, LayerNameCode:
-			targetFilename = fmt.Sprintf("%s%s", gutils.CamelToSnakeCase(cfg.PackageName), goFileExtension)
+			targetFilename = fmt.Sprintf("%s%s", gutil.CamelToSnakeCase(cfg.PackageName), goFileExtension)
 		default:
-			targetFilename = fmt.Sprintf("%s%s", gutils.TrimFileExtension(defaultTargetFilename), goFileExtension)
+			targetFilename = fmt.Sprintf("%s%s", gutil.TrimFileExtension(defaultTargetFilename), goFileExtension)
 		}
 
 		var targetFileExist bool
-		if gutils.FileExists(filepath.Join(targetDir, targetFilename)) {
+		if gutil.FileExists(filepath.Join(targetDir, targetFilename)) {
 			targetFileExist = true
 		}
 		tplFilepath := filepath.Join(cfg.TplDir, tplFilename)
@@ -153,16 +153,16 @@ func analysisTplFiles(cfg CommonConfig, defaultTargetFilename string) ([]TplAnal
 }
 
 func createFile(targetDir, targetFilename string, tpl *template.Template, tplParam interface{}) error {
-	if err := gutils.CreateDir(targetDir); err != nil {
+	if err := gutil.CreateDir(targetDir); err != nil {
 		return err
 	}
 	codeFilepath := filepath.Join(targetDir, targetFilename)
 
-	if gutils.FileExists(codeFilepath) {
+	if gutil.FileExists(codeFilepath) {
 		// 文件已存在，写入临时文件，再追加
 		tempDir := filepath.Join(targetDir, "tmp")
 		tmpFilepath := filepath.Join(tempDir, targetFilename)
-		if err := gutils.CreateDir(tempDir); err != nil {
+		if err := gutil.CreateDir(tempDir); err != nil {
 			return err
 		}
 		defer func() {

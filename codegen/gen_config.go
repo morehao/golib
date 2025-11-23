@@ -4,7 +4,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/morehao/golib/gutils"
+	"github.com/morehao/golib/gutil"
 )
 
 type CommonConfig struct {
@@ -29,7 +29,7 @@ type ApiCfg struct {
 }
 
 func (cfg *CommonConfig) format() {
-	cfg.PackageName = strings.ToLower(gutils.SnakeToPascal(cfg.PackageName))
+	cfg.PackageName = strings.ToLower(gutil.SnakeToPascal(cfg.PackageName))
 }
 
 type LayerName string
