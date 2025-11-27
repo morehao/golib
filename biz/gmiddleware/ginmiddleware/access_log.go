@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/morehao/golib/gcontext/gincontext"
+	"github.com/morehao/golib/biz/gcontext/gincontext"
 	"github.com/morehao/golib/gerror"
 	"github.com/morehao/golib/glog"
 )

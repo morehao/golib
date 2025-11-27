@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/morehao/golib/gcontext"
+	"github.com/morehao/golib/biz/gcontext"
 	"github.com/morehao/golib/gerror"
 )
 

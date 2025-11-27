@@ -1,4 +1,6 @@
-package gerror
+package gconstant
+
+import "github.com/morehao/golib/gerror"
 
 // 数据库相关错误码 (100000-100099)
 // 注意：DB相关错误是内部错误，前端不感知，不应直接返回给前端
@@ -9,7 +11,7 @@ const (
 	DBFindErr   = 100003
 )
 
-var DBErrorMsgMap = CodeMsgMap{
+var DBErrorMsgMap = gerror.CodeMsgMap{
 	DBInsertErr: "db insert error",
 	DBDeleteErr: "db delete error",
 	DBUpdateErr: "db update error",
@@ -22,7 +24,7 @@ const (
 	SystemErrorErr  = 100105
 )
 
-var SystemErrorMsgMap = CodeMsgMap{
+var SystemErrorMsgMap = gerror.CodeMsgMap{
 	ParamInvalidErr: "invalid parameter",
 	SystemErrorErr:  "system error",
 }
@@ -36,7 +38,7 @@ const (
 	PermissionDeniedErr = 110004
 )
 
-var AuthErrorMsgMap = CodeMsgMap{
+var AuthErrorMsgMap = gerror.CodeMsgMap{
 	UnauthorizedErr:     "unauthorized",
 	ForbiddenErr:        "forbidden",
 	TokenInvalidErr:     "invalid token",
