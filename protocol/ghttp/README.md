@@ -6,7 +6,7 @@
 
 ### 1. 结构体映射支持
 - 支持将HTTP响应直接映射到Go结构体
-- 提供`GetJSON`和`PostJSON`便捷方法
+- 提供`GetJSON`、`PostJSON`、`PutJSON`、`DeleteJSON`、`PatchJSON`便捷方法
 - 支持手动反序列化
 
 ### 2. 连接池优化
@@ -18,6 +18,7 @@
 - 自动重试服务器错误（5xx）
 - 客户端错误（4xx）不重试
 - 可配置重试次数和延迟
+- 支持请求体重试（POST/PUT/PATCH）
 
 ### 4. 丰富的响应处理
 - `IsSuccess()` - 检查响应是否成功
@@ -25,6 +26,11 @@
 - `String()` - 获取响应体字符串
 - `Bytes()` - 获取响应体字节数组
 - `JSON(v)` - 反序列化到结构体
+
+### 5. 自定义错误类型
+- `HTTPError` 提供详细的错误信息
+- 区分客户端错误（4xx）和服务器错误（5xx）
+- 包含完整的响应信息
 
 ## 使用方法
 
@@ -98,6 +104,26 @@ err := client.PostJSON(ctx, "/users", &response, RequestOption{
 })
 ```
 
+### PUT/DELETE/PATCH 请求
+
+```go
+// PUT 请求
+var updateResp UpdateResponse
+err := client.PutJSON(ctx, "/users/1", &updateResp, RequestOption{
+    RequestBody: updateData,
+})
+
+// DELETE 请求
+var deleteResp DeleteResponse
+err := client.DeleteJSON(ctx, "/users/1", &deleteResp, RequestOption{})
+
+// PATCH 请求
+var patchResp PatchResponse
+err := client.PatchJSON(ctx, "/users/1", &patchResp, RequestOption{
+    RequestBody: patchData,
+})
+```
+
 ### 自定义请求选项
 
 ```go
@@ -145,10 +171,33 @@ result, err := client.Get(ctx, "/protected-resource", opt)
 
 ## 错误处理
 
-- 网络错误会自动重试
-- 4xx客户端错误不会重试
-- 5xx服务器错误会重试
-- 提供详细的错误信息，区分错误类型
+```go
+result, err := client.Get(ctx, "/protected-resource", RequestOption{})
+if err != nil {
+    // 检查是否为 HTTP 错误
+    if httpErr, ok := err.(*HTTPError); ok {
+        fmt.Printf("HTTP错误: 状态码=%d, 消息=%s\n", httpErr.HttpCode, httpErr.Message)
+        
+        if httpErr.IsClientError() {
+            fmt.Println("客户端错误，请检查请求参数")
+        } else if httpErr.IsServerError() {
+            fmt.Println("服务器错误，请稍后重试")
+        }
+        
+        // 可以访问响应体和头部
+        fmt.Printf("响应体: %s\n", string(httpErr.Body))
+    } else {
+        // 网络错误或其他错误
+        fmt.Printf("请求失败: %v\n", err)
+    }
+    return
+}
+
+// 处理成功响应
+if result.IsSuccess() {
+    fmt.Printf("响应: %s\n", result.String())
+}
+```
 
 ## 日志记录
 
