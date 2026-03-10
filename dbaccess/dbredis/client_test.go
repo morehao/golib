@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestInitRedis(t *testing.T) {
+func TestNew(t *testing.T) {
 	defer glog.Close()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
@@ -27,7 +27,7 @@ func TestInitRedis(t *testing.T) {
 		Password: "123456",
 		DB:       0,
 	}
-	redisClient, err := InitRedis(cfg)
+	redisClient, err := New(cfg)
 	assert.Nil(t, err)
 
 	// 创建带有 requestId 的上下文
@@ -63,7 +63,7 @@ func TestInitRedis(t *testing.T) {
 	glog.Info(ctx, "done")
 }
 
-func TestInitRedisWithoutInitLog(t *testing.T) {
+func TestNewWithoutInitLog(t *testing.T) {
 	defer glog.Close()
 
 	cfg := &RedisConfig{
@@ -72,7 +72,7 @@ func TestInitRedisWithoutInitLog(t *testing.T) {
 		Password: "",
 		DB:       0,
 	}
-	redisClient, err := InitRedis(cfg)
+	redisClient, err := New(cfg)
 	assert.Nil(t, err)
 
 	// 创建带有 requestId 的上下文
@@ -114,7 +114,7 @@ func TestSetNX(t *testing.T) {
 		Password: "",
 		DB:       0,
 	}
-	redisClient, err := InitRedis(cfg)
+	redisClient, err := New(cfg)
 	assert.Nil(t, err)
 	key := "test123"
 	ok1, setErr1 := redisClient.SetNX(context.Background(), key, "value123", time.Second*2).Result()

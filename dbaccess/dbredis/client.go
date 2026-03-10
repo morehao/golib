@@ -30,7 +30,7 @@ func (opt optionFunc) apply(cfg *RedisConfig) {
 	opt(cfg)
 }
 
-func InitRedis(cfg *RedisConfig, opts ...Option) (*redis.Client, error) {
+func New(cfg *RedisConfig, opts ...Option) (*redis.Client, error) {
 	if cfg.Service == "" {
 		return nil, fmt.Errorf("service name is empty")
 	}
