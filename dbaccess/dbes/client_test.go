@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestInitTypedES(t *testing.T) {
+func TestNewTypedES(t *testing.T) {
 	defer glog.Close()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
@@ -24,7 +24,7 @@ func TestInitTypedES(t *testing.T) {
 		Service: "es",
 		Addr:    "http://localhost:9200",
 	}
-	_, typedClient, initErr := InitES(cfg)
+	_, typedClient, initErr := New(cfg)
 	assert.Nil(t, initErr)
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, "requestId", "12312312312312")
@@ -39,7 +39,7 @@ func TestInitTypedES(t *testing.T) {
 	t.Log(glog.ToJsonString(res))
 }
 
-func TestInitSimpleES(t *testing.T) {
+func TestNewSimpleES(t *testing.T) {
 	defer glog.Close()
 	logCfg := &glog.LogConfig{
 		Service:   "test",
@@ -53,7 +53,7 @@ func TestInitSimpleES(t *testing.T) {
 		Service: "es",
 		Addr:    "http://localhost:9200",
 	}
-	simpleClient, _, initErr := InitES(cfg)
+	simpleClient, _, initErr := New(cfg)
 	assert.Nil(t, initErr)
 	ctx := context.Background()
 	ctx = context.WithValue(ctx, "requestId", "12312312312312")

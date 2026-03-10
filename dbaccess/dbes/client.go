@@ -23,7 +23,7 @@ func (opt optionFunc) apply(cfg *ESConfig) {
 	opt(cfg)
 }
 
-func InitES(cfg *ESConfig, opts ...Option) (*elasticsearch.Client, *elasticsearch.TypedClient, error) {
+func New(cfg *ESConfig, opts ...Option) (*elasticsearch.Client, *elasticsearch.TypedClient, error) {
 	cfg.loggerConfig = glog.GetDefaultLogConfig()
 	for _, opt := range opts {
 		opt.apply(cfg)
