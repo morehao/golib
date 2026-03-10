@@ -5,7 +5,7 @@
 - [codegen](#codegen) 代码生成工具
 - [conc](#conc) 并发控制组件（包含 concpool、concqueue、concsem）
 - `conf` 配置文件读取组件
-- [database](#database) 数据库客户端组件（支持 MySQL、Redis、Elasticsearch）
+- [dbaccess](#dbaccess) 数据库客户端组件（支持 MySQL、Redis、Elasticsearch）
 - `distlock` 分布式锁组件（不支持可重入）
 - [excel](#excel) Excel 读写组件
 - `gast` 语法树工具

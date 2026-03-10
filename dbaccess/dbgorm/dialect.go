@@ -2,6 +2,7 @@ package dbgorm
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"gorm.io/driver/mysql"
@@ -18,82 +19,87 @@ const (
 
 type Dialect interface {
 	Name() DatabaseType
-	Dialector(dsn string) gorm.Dialector
-	ParseDSN(dsn string) (database string, err error)
+	Dialector(url string) gorm.Dialector
+	ParseURL(url string) (database string, err error)
 }
 
 func detectDialect(cfg *GormConfig) (Dialect, error) {
-	if cfg.Driver != "" {
-		return getDialect(DatabaseType(cfg.Driver))
-	}
-	return detectFromDSN(cfg.DSN)
+	return detectFromURL(cfg.URL)
 }
 
-func detectFromDSN(dsn string) (Dialect, error) {
-	dsnLower := strings.ToLower(dsn)
+func detectFromURL(urlStr string) (Dialect, error) {
+	if urlStr == "" {
+		return nil, fmt.Errorf("database url cannot be empty")
+	}
+
+	urlLower := strings.ToLower(urlStr)
 
 	switch {
-	case strings.HasPrefix(dsnLower, "postgres://"),
-		strings.HasPrefix(dsnLower, "postgresql://"),
-		strings.Contains(dsnLower, "port=") && strings.Contains(dsnLower, "host=") && strings.Contains(dsnLower, "user="):
+	case strings.HasPrefix(urlLower, "mysql://"):
+		return &mysqlDialect{}, nil
+	case strings.HasPrefix(urlLower, "postgres://"),
+		strings.HasPrefix(urlLower, "postgresql://"):
 		return &postgresDialect{}, nil
-
-	case strings.Contains(dsn, "@tcp("),
-		strings.Contains(dsn, ":@tcp("):
-		return &mysqlDialect{}, nil
-
 	default:
-		return &mysqlDialect{}, nil
+		return nil, fmt.Errorf("unsupported database url format, url must start with 'mysql://' or 'postgres://'%s", urlFormatDoc[1:])
 	}
 }
 
-func getDialect(dbType DatabaseType) (Dialect, error) {
-	switch dbType {
-	case MySQL:
-		return &mysqlDialect{}, nil
-	case PostgreSQL:
-		return &postgresDialect{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported database type: %s", dbType)
+func normalizeMySQLURI(uri string) (string, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "", fmt.Errorf("parse mysql uri failed: %w", err)
 	}
+
+	user := u.User.Username()
+	pass, _ := u.User.Password()
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		port = "3306"
+	}
+	db := strings.TrimPrefix(u.Path, "/")
+
+	query := u.RawQuery
+	if query != "" {
+		query = "?" + query
+	}
+
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s%s", user, pass, host, port, db, query), nil
 }
 
 type mysqlDialect struct{}
 
 func (d *mysqlDialect) Name() DatabaseType { return MySQL }
-func (d *mysqlDialect) Dialector(dsn string) gorm.Dialector {
-	return mysql.Open(dsn)
-}
-func (d *mysqlDialect) ParseDSN(dsn string) (string, error) {
-	parts := strings.Split(dsn, "/")
-	if len(parts) < 2 {
-		return "", fmt.Errorf("invalid mysql dsn format")
+func (d *mysqlDialect) Dialector(urlStr string) gorm.Dialector {
+	connStr, err := normalizeMySQLURI(urlStr)
+	if err != nil {
+		return mysql.Open(urlStr)
 	}
-	dbPart := strings.Split(parts[len(parts)-1], "?")[0]
-	return dbPart, nil
+	return mysql.Open(connStr)
+}
+func (d *mysqlDialect) ParseURL(urlStr string) (string, error) {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return "", fmt.Errorf("parse mysql uri failed: %w", err)
+	}
+	return strings.TrimPrefix(u.Path, "/"), nil
 }
 
 type postgresDialect struct{}
 
 func (d *postgresDialect) Name() DatabaseType { return PostgreSQL }
-func (d *postgresDialect) Dialector(dsn string) gorm.Dialector {
-	return postgres.Open(dsn)
+func (d *postgresDialect) Dialector(urlStr string) gorm.Dialector {
+	return postgres.Open(urlStr)
 }
-func (d *postgresDialect) ParseDSN(dsn string) (string, error) {
-	if strings.Contains(dsn, "dbname=") {
-		parts := strings.Split(dsn, " ")
-		for _, part := range parts {
-			if strings.HasPrefix(part, "dbname=") {
-				return strings.TrimPrefix(part, "dbname="), nil
-			}
-		}
+func (d *postgresDialect) ParseURL(urlStr string) (string, error) {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return "", fmt.Errorf("parse postgres uri failed: %w", err)
 	}
-	if strings.Contains(dsn, "://") {
-		parts := strings.Split(dsn, "/")
-		if len(parts) >= 4 {
-			dbPart := strings.Split(parts[3], "?")[0]
-			return dbPart, nil
-		}
+	db := strings.TrimPrefix(u.Path, "/")
+	if db == "" {
+		return "", fmt.Errorf("database name is required in postgres uri")
 	}
-	return "", fmt.Errorf("invalid postgres dsn format")
+	return db, nil
 }

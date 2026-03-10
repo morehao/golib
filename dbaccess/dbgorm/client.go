@@ -18,22 +18,19 @@ func New(cfg *GormConfig, opts ...Option) (*gorm.DB, error) {
 		return nil, fmt.Errorf("detect dialect failed: %w", err)
 	}
 
-	if cfg.Database == "" {
-		database, parseErr := dialect.ParseDSN(cfg.DSN)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse dsn failed: %w", parseErr)
-		}
-		cfg.Database = database
+	database, parseErr := dialect.ParseURL(cfg.URL)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse url failed: %w", parseErr)
 	}
 
 	service := cfg.Service
 	if service == "" {
-		service = cfg.Database
+		service = database
 	}
 
 	customLogger, logErr := newOrmLogger(&ormConfig{
 		Service:       service,
-		Database:      cfg.Database,
+		Database:      database,
 		MaxSqlLen:     cfg.MaxSqlLen,
 		SlowThreshold: cfg.SlowThreshold,
 		loggerConfig:  cfg.loggerConfig,
@@ -42,7 +39,7 @@ func New(cfg *GormConfig, opts ...Option) (*gorm.DB, error) {
 		return nil, fmt.Errorf("create logger failed: %w", logErr)
 	}
 
-	db, err := gorm.Open(dialect.Dialector(cfg.DSN), &gorm.Config{
+	db, err := gorm.Open(dialect.Dialector(cfg.URL), &gorm.Config{
 		Logger: customLogger,
 	})
 	if err != nil {
