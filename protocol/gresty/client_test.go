@@ -2,92 +2,118 @@ package gresty
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
+	"resty.dev/v3"
 )
 
-func TestRequestWithResult(t *testing.T) {
-	cfg := &protocol.HttpClientConfig{
-		Module:   "httpbin",
-		Host:     "http://httpbin.org",
-		Timeout:  5 * time.Second,
-		MaxRetry: 3,
-	}
-	client := NewClient(cfg)
-	ctx := context.Background()
-	type Result struct {
-		Args struct {
-			Name string `json:"name"`
-		} `json:"args"`
-	}
-	var result Result
-	request, newRequestErr := client.NewRequestWithResult(ctx, &result)
-	assert.Nil(t, newRequestErr)
-	_, err := request.SetQueryParam("name", "张三").Get("/get")
-
-	assert.Nil(t, err)
-	t.Log(glog.ToJsonString(result))
+func TestNewClient(t *testing.T) {
+	client := NewClient()
+	assert.NotNil(t, client)
+	assert.NotNil(t, client.Client)
 }
 
-func TestNewRequestWithResultWithoutNew(t *testing.T) {
-	client := &Client{
-		Module:  "httpbin",
-		Host:    "http://httpbin.org",
-		Timeout: 5 * time.Second,
-		Retry:   3,
-	}
+func TestClientGetRequest(t *testing.T) {
+	client := NewClient()
 
-	ctx := context.Background()
-	type Result struct {
-		Args struct {
-			Name string `json:"name"`
-		} `json:"args"`
-	}
-	var result Result
-	request, newRequestErr := client.NewRequestWithResult(ctx, &result)
-	assert.Nil(t, newRequestErr)
-	_, err := request.SetQueryParam("name", "张三").Get("/get")
+	resp, err := client.R().
+		SetQueryParam("name", "test").
+		Get("https://httpbin.org/get")
 
 	assert.Nil(t, err)
-	t.Log(glog.ToJsonString(result))
+	assert.NotNil(t, resp)
+	assert.Equal(t, 200, resp.StatusCode())
 }
 
-func TestMultiClient(t *testing.T) {
-	client1 := &Client{
-		Module:  "httpbin1",
-		Host:    "http://httpbin.org",
-		Timeout: 5 * time.Second,
-		Retry:   3,
-	}
-	client2 := &Client{
-		Module:  "httpbin2",
-		Host:    "http://httpbin.org",
-		Timeout: 5 * time.Second,
-		Retry:   3,
-	}
-	ctx := context.Background()
-	type Result struct {
-		Args struct {
-			Name string `json:"name"`
-		} `json:"args"`
-	}
-	var result1 Result
-	request1, newRequestErr := client1.NewRequestWithResult(ctx, &result1)
-	assert.Nil(t, newRequestErr)
+func TestClientPostRequest(t *testing.T) {
+	client := NewClient()
 
-	_, err1 := request1.SetQueryParam("name", "张三").Get("/get")
-	assert.Nil(t, err1)
-	t.Log(glog.ToJsonString(result1))
+	body := map[string]string{"name": "test"}
+	resp, err := client.R().
+		SetBody(body).
+		Post("https://httpbin.org/post")
 
-	var result2 Result
-	request2, newRequestErr2 := client2.NewRequestWithResult(ctx, &result2)
-	assert.Nil(t, newRequestErr2)
+	assert.Nil(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, 200, resp.StatusCode())
+}
 
-	_, err2 := request2.SetQueryParam("name", "张三").Get("/get")
-	assert.Nil(t, err2)
-	t.Log(glog.ToJsonString(result2))
+func TestClientWithTraceID(t *testing.T) {
+	client := NewClient()
+
+	ctx := context.WithValue(context.Background(), "trace_id", "trace-123")
+
+	resp, err := client.R().
+		SetContext(ctx).
+		SetQueryParam("name", "test").
+		Get("https://httpbin.org/get")
+
+	assert.Nil(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, 200, resp.StatusCode())
+}
+
+func TestSSEStream(t *testing.T) {
+	counter := 0
+	sseServer := createSSETestServer(
+		10*time.Millisecond,
+		func(w io.Writer) error {
+			if counter >= 5 {
+				return fmt.Errorf("stop sending events")
+			}
+			_, err := fmt.Fprintf(w, "id: %v\ndata: {\"counter\": %d}\n\n", counter, counter)
+			counter++
+			return err
+		},
+	)
+	defer sseServer.Close()
+
+	es := resty.NewEventSource().
+		SetURL(sseServer.URL).
+		OnMessage(func(e any) {
+			event := e.(*resty.Event)
+			fmt.Printf("Event ID: %s, Data: %s\n", event.ID, event.Data)
+		}, nil)
+
+	err := es.Get()
+	assert.NotNil(t, err)
+}
+
+func createSSETestServer(ticker time.Duration, fn func(io.Writer) error) *httptest.Server {
+	return createTestServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		clientGone := r.Context().Done()
+
+		rc := http.NewResponseController(w)
+		tick := time.NewTicker(ticker)
+		defer tick.Stop()
+
+		for {
+			select {
+			case <-clientGone:
+				return
+			case <-tick.C:
+				if err := fn(w); err != nil {
+					return
+				}
+				if err := rc.Flush(); err != nil {
+					return
+				}
+			}
+		}
+	})
+}
+
+func createTestServer(fn func(w http.ResponseWriter, r *http.Request)) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(fn))
 }
