@@ -11,21 +11,22 @@ import (
 
 // RegisterSwagger 注册 Swagger 文档路由到指定的路由组
 // routerGroup: Gin 路由组
-// appName: 应用名称，如 "demoapp"
+// appName: 应用名称，如 "demo"
 func RegisterSwagger(routerGroup *gin.RouterGroup, appName string) {
 	docsPath := "docs/*any"
 	redocsPath := "redocs"
 
-	// 构建 Swagger JSON 的完整 URL
-	swaggerURL := fmt.Sprintf("/%s/docs/doc.json", appName)
+	// 使用 routerGroup 的实际 basePath，避免路径不一致
+	basePath := routerGroup.BasePath() // 例如 "/v1/demo"
+	swaggerURL := fmt.Sprintf("%s/docs/doc.json", basePath)
 
 	routerGroup.GET(docsPath, ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.InstanceName(appName)))
 	routerGroup.GET(redocsPath, ReDocHandler(appName, swaggerURL))
 }
 
 // ReDocHandler 生成 ReDoc 文档页面的 Handler
-// appName: 应用名称，如 "demoapp"
-// swaggerURL: Swagger JSON 的 URL，如 "/v1/demoapp.docs/doc.json"
+// appName: 应用名称，如 "demo"
+// swaggerURL: Swagger JSON 的 URL，如 "/v1/demo/docs/doc.json"
 func ReDocHandler(appName, swaggerURL string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		html := fmt.Sprintf(`<!DOCTYPE html>
