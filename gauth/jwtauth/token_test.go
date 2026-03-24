@@ -4,70 +4,36 @@ import (
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/gutil"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestCreateToken(t *testing.T) {
+func TestIssueAndParse(t *testing.T) {
 	type CustomData struct {
 		Role string `json:"role"`
 	}
 
-	signKey := "secret"
-	uuid := "123456"
-	now := time.Now()
-	expiresAt := time.Now().Add(24 * time.Hour)
+	auth, err := New[CustomData]("secret")
+	require.NoError(t, err)
 
-	// 使用新的泛型 API
-	claims := NewClaims(
-		"user123",                             // subject (必填)
-		expiresAt,                             // expiresAt (必填)
-		CustomData{Role: "admin"},             // customData (必填)
-		WithIssuer[CustomData]("example.com"), // 可选
-		WithAudience[CustomData]("audience1", "audience2"), // 可选
-		WithNotBefore[CustomData](now),                     // 可选
-		WithID[CustomData](uuid),                           // 可选
-	)
-
-	token, err := CreateToken(signKey, claims)
-	assert.Nil(t, err)
-	t.Log(token)
-}
-
-func TestParseToken(t *testing.T) {
-	// 先创建一个 token
-	type CustomData struct {
-		CompanyId uint64 `json:"companyId"`
-		Role      string `json:"role"`
-	}
-
-	signKey := "secret"
-	expiresAt := time.Now().Add(24 * time.Hour)
-
-	// 创建 token
-	claims := NewClaims(
+	token, err := auth.Issue(
 		"user123",
-		expiresAt,
-		CustomData{CompanyId: 1001, Role: "admin"},
-		WithIssuer[CustomData]("example.com"),
+		"example.com",
+		time.Now().Add(24*time.Hour),
+		CustomData{Role: "admin"},
+		WithID[CustomData]("id-1"),
 	)
+	require.NoError(t, err)
 
-	token, err := CreateToken(signKey, claims)
-	assert.Nil(t, err)
-	t.Log("Created token:", token)
+	parsedClaims, err := auth.Parse(token)
+	require.NoError(t, err)
 
-	// 解析 token
-	var parsedClaims Claims[CustomData]
-	err = ParseToken(signKey, token, &parsedClaims)
-	assert.Nil(t, err)
-	t.Log(gutil.ToJsonString(parsedClaims))
-	t.Log("Role:", parsedClaims.CustomData.Role)
-	t.Log("CompanyId:", parsedClaims.CustomData.CompanyId)
-
-	// 验证数据
 	assert.Equal(t, "admin", parsedClaims.CustomData.Role)
-	assert.Equal(t, uint64(1001), parsedClaims.CustomData.CompanyId)
 	assert.Equal(t, "user123", parsedClaims.Subject)
+	assert.Equal(t, "example.com", parsedClaims.Issuer)
+	assert.Empty(t, parsedClaims.Audience)
+	assert.Equal(t, "id-1", parsedClaims.ID)
 }
 
 func TestRenewToken(t *testing.T) {
@@ -75,36 +41,136 @@ func TestRenewToken(t *testing.T) {
 		Role string `json:"role"`
 	}
 
-	signKey := "secret"
-	expiresAt := time.Now().Add(1 * time.Hour)
+	auth, err := New[CustomData]("secret")
+	require.NoError(t, err)
 
-	// 创建原始 token
-	claims := NewClaims(
+	token, err := auth.Issue(
 		"user123",
-		expiresAt,
+		"example.com",
+		time.Now().Add(time.Hour),
 		CustomData{Role: "admin"},
-		WithIssuer[CustomData]("example.com"),
 		WithID[CustomData]("123456"),
 	)
+	require.NoError(t, err)
 
-	token, err := CreateToken(signKey, claims)
-	assert.Nil(t, err)
-	t.Log("Original token:", token)
+	newToken, err := auth.Renew(token, 2*time.Hour)
+	require.NoError(t, err)
 
-	// 续期 token
-	newExpirationTime := 2 * time.Hour
-	newToken, err := RenewToken(signKey, token, newExpirationTime, CustomData{})
-	assert.Nil(t, err)
-	t.Log("Renewed token:", newToken)
+	newClaims, err := auth.Parse(newToken)
+	require.NoError(t, err)
 
-	// 验证新 token
-	var newClaims Claims[CustomData]
-	err = ParseToken(signKey, newToken, &newClaims)
-	assert.Nil(t, err)
-	t.Log(gutil.ToJsonString(newClaims))
-
-	// 验证数据保留
 	assert.Equal(t, "admin", newClaims.CustomData.Role)
 	assert.Equal(t, "user123", newClaims.Subject)
 	assert.Equal(t, "example.com", newClaims.Issuer)
+	assert.Equal(t, "123456", newClaims.ID)
+}
+
+func TestIssueValidation(t *testing.T) {
+	type CustomData struct {
+		Role string `json:"role"`
+	}
+
+	_, err := New[CustomData]("")
+	assert.Error(t, err)
+
+	auth, err := New[CustomData]("secret")
+	require.NoError(t, err)
+
+	_, err = auth.Issue("", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
+	assert.Error(t, err)
+
+	_, err = auth.Issue("user123", "", time.Now().Add(time.Hour), CustomData{Role: "admin"})
+	assert.Error(t, err)
+
+	_, err = auth.Issue("user123", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
+	require.NoError(t, err)
+
+	_, err = auth.Issue("user123", "example.com", time.Now().Add(-time.Minute), CustomData{Role: "admin"})
+	assert.Error(t, err)
+}
+
+func TestParseTokenValidation(t *testing.T) {
+	type CustomData struct {
+		Role string `json:"role"`
+	}
+
+	auth, err := New[CustomData]("secret")
+	require.NoError(t, err)
+	token, err := auth.Issue("user123", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
+	require.NoError(t, err)
+
+	_, err = auth.Parse("")
+	assert.Error(t, err)
+
+	wrongAuth, err := New[CustomData]("wrong-secret")
+	require.NoError(t, err)
+	_, err = wrongAuth.Parse(token)
+	assert.Error(t, err)
+}
+
+func TestParseTokenRejectUnexpectedAlg(t *testing.T) {
+	type CustomData struct {
+		Role string `json:"role"`
+	}
+
+	claims := &Claims[CustomData]{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "user123",
+			Issuer:    "example.com",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		CustomData: CustomData{Role: "admin"},
+	}
+	unsafeToken := jwt.NewWithClaims(jwt.SigningMethodHS384, claims)
+	tokenStr, err := unsafeToken.SignedString([]byte("secret"))
+	require.NoError(t, err)
+
+	auth, err := New[CustomData]("secret")
+	require.NoError(t, err)
+	_, err = auth.Parse(tokenStr)
+	assert.Error(t, err)
+}
+
+func TestRenewTokenValidation(t *testing.T) {
+	type CustomData struct {
+		Role string `json:"role"`
+	}
+
+	auth, err := New[CustomData]("secret")
+	require.NoError(t, err)
+	token, err := auth.Issue("user123", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
+	require.NoError(t, err)
+
+	_, err = auth.Renew("", time.Hour)
+	assert.Error(t, err)
+
+	_, err = auth.Renew(token, 0)
+	assert.Error(t, err)
+
+	_, err = auth.Renew(token, -time.Minute)
+	assert.Error(t, err)
+}
+
+func TestIssueWithAudience(t *testing.T) {
+	type CustomData struct {
+		Role string `json:"role"`
+	}
+
+	auth, err := New[CustomData]("secret")
+	require.NoError(t, err)
+
+	token, err := auth.Issue(
+		"user123",
+		"example.com",
+		time.Now().Add(time.Hour),
+		CustomData{Role: "admin"},
+		WithAudience[CustomData]("web", "mobile"),
+	)
+	require.NoError(t, err)
+
+	claims, err := auth.Parse(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, jwt.ClaimStrings{"web", "mobile"}, claims.Audience)
 }
