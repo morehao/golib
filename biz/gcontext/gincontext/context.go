@@ -1,12 +1,8 @@
 package gincontext
 
-import "github.com/gin-gonic/gin"
-
-const (
-	KeyUserID    = "userId"
-	KeyUserType  = "userType"
-	KeyTenantID  = "tenantId"
-	KeyCompanyID = "companyId"
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/morehao/golib/biz/gcontext"
 )
 
 func GetClientIp(ctx *gin.Context) string {
@@ -14,19 +10,19 @@ func GetClientIp(ctx *gin.Context) string {
 }
 
 func GetUserID(ctx *gin.Context) uint {
-	return ctx.GetUint(KeyUserID)
+	return ctx.GetUint(gcontext.KeyUserID)
 }
 
 func GetUserType(ctx *gin.Context) string {
-	return ctx.GetString(KeyUserType)
+	return ctx.GetString(gcontext.KeyUserType)
 }
 
 func GetTenantID(ctx *gin.Context) uint {
-	return ctx.GetUint(KeyTenantID)
+	return ctx.GetUint(gcontext.KeyTenantID)
 }
 
 func GetCompanyID(ctx *gin.Context) uint {
-	return ctx.GetUint(KeyCompanyID)
+	return ctx.GetUint(gcontext.KeyCompanyID)
 }
 
 func GetString(ctx *gin.Context, key string) string {

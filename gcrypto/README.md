@@ -17,6 +17,12 @@
   - 支持环境变量配置密钥
   - 自动分块处理大数据
 
+### 密码哈希
+- **bcrypt**: 支持密码哈希和校验
+  - 默认成本哈希
+  - 自定义成本哈希
+  - 哈希匹配校验
+
 ## 环境变量
 
 - `GOLIB_AES_KEY`: AES 加密密钥（字符串）
@@ -264,6 +270,35 @@ func main() {
 }
 ```
 
+### bcrypt 密码哈希
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/morehao/golib/gcrypto"
+)
+
+func main() {
+    password := "my-strong-password"
+
+    // 生成哈希（默认成本）
+    hash, err := gcrypto.GeneratePasswordHash(password)
+    if err != nil {
+        panic(err)
+    }
+
+    // 校验密码
+    err = gcrypto.ComparePasswordHash(hash, password)
+    if err != nil {
+        fmt.Println("Password mismatch")
+    } else {
+        fmt.Println("Password verified")
+    }
+}
+```
+
 ## API 文档
 
 ### AES
@@ -293,6 +328,13 @@ func main() {
 - `DecryptString(ciphertext string) (string, error)`: 解密字符串
 - `Sign(data []byte) ([]byte, error)`: 签名
 - `Verify(data []byte, signature []byte) error`: 验证签名
+
+### bcrypt
+
+- `GeneratePasswordHash(password string) (string, error)`: 使用默认成本生成密码哈希
+- `GeneratePasswordHashWithCost(password string, cost int) (string, error)`: 使用指定成本生成密码哈希
+- `ComparePasswordHash(hashedPassword, password string) error`: 校验密码是否与哈希匹配
+- `DefaultBcryptCost`: bcrypt 默认成本
 
 ### 工具函数
 
