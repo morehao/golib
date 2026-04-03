@@ -2,12 +2,12 @@ package dbes
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/morehao/golib/glog"
 )
 
@@ -81,7 +81,7 @@ func (l *esLog) LogRoundTrip(req *http.Request, res *http.Response, err error, s
 			msg = string(bodyBytes)
 		}
 		var resBody map[string]any
-		if err := jsoniter.Unmarshal(bodyBytes, &resBody); err == nil {
+		if err := json.Unmarshal(bodyBytes, &resBody); err == nil {
 			affectedRows = l.parseAffectedRows(method, resBody)
 		}
 		fields = append(fields,

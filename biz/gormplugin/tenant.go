@@ -11,8 +11,8 @@ import (
 )
 
 type Plugin struct {
-	skipTablesMap  map[string]struct{}
-	CompanyIDField string
+	skipTablesMap map[string]struct{}
+	TenantIDField string
 }
 
 func NewPlugin(skipTables ...string) *Plugin {
@@ -24,12 +24,12 @@ func NewPlugin(skipTables ...string) *Plugin {
 		}
 	}
 	return &Plugin{
-		skipTablesMap:  m,
-		CompanyIDField: "company_id",
+		skipTablesMap: m,
+		TenantIDField: "tenant_id",
 	}
 }
 
-func (p *Plugin) Name() string { return "company_scope_plugin" }
+func (p *Plugin) Name() string { return "tenant_scope_plugin" }
 
 func (p *Plugin) Initialize(db *gorm.DB) error {
 	callbacks := []struct {
@@ -38,9 +38,9 @@ func (p *Plugin) Initialize(db *gorm.DB) error {
 		before string
 		fn     func(*gorm.DB)
 	}{
-		{"company:query", "query", "gorm:query", p.addCompanyScope},
-		{"company:update", "update", "gorm:update", p.addCompanyScope},
-		{"company:delete", "delete", "gorm:delete", p.addCompanyScope},
+		{"tenant:query", "query", "gorm:query", p.addTenantScope},
+		{"tenant:update", "update", "gorm:update", p.addTenantScope},
+		{"tenant:delete", "delete", "gorm:delete", p.addTenantScope},
 	}
 
 	for _, cb := range callbacks {
@@ -60,7 +60,7 @@ func (p *Plugin) Initialize(db *gorm.DB) error {
 	return nil
 }
 
-func (p *Plugin) addCompanyScope(db *gorm.DB) {
+func (p *Plugin) addTenantScope(db *gorm.DB) {
 	if db.Statement == nil || db.Statement.Context == nil {
 		return
 	}
@@ -74,12 +74,12 @@ func (p *Plugin) addCompanyScope(db *gorm.DB) {
 		return
 	}
 
-	companyID, ok := getCompanyID(db.Statement.Context)
+	tenantID, ok := getTenantID(db.Statement.Context)
 	if !ok {
 		return
 	}
 
-	db.Statement.Where(fmt.Sprintf("`%s`.%s = ?", tableName, p.CompanyIDField), companyID)
+	db.Statement.Where(fmt.Sprintf("`%s`.%s = ?", tableName, p.TenantIDField), tenantID)
 }
 
 func (p *Plugin) isSkipped(tableName string) bool {
@@ -91,14 +91,14 @@ func (p *Plugin) isSkipped(tableName string) bool {
 	return ok
 }
 
-func getCompanyID(ctx context.Context) (uint, bool) {
+func getTenantID(ctx context.Context) (uint, bool) {
 	if ctx == nil {
 		return 0, false
 	}
 
-	v := ctx.Value(gcontext.KeyCompanyID)
-	companyID := uint(gutil.VToInt64(v))
-	return companyID, companyID > 0
+	v := ctx.Value(gcontext.KeyTenantID)
+	tenantID := uint(gutil.VToInt64(v))
+	return tenantID, tenantID > 0
 }
 
 func normalizeTableName(tableName string) string {

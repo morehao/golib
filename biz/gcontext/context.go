@@ -3,10 +3,12 @@ package gcontext
 import "context"
 
 const (
-	KeyUserID    = "userId"
+	KeyPersonID  = "personID"
+	KeyUserID    = "userID"
 	KeyUserType  = "userType"
-	KeyTenantID  = "tenantId"
-	KeyCompanyID = "companyId"
+	KeyTenantID  = "tenantID"
+	KeyOrgID     = "orgID"
+	KeyAuthToken = "authToken"
 )
 
 func NilCtx(ctx context.Context) bool {

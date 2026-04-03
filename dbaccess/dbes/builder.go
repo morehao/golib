@@ -2,11 +2,10 @@ package dbes
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
-
-	jsoniter "github.com/json-iterator/go"
 )
 
 type Map = map[string]any
@@ -71,7 +70,7 @@ func (b *Builder) Build() map[string]any {
 
 // BuildBytes 构建并返回 []byte
 func (b *Builder) BuildBytes() ([]byte, error) {
-	return jsoniter.Marshal(b.body)
+	return json.Marshal(b.body)
 }
 
 func (b *Builder) BuildReader() (io.Reader, error) {
@@ -79,7 +78,7 @@ func (b *Builder) BuildReader() (io.Reader, error) {
 		return strings.NewReader("{}"), nil
 	}
 
-	bodyBytes, err := jsoniter.Marshal(b.body)
+	bodyBytes, err := json.Marshal(b.body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal body to JSON: %w", err)
 	}

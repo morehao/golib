@@ -1,9 +1,9 @@
 package dbes
 
 import (
+	"encoding/json"
 	"testing"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -27,7 +27,8 @@ func TestBuilder_AllFeatures(t *testing.T) {
 		))
 
 	body := builder.Build()
-	bodyStr, marshalErr := jsoniter.MarshalToString(body)
+	bodyBytes, marshalErr := json.Marshal(body)
+	bodyStr := string(bodyBytes)
 	assert.Nil(t, marshalErr)
 	t.Log(bodyStr)
 	data, err := builder.BuildBytes()
