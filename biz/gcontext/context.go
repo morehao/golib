@@ -7,6 +7,7 @@ const (
 	KeyUserID    = "userID"
 	KeyUserType  = "userType"
 	KeyTenantID  = "tenantID"
+	KeyDeptID    = "deptID"
 	KeyOrgID     = "orgID"
 	KeyAuthToken = "authToken"
 )
