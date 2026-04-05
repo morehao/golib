@@ -2,11 +2,10 @@ package glog
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strconv"
 	"time"
-
-	jsoniter "github.com/json-iterator/go"
 )
 
 // GenRequestID 生成requestId
@@ -56,6 +55,6 @@ func skipLog(ctx context.Context) bool {
 }
 
 func ToJsonString(v any) string {
-	d, _ := jsoniter.MarshalToString(v)
-	return d
+	b, _ := json.Marshal(v)
+	return string(b)
 }

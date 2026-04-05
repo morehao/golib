@@ -2,11 +2,10 @@ package gutil
 
 import (
 	"container/list"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
-
-	jsoniter "github.com/json-iterator/go"
 )
 
 func VToUint64(v any) uint64 {
@@ -116,14 +115,15 @@ func ToString(v any) string {
 	case []byte:
 		return string(val)
 	default:
-		s, _ := jsoniter.MarshalToString(v)
+		b, _ := json.Marshal(v)
+		s := string(b)
 		return s
 	}
 }
 
 func ToJsonString(v any) string {
-	d, _ := jsoniter.MarshalToString(v)
-	return d
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 func LinkedListToArray(l *list.List, dest any) error {

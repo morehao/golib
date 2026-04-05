@@ -1,10 +1,10 @@
 package excel
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/xuri/excelize/v2"
 )
@@ -25,8 +25,10 @@ func TestRead(t *testing.T) {
 	})
 	validateErrMap, readerErr := excelReader.Read(&dataList)
 	assert.Nil(t, readerErr)
-	res, _ := jsoniter.MarshalToString(dataList)
+	resBytes, _ := json.Marshal(dataList)
+	res := string(resBytes)
 	fmt.Println(res)
-	errMap, _ := jsoniter.MarshalToString(validateErrMap)
+	errMapBytes, _ := json.Marshal(validateErrMap)
+	errMap := string(errMapBytes)
 	fmt.Println(errMap)
 }
