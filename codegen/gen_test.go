@@ -19,7 +19,7 @@ func TestGenModuleCode(t *testing.T) {
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
 	tplDir := fmt.Sprintf("%s/tplExample/module", workDir)
-	rootDir := fmt.Sprintf("%s/tmp", workDir)
+	rootDir := fmt.Sprintf("%s/example", workDir)
 	layerParentDirMap := map[LayerName]string{
 		LayerNameModel:      "model",
 		LayerNameDao:        "dao",
@@ -77,8 +77,8 @@ func TestGenApiCode(t *testing.T) {
 	// 获取当前的运行路径
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
-	tplDir := fmt.Sprintf("%s/tplExample/api", workDir)
-	rootDir := fmt.Sprintf("%s/tmp", workDir)
+	tplDir := fmt.Sprintf("%s/example/tplExample/api", workDir)
+	rootDir := fmt.Sprintf("%s/example", workDir)
 	cfg := &ApiCfg{
 		CommonConfig: CommonConfig{
 			PackageName: "user",
@@ -119,8 +119,8 @@ func TestGenModelCode(t *testing.T) {
 	// 获取当前的运行路径
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
-	tplDir := fmt.Sprintf("%s/tplExample/model", workDir)
-	rootDir := fmt.Sprintf("%s/tmp", workDir)
+	tplDir := fmt.Sprintf("%s/example/tplExample/model", workDir)
+	rootDir := fmt.Sprintf("%s/example", workDir)
 	layerParentDirMap := map[LayerName]string{
 		LayerNameModel: "model",
 		LayerNameDao:   "dao",
@@ -201,8 +201,8 @@ func TestGenModuleCodeWithPostgreSQL(t *testing.T) {
 	// 获取当前的运行路径
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
-	tplDir := fmt.Sprintf("%s/tplExample/module", workDir)
-	rootDir := fmt.Sprintf("%s/tmp/postgresql", workDir)
+	tplDir := fmt.Sprintf("%s/example/tplExample/module", workDir)
+	rootDir := fmt.Sprintf("%s/example/postgresql", workDir)
 	layerParentDirMap := map[LayerName]string{
 		LayerNameModel:      "model",
 		LayerNameDao:        "dao",
@@ -257,8 +257,8 @@ func TestGenModelCodeWithPostgreSQL(t *testing.T) {
 	// 获取当前的运行路径
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
-	tplDir := fmt.Sprintf("%s/tplExample/model", workDir)
-	rootDir := fmt.Sprintf("%s/tmp/postgresql", workDir)
+	tplDir := fmt.Sprintf("%s/example/tplExample/model", workDir)
+	rootDir := fmt.Sprintf("%s/example/postgresql", workDir)
 	layerParentDirMap := map[LayerName]string{
 		LayerNameModel: "model",
 		LayerNameDao:   "dao",
