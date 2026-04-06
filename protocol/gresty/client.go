@@ -2,6 +2,7 @@ package gresty
 
 import (
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/protocol"
 	"resty.dev/v3"
 )
 
@@ -24,6 +25,10 @@ func NewClient() *Client {
 
 	c.SetLogger(newGlogAdapter(logger))
 	c.SetDebug(false)
+	c.AddRequestMiddleware(func(client *resty.Client, req *resty.Request) error {
+		req.Header = protocol.InjectTraceAndRequestID(req.Context(), req.Header)
+		return nil
+	})
 
 	c.AddResponseMiddleware(func(client *resty.Client, resp *resty.Response) error {
 		return newLoggingMiddleware(logger).handle(resp)

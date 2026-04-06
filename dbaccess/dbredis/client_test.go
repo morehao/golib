@@ -32,7 +32,7 @@ func TestNew(t *testing.T) {
 
 	// 创建带有 requestId 的上下文
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "requestId", "12312312312312")
+	ctx = context.WithValue(ctx, glog.KeyRequestId, "12312312312312")
 
 	// 测试一个成功的 GET 命令
 	key := "test123"
@@ -77,7 +77,7 @@ func TestNewWithoutInitLog(t *testing.T) {
 
 	// 创建带有 requestId 的上下文
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "requestId", "12312312312312")
+	ctx = context.WithValue(ctx, glog.KeyRequestId, "12312312312312")
 
 	// 测试一个成功的 GET 命令
 	key := "test123"

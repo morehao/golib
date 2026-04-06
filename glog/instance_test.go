@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestDefaultLogger(t *testing.T) {
@@ -175,7 +176,7 @@ func TestExtraKeys(t *testing.T) {
 		Level:     DebugLevel,
 		Writer:    WriterConsole,
 		Dir:       tempDir,
-		ExtraKeys: []string{"trace_id", "user_id", "request_id"},
+		ExtraKeys: []string{KeyTraceId, "user_id", KeyRequestId},
 	}
 
 	// 初始化日志器
@@ -189,9 +190,9 @@ func TestExtraKeys(t *testing.T) {
 
 	// 创建带有额外字段的上下文
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "trace_id", "123456")
+	ctx = context.WithValue(ctx, KeyTraceId, "123456")
 	ctx = context.WithValue(ctx, "user_id", "user123")
-	ctx = context.WithValue(ctx, "request_id", "req789")
+	ctx = context.WithValue(ctx, KeyRequestId, "req789")
 	// 添加一个不在 ExtraKeys 中的字段，用于测试过滤
 	ctx = context.WithValue(ctx, "other_field", "should_not_appear")
 
@@ -271,4 +272,141 @@ func TestLogRotation(t *testing.T) {
 	assert.True(t, rotated, "Log rotation should occur when file size exceeds MaxSize")
 
 	Close()
+}
+
+func TestOTELTraceFieldsInjected(t *testing.T) {
+	tempDir := "log/glog-otel-test"
+	defer os.RemoveAll(tempDir)
+
+	config := &LogConfig{
+		Service:         "otel-test",
+		Module:          "test",
+		Level:           InfoLevel,
+		Writer:          WriterFile,
+		Dir:             tempDir,
+		EnableOTELTrace: true,
+	}
+
+	logger, err := NewLogger(config)
+	assert.Nil(t, err)
+
+	tp := trace.NewTracerProvider()
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+
+	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	logger.Infow(ctx, "otel trace fields", "key", "value")
+	span.End()
+	logger.Close()
+
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-test_full.log")
+	b, readErr := os.ReadFile(logFile)
+	assert.Nil(t, readErr)
+	content := string(b)
+
+	assert.Contains(t, content, KeyTraceId)
+	assert.Contains(t, content, KeySpanId)
+	assert.Contains(t, content, KeyTraceFlags)
+}
+
+func TestOTELTraceFieldsDisabled(t *testing.T) {
+	tempDir := "log/glog-otel-disabled-test"
+	defer os.RemoveAll(tempDir)
+
+	config := &LogConfig{
+		Service:         "otel-disabled",
+		Module:          "test",
+		Level:           InfoLevel,
+		Writer:          WriterFile,
+		Dir:             tempDir,
+		EnableOTELTrace: false,
+	}
+
+	logger, err := NewLogger(config)
+	assert.Nil(t, err)
+
+	tp := trace.NewTracerProvider()
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+
+	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	logger.Infow(ctx, "otel trace fields disabled", "key", "value")
+	span.End()
+	logger.Close()
+
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-disabled_full.log")
+	b, readErr := os.ReadFile(logFile)
+	assert.Nil(t, readErr)
+	content := string(b)
+
+	assert.NotContains(t, content, `"`+KeyTraceId+`"`)
+	assert.NotContains(t, content, `"`+KeySpanId+`"`)
+	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
+}
+
+func TestOTELTraceOptionOverridesConfig(t *testing.T) {
+	tempDir := "log/glog-otel-option-test"
+	defer os.RemoveAll(tempDir)
+
+	config := &LogConfig{
+		Service:         "otel-option",
+		Module:          "test",
+		Level:           InfoLevel,
+		Writer:          WriterFile,
+		Dir:             tempDir,
+		EnableOTELTrace: true,
+	}
+
+	logger, err := NewLogger(config, WithOTELTrace(false))
+	assert.Nil(t, err)
+
+	tp := trace.NewTracerProvider()
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+
+	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	logger.Infow(ctx, "otel trace option override", "key", "value")
+	span.End()
+	logger.Close()
+
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-option_full.log")
+	b, readErr := os.ReadFile(logFile)
+	assert.Nil(t, readErr)
+	content := string(b)
+
+	assert.NotContains(t, content, `"`+KeyTraceId+`"`)
+	assert.NotContains(t, content, `"`+KeySpanId+`"`)
+	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
+}
+
+func TestOTELTraceWithoutSpanContext(t *testing.T) {
+	tempDir := "log/glog-otel-nospan-test"
+	defer os.RemoveAll(tempDir)
+
+	config := &LogConfig{
+		Service:         "otel-nospan",
+		Module:          "test",
+		Level:           InfoLevel,
+		Writer:          WriterFile,
+		Dir:             tempDir,
+		EnableOTELTrace: true,
+	}
+
+	logger, err := NewLogger(config)
+	assert.Nil(t, err)
+
+	logger.Infow(context.Background(), "without span context", "key", "value")
+	logger.Close()
+
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-nospan_full.log")
+	b, readErr := os.ReadFile(logFile)
+	assert.Nil(t, readErr)
+	content := string(b)
+
+	assert.NotContains(t, content, `"`+KeyTraceId+`"`)
+	assert.NotContains(t, content, `"`+KeySpanId+`"`)
+	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
 }

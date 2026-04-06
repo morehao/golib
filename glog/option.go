@@ -27,6 +27,7 @@ type optConfig struct {
 	callerSkip      int
 	fieldHookFunc   FieldHookFunc
 	messageHookFunc MessageHookFunc
+	enableOTELTrace *bool
 }
 
 type option func(cfg *optConfig)
@@ -53,5 +54,12 @@ func WithFieldHookFunc(fn FieldHookFunc) Option {
 func WithMessageHookFunc(fn MessageHookFunc) Option {
 	return option(func(cfg *optConfig) {
 		cfg.messageHookFunc = fn
+	})
+}
+
+// WithOTELTrace 设置是否自动注入 OpenTelemetry trace 关联字段
+func WithOTELTrace(enabled bool) Option {
+	return option(func(cfg *optConfig) {
+		cfg.enableOTELTrace = &enabled
 	})
 }

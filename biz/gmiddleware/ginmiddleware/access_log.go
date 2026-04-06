@@ -3,12 +3,15 @@ package ginmiddleware
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gcontext/gincontext"
 	"github.com/morehao/golib/gerror"
 	"github.com/morehao/golib/glog"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var defaultConfig = accessLogConfig{
@@ -52,11 +55,24 @@ func AccessLog(opts ...AccessLogOption) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		start := time.Now()
 
-		requestId := getRequestId(ctx)
-		ctx.Set(glog.KeyRequestId, requestId)
+		requestID := getRequestId(ctx)
+		ctx.Set(glog.KeyRequestId, requestID)
+		ctx.Writer.Header().Set(glog.HeaderRequestID, requestID)
+
+		spanCtx := trace.SpanContextFromContext(ctx.Request.Context())
+		traceID := ""
+		spanID := ""
+		traceFlags := ""
+		if spanCtx.IsValid() {
+			traceID = spanCtx.TraceID().String()
+			spanID = spanCtx.SpanID().String()
+			traceFlags = spanCtx.TraceFlags().String()
+			ctx.Writer.Header().Set(glog.HeaderTraceParent, formatTraceParent(spanCtx))
+		}
 
 		path := ctx.Request.URL.Path
-		ctx.Set(glog.KeyUrl, path)
+		urlFull := ctx.Request.URL.String()
+		ctx.Set(glog.KeyUrl, urlFull)
 
 		reqQuery := truncateString(gincontext.GetReqQuery(ctx), config.ReqQueryMaxLen)
 
@@ -84,14 +100,26 @@ func AccessLog(opts ...AccessLogOption) gin.HandlerFunc {
 		// 解析响应体
 		responseBody := ""
 		var responseBodySize int
-		var errInfo gerror.Error
+		var appErr gerror.Error
 		if respBodyWriter.Body != nil {
-			responseBody, responseBodySize, errInfo = parseResponseBody(respBodyWriter.Body.String(), config.RespBodyMaxLen)
+			responseBody, responseBodySize, appErr = parseResponseBody(respBodyWriter.Body.String(), config.RespBodyMaxLen)
 		}
 
+		statusCode := ctx.Writer.Status()
+		requestErr := strings.TrimSpace(ctx.Errors.ByType(gin.ErrorTypePrivate).String())
+
 		// 构建并记录日志
-		keysAndValues := buildLogFields(ctx, path, reqQuery, reqBody, reqBodySize,
-			responseBody, responseBodySize, errInfo, start, end)
+		keysAndValues := buildLogFields(ctx, requestID, traceID, spanID, traceFlags, path, urlFull,
+			reqQuery, reqBody, reqBodySize, responseBody, responseBodySize, appErr, requestErr,
+			statusCode, start, end)
+		if statusCode >= 500 {
+			glog.Errorw(ctx, glog.MsgFlagNotice, keysAndValues...)
+			return
+		}
+		if statusCode >= 400 {
+			glog.Warnw(ctx, glog.MsgFlagNotice, keysAndValues...)
+			return
+		}
 		glog.Infow(ctx, glog.MsgFlagNotice, keysAndValues...)
 	}
 }
@@ -123,43 +151,67 @@ func parseResponseBody(body string, maxLen int) (string, int, gerror.Error) {
 }
 
 // buildLogFields 构建日志字段
-func buildLogFields(ctx *gin.Context, path string, reqQuery, reqBody string, reqBodySize int,
-	responseBody string, responseBodySize int, errInfo gerror.Error, start, end time.Time) []interface{} {
-	return []interface{}{
-		glog.KeyHost, ctx.Request.Host,
-		glog.KeyClientIp, gincontext.GetClientIP(ctx),
-		glog.KeyOrgID, gincontext.GetOrgID(ctx),
-		glog.KeyTenantID, gincontext.GetTenantID(ctx),
-		glog.KeyDeptID, gincontext.GetDeptID(ctx),
-		glog.KeyHandle, ctx.HandlerName(),
-		glog.KeyProto, ctx.Request.Proto,
-		glog.KeyRefer, ctx.Request.Referer(),
-		glog.KeyHeader, gincontext.GetHeader(ctx),
-		glog.KeyCookie, gincontext.GetCookie(ctx),
-		glog.KeyUrl, path,
-		glog.KeyMethod, ctx.Request.Method,
-		glog.KeyHttpStatusCode, ctx.Writer.Status(),
-		glog.KeyRequestQuery, reqQuery,
-		glog.KeyRequestBody, reqBody,
-		glog.KeyRequestBodySize, reqBodySize,
-		glog.KeyResponseBody, responseBody,
-		glog.KeyResponseBodySize, responseBodySize,
-		glog.KeyRequestStartTime, glog.FormatRequestTime(start),
-		glog.KeyRequestEndTime, glog.FormatRequestTime(end),
-		glog.KeyCost, glog.GetRequestCost(start, end),
-		glog.KeyErrorCode, errInfo.Code,
-		glog.KeyErrorMsg, errInfo.Msg,
-		glog.KeyRequestErr, ctx.Errors.ByType(gin.ErrorTypePrivate).String(),
+func buildLogFields(ctx *gin.Context, requestID, traceID, spanID, traceFlags, path, urlFull,
+	reqQuery, reqBody string, reqBodySize int, responseBody string, responseBodySize int,
+	appErr gerror.Error, requestErr string,
+	statusCode int, start, end time.Time) []any {
+	errorType := ""
+	errorMsg := requestErr
+	if statusCode >= 400 {
+		errorType = "http"
+	}
+	if errorMsg == "" {
+		errorMsg = appErr.Msg
+	}
+
+	return []any{
+		glog.KeyEventName, glog.ValueEventHttpServerReq,
+		glog.KeyTraceId, traceID,
+		glog.KeySpanId, spanID,
+		glog.KeyTraceFlags, traceFlags,
+		glog.KeyHttpRequestMethod, ctx.Request.Method,
+		glog.KeyHttpResponseStatusCode, statusCode,
+		glog.KeyHttpRoute, ctx.FullPath(),
+		glog.KeyUrlPath, path,
+		glog.KeyUrlFull, urlFull,
+		glog.KeyServerAddress, ctx.Request.Host,
+		glog.KeyClientAddress, gincontext.GetClientIP(ctx),
+		glog.KeyHttpRequestBodySize, reqBodySize,
+		glog.KeyHttpResponseBodySize, responseBodySize,
+		glog.KeyErrorType, errorType,
+		glog.KeyErrorMessage, errorMsg,
+		glog.KeyAppErrorCode, appErr.Code,
+		glog.KeyAppErrorMessage, appErr.Msg,
+		glog.KeyAppRequestID, requestID,
+		glog.KeyAppOrgID, gincontext.GetOrgID(ctx),
+		glog.KeyAppTenantID, gincontext.GetTenantID(ctx),
+		glog.KeyAppDeptID, gincontext.GetDeptID(ctx),
+		glog.KeyAppHandler, ctx.HandlerName(),
+		glog.KeyNetworkProtocolName, ctx.Request.Proto,
+		glog.KeyUrlQuery, reqQuery,
+		glog.KeyHttpRequestBody, reqBody,
+		glog.KeyHttpResponseBody, responseBody,
+		glog.KeyAppRequestStartTime, glog.FormatRequestTime(start),
+		glog.KeyAppRequestEndTime, glog.FormatRequestTime(end),
+		glog.KeyAppRequestDurationMs, glog.GetRequestCost(start, end),
+		glog.KeyAppRequestError, requestErr,
 	}
 }
 
 func getRequestId(ctx *gin.Context) string {
-	requestId := ctx.Request.Header.Get(glog.KeyRequestId)
-	if requestId == "" {
-		requestId = ctx.GetString(glog.KeyRequestId)
+	requestID := ctx.Request.Header.Get(glog.HeaderRequestID)
+	if requestID == "" {
+		requestID = ctx.GetString(glog.KeyRequestId)
 	}
-	if requestId == "" {
-		requestId = glog.GenRequestID()
+	if requestID == "" {
+		requestID = glog.GenRequestID()
 	}
-	return requestId
+	return requestID
+}
+
+func formatTraceParent(sc trace.SpanContext) string {
+	if !sc.IsValid() {
+		return ""
+	}
+	return fmt.Sprintf("00-%s-%s-%s", sc.TraceID().String(), sc.SpanID().String(), sc.TraceFlags().String())
 }
