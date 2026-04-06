@@ -29,6 +29,10 @@ func GetTenantID(ctx *gin.Context) uint {
 	return ctx.GetUint(gcontext.KeyTenantID)
 }
 
+func GetDeptID(ctx *gin.Context) uint {
+	return ctx.GetUint(gcontext.KeyDeptID)
+}
+
 func GetString(ctx *gin.Context, key string) string {
 	return ctx.GetString(key)
 }

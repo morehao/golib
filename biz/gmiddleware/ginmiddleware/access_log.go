@@ -128,6 +128,9 @@ func buildLogFields(ctx *gin.Context, path string, reqQuery, reqBody string, req
 	return []interface{}{
 		glog.KeyHost, ctx.Request.Host,
 		glog.KeyClientIp, gincontext.GetClientIP(ctx),
+		glog.KeyOrgID, gincontext.GetOrgID(ctx),
+		glog.KeyTenantID, gincontext.GetTenantID(ctx),
+		glog.KeyDeptID, gincontext.GetDeptID(ctx),
 		glog.KeyHandle, ctx.HandlerName(),
 		glog.KeyProto, ctx.Request.Proto,
 		glog.KeyRefer, ctx.Request.Referer(),

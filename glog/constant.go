@@ -17,6 +17,9 @@ const (
 	KeyTraceId    = "traceId"
 	KeyTraceFlags = "traceFlags"
 	KeySpanId     = "spanId"
+	KeyOrgID      = "orgID"
+	KeyTenantID   = "tenantID"
+	KeyDeptID     = "deptID"
 
 	MsgFlagNotice = "notice"
 
