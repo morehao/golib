@@ -2,6 +2,8 @@ package ghttp
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestGet(t *testing.T) {
@@ -75,10 +78,10 @@ func TestPostJSON(t *testing.T) {
 	}
 
 	type HttpBinPostResponse struct {
-		JSON   RequestData        `json:"json"`
-		Data   string             `json:"data"`
+		JSON    RequestData       `json:"json"`
+		Data    string            `json:"data"`
 		Headers map[string]string `json:"headers"`
-		URL    string             `json:"url"`
+		URL     string            `json:"url"`
 	}
 
 	requestData := RequestData{
@@ -162,4 +165,47 @@ func TestResultMethods(t *testing.T) {
 	err = res.JSON(&result)
 	assert.Nil(t, err)
 	assert.Contains(t, result.URL, "httpbin.org")
+}
+
+func TestGetInjectsOTelTraceAndRequestID(t *testing.T) {
+	const preHeaderTraceParent = "00-11111111111111111111111111111111-2222222222222222-01"
+	const requestID = "req-from-ctx"
+
+	var gotTraceParent string
+	var gotRequestID string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceParent = r.Header.Get("traceparent")
+		gotRequestID = r.Header.Get("X-Request-Id")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:  "test",
+		Host:    srv.URL,
+		Timeout: 3 * time.Second,
+	}
+	client := NewClient(cfg)
+
+	tp := sdktrace.NewTracerProvider()
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+
+	ctx, span := tp.Tracer("ghttp-test").Start(context.Background(), "outbound")
+	defer span.End()
+	ctx = context.WithValue(ctx, glog.KeyRequestId, requestID)
+
+	_, err := client.Get(ctx, "/", RequestOption{
+		Headers: map[string]string{
+			"traceparent": preHeaderTraceParent,
+		},
+	})
+
+	assert.Nil(t, err)
+	assert.NotEmpty(t, gotTraceParent)
+	assert.NotEqual(t, preHeaderTraceParent, gotTraceParent)
+	assert.Equal(t, requestID, gotRequestID)
 }

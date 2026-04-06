@@ -3,20 +3,23 @@ package glog
 import (
 	"context"
 
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 // Logger 是一个封装 zap.Logger 的结构体
 type zapLogger struct {
-	logger *zap.Logger
-	cfg    *LogConfig
+	logger          *zap.Logger
+	cfg             *LogConfig
+	enableOTELTrace bool
 }
 
 type zapLoggerConfig struct {
 	callerSkip      int
 	fieldHookFunc   FieldHookFunc
 	messageHookFunc MessageHookFunc
+	enableOTELTrace bool
 }
 
 func getZapLogger(cfg *LogConfig, optCfg *optConfig) (*zap.Logger, error) {
@@ -25,6 +28,10 @@ func getZapLogger(cfg *LogConfig, optCfg *optConfig) (*zap.Logger, error) {
 		callerSkip:      optCfg.callerSkip,
 		fieldHookFunc:   optCfg.fieldHookFunc,
 		messageHookFunc: optCfg.messageHookFunc,
+		enableOTELTrace: cfg.EnableOTELTrace,
+	}
+	if optCfg.enableOTELTrace != nil {
+		zapCfg.enableOTELTrace = *optCfg.enableOTELTrace
 	}
 
 	// 创建编码器
@@ -246,7 +253,26 @@ func (l *zapLogger) ctxLogw(level Level, ctx context.Context, msg string, kvs ..
 // 提取 context 中的字段
 func (l *zapLogger) extraFields(ctx context.Context) []any {
 	var fields []any
+	hasOTELTraceFields := false
+	if l.enableOTELTrace {
+		span := oteltrace.SpanFromContext(ctx)
+		if span != nil {
+			sc := span.SpanContext()
+			if sc.IsValid() {
+				hasOTELTraceFields = true
+				fields = append(fields,
+					zap.String(KeyTraceId, sc.TraceID().String()),
+					zap.String(KeySpanId, sc.SpanID().String()),
+					zap.String(KeyTraceFlags, sc.TraceFlags().String()),
+				)
+			}
+		}
+	}
+
 	for _, key := range l.cfg.ExtraKeys {
+		if hasOTELTraceFields && (key == KeyTraceId || key == KeySpanId || key == KeyTraceFlags) {
+			continue
+		}
 		if v := ctx.Value(key); v != nil {
 			fields = append(fields, zap.Any(key, v))
 		}

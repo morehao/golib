@@ -55,9 +55,14 @@ func newZapLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 	if err != nil {
 		return nil, err
 	}
+	enableOTELTrace := cfg.EnableOTELTrace
+	if optCfg.enableOTELTrace != nil {
+		enableOTELTrace = *optCfg.enableOTELTrace
+	}
 
 	return &zapLogger{
-		logger: logger,
-		cfg:    cfg,
+		logger:          logger,
+		cfg:             cfg,
+		enableOTELTrace: enableOTELTrace,
 	}, nil
 }

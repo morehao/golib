@@ -30,18 +30,21 @@ type LogConfig struct {
 	MaxAge int `json:"max_age" yaml:"max_age"`
 	// Compress 是否压缩旧日志文件，默认 false
 	Compress bool `json:"compress" yaml:"compress"`
+	// EnableOTELTrace 是否自动注入 OpenTelemetry trace 关联字段
+	EnableOTELTrace bool `json:"enable_otel_trace" yaml:"enable_otel_trace"`
 }
 
 func GetDefaultLogConfig() *LogConfig {
 	return &LogConfig{
-		Service:    defaultServiceName,
-		Module:     defaultModuleName,
-		Level:      DebugLevel,
-		Writer:     WriterConsole,
-		Dir:        defaultLogDir,
-		MaxSize:    100,
-		MaxBackups: 10,
-		MaxAge:     7,
-		Compress:   false,
+		Service:         defaultServiceName,
+		Module:          defaultModuleName,
+		Level:           DebugLevel,
+		Writer:          WriterConsole,
+		Dir:             defaultLogDir,
+		MaxSize:         100,
+		MaxBackups:      10,
+		MaxAge:          7,
+		Compress:        false,
+		EnableOTELTrace: true,
 	}
 }

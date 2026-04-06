@@ -27,7 +27,7 @@ func TestNewTypedES(t *testing.T) {
 	_, typedClient, initErr := New(cfg)
 	assert.Nil(t, initErr)
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "requestId", "12312312312312")
+	ctx = context.WithValue(ctx, glog.KeyRequestId, "12312312312312")
 
 	res, searchErr := typedClient.Search().
 		Index("accounts").
@@ -56,7 +56,7 @@ func TestNewSimpleES(t *testing.T) {
 	simpleClient, _, initErr := New(cfg)
 	assert.Nil(t, initErr)
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "requestId", "12312312312312")
+	ctx = context.WithValue(ctx, glog.KeyRequestId, "12312312312312")
 	res, searchErr := simpleClient.Search(
 		simpleClient.Search.WithContext(ctx),
 		simpleClient.Search.WithIndex("accounts"),

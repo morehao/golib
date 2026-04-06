@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/morehao/golib/glog"
 )
 
 func TestControl_Run(t *testing.T) {
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, "requestId", "123456")
+	ctx = context.WithValue(ctx, glog.KeyRequestId, "123456")
 	// 实例化并发控制器，设置并发数为3
 	ctrl := NewControl(5)
 	var userIds []uint64

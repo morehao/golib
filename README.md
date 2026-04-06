@@ -13,6 +13,7 @@
 - `gcontext` 上下文工具组件
 - `gerror` 错误处理组件
 - `glog` 日志组件
+- `gtrace` OpenTelemetry Trace 初始化组件
 - `gutil` 常用工具函数集合
 - [protocol](#protocol) 协议组件（包含 ghttp、gresty）
 - `ratelimit` 限流组件

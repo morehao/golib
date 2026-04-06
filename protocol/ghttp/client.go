@@ -348,7 +348,7 @@ func (c *Client) makeRequest(ctx context.Context, method, url string, data io.Re
 
 	request.Header.Set("Content-Type", opts.GetContentType())
 
-	request.Header.Set(glog.KeyRequestId, glog.GetRequestID(ctx))
+	request.Header = protocol.InjectTraceAndRequestID(ctx, request.Header)
 
 	return request.WithContext(ctx), nil
 }

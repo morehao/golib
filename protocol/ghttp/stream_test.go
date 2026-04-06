@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestStreamResult_Read_Close(t *testing.T) {
@@ -335,4 +337,43 @@ func TestStreamContextCancel(t *testing.T) {
 	stream, err := client.GetStream(ctx, "/", RequestOption{})
 	assert.NotNil(t, err)
 	assert.Nil(t, stream)
+}
+
+func TestGetStreamInjectsOTelTraceAndRequestID(t *testing.T) {
+	const requestID = "stream-req-id"
+
+	var gotTraceParent string
+	var gotRequestID string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceParent = r.Header.Get("traceparent")
+		gotRequestID = r.Header.Get("X-Request-Id")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:  "test",
+		Host:    srv.URL,
+		Timeout: 5 * time.Second,
+	}
+	client := NewClient(cfg)
+
+	tp := sdktrace.NewTracerProvider()
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+
+	ctx, span := tp.Tracer("ghttp-stream-test").Start(context.Background(), "stream-outbound")
+	defer span.End()
+	ctx = context.WithValue(ctx, glog.KeyRequestId, requestID)
+
+	stream, err := client.GetStream(ctx, "/", RequestOption{})
+	assert.Nil(t, err)
+	assert.NotNil(t, stream)
+	_ = stream.Close()
+
+	assert.NotEmpty(t, gotTraceParent)
+	assert.Equal(t, requestID, gotRequestID)
 }

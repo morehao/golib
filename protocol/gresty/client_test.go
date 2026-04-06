@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/glog"
 	"github.com/stretchr/testify/assert"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"resty.dev/v3"
 )
 
@@ -47,7 +49,7 @@ func TestClientPostRequest(t *testing.T) {
 func TestClientWithTraceID(t *testing.T) {
 	client := NewClient()
 
-	ctx := context.WithValue(context.Background(), "trace_id", "trace-123")
+	ctx := context.WithValue(context.Background(), glog.KeyTraceId, "trace-123")
 
 	resp, err := client.R().
 		SetContext(ctx).
@@ -116,4 +118,39 @@ func createSSETestServer(ticker time.Duration, fn func(io.Writer) error) *httpte
 
 func createTestServer(fn func(w http.ResponseWriter, r *http.Request)) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(fn))
+}
+
+func TestClientInjectsOTelTraceAndRequestID(t *testing.T) {
+	const requestID = "resty-req-id"
+
+	var gotTraceParent string
+	var gotRequestID string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceParent = r.Header.Get("traceparent")
+		gotRequestID = r.Header.Get("X-Request-Id")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient()
+	tp := sdktrace.NewTracerProvider()
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+
+	ctx, span := tp.Tracer("gresty-test").Start(context.Background(), "outbound")
+	defer span.End()
+	ctx = context.WithValue(ctx, glog.KeyRequestId, requestID)
+
+	resp, err := client.R().
+		SetContext(ctx).
+		Get(srv.URL)
+
+	assert.Nil(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode())
+	assert.NotEmpty(t, gotTraceParent)
+	assert.Equal(t, requestID, gotRequestID)
 }
