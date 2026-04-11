@@ -58,10 +58,10 @@ func JWTAuth(secretKey string, opts ...Option) gin.HandlerFunc {
 			return
 		}
 
-		ctx.Set(gcontext.KeyUserID, claims.CustomData.UserID)
-		ctx.Set(gcontext.KeyPersonID, claims.CustomData.PersonID)
-		ctx.Set(gcontext.KeyTenantID, claims.CustomData.TenantID)
 		ctx.Set(gcontext.KeyOrgID, claims.CustomData.OrgID)
+		ctx.Set(gcontext.KeyTenantID, claims.CustomData.TenantID)
+		ctx.Set(gcontext.KeyPersonID, claims.CustomData.PersonID)
+		ctx.Set(gcontext.KeyUserID, claims.CustomData.UserID)
 		ctx.Set(gcontext.KeyDeptID, claims.CustomData.DeptID)
 		ctx.Set(gcontext.KeyUserType, claims.CustomData.UserType)
 		ctx.Set(gcontext.KeyAuthToken, tokenStr)
