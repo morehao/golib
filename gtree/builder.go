@@ -1,6 +1,7 @@
 package gtree
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -545,14 +546,7 @@ type IDComparator[N interface {
 }, K comparable] struct{}
 
 func (c IDComparator[N, K]) Compare(a, b N) int {
-	switch {
-	case a.GetID() < b.GetID():
-		return -1
-	case a.GetID() > b.GetID():
-		return 1
-	default:
-		return 0
-	}
+	return cmp.Compare(a.GetID(), b.GetID())
 }
 
 // NameComparator 按字符串 Name 升序
@@ -562,14 +556,7 @@ type NameComparator[N interface {
 }, K comparable] struct{}
 
 func (c NameComparator[N, K]) Compare(a, b N) int {
-	switch {
-	case a.GetName() < b.GetName():
-		return -1
-	case a.GetName() > b.GetName():
-		return 1
-	default:
-		return 0
-	}
+	return cmp.Compare(a.GetName(), b.GetName())
 }
 
 // OrderComparator 按 int Order 升序
@@ -579,14 +566,7 @@ type OrderComparator[N interface {
 }, K comparable] struct{}
 
 func (c OrderComparator[N, K]) Compare(a, b N) int {
-	switch {
-	case a.GetOrder() < b.GetOrder():
-		return -1
-	case a.GetOrder() > b.GetOrder():
-		return 1
-	default:
-		return 0
-	}
+	return cmp.Compare(a.GetOrder(), b.GetOrder())
 }
 
 // CompositeComparator 多级排序，按顺序依次比较直到分出大小

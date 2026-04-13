@@ -3,8 +3,11 @@ package gtree
 import (
 	"context"
 	"errors"
-	"reflect"
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type testNode struct {
@@ -43,7 +46,51 @@ func keysOf(nodes []*testNode) []int {
 	return out
 }
 
-func TestBuildBasicTreeAndQueries(t *testing.T) {
+func printTestTree(tree *Tree[int, *testNode]) string {
+	var sb strings.Builder
+	sb.WriteString("Tree Structure:\n")
+
+	visited := make(map[int]bool)
+
+	var printNode func(node *testNode, prefix string, isLast bool)
+	printNode = func(node *testNode, prefix string, isLast bool) {
+		if visited[node.nodeKey] {
+			return
+		}
+		visited[node.nodeKey] = true
+
+		connector := "└─ "
+		if !isLast {
+			connector = "├─ "
+		}
+
+		sb.WriteString(fmt.Sprintf("%s%s[%d] %q\n", prefix, connector, node.nodeKey, node.sortName))
+
+		children, _ := tree.Children(node.nodeKey)
+		if children == nil {
+			return
+		}
+
+		newPrefix := prefix
+		if isLast {
+			newPrefix += "   "
+		} else {
+			newPrefix += "│  "
+		}
+
+		for i, child := range children {
+			printNode(child, newPrefix, i == len(children)-1)
+		}
+	}
+
+	for i, root := range tree.Roots {
+		printNode(root, "", i == len(tree.Roots)-1)
+	}
+
+	return sb.String()
+}
+
+func TestBuildBasicTreeAndQueries_Roots(t *testing.T) {
 	nodes := []*testNode{
 		node(1, 0, true),
 		node(2, 1, false),
@@ -52,45 +99,76 @@ func TestBuildBasicTreeAndQueries(t *testing.T) {
 	}
 
 	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	t.Log(printTestTree(tree))
 
-	if got := keysOf(tree.Roots); !reflect.DeepEqual(got, []int{1}) {
-		t.Fatalf("roots = %v, want [1]", got)
+	assert.Equal(t, []int{1}, keysOf(tree.Roots))
+}
+
+func TestBuildBasicTreeAndQueries_Children(t *testing.T) {
+	nodes := []*testNode{
+		node(1, 0, true),
+		node(2, 1, false),
+		node(3, 1, false),
+		node(4, 2, false),
 	}
+
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	t.Log(printTestTree(tree))
 
 	children1, ok := tree.Children(1)
-	if !ok {
-		t.Fatalf("Children(1) should exist")
-	}
-	if got := keysOf(children1); !reflect.DeepEqual(got, []int{2, 3}) {
-		t.Fatalf("Children(1) = %v, want [2 3]", got)
-	}
+	assert.True(t, ok)
+	assert.Equal(t, []int{2, 3}, keysOf(children1))
 
 	children3, ok := tree.Children(3)
-	if !ok {
-		t.Fatalf("Children(3) should exist")
-	}
-	if children3 != nil {
-		t.Fatalf("Children(3) = %v, want nil for leaf", children3)
+	assert.True(t, ok)
+	assert.Nil(t, children3)
+
+	childrenX, ok := tree.Children(999)
+	assert.False(t, ok)
+	assert.Nil(t, childrenX)
+}
+
+func TestBuildBasicTreeAndQueries_GetNodesByLevel(t *testing.T) {
+	nodes := []*testNode{
+		node(1, 0, true),
+		node(2, 1, false),
+		node(3, 1, false),
+		node(4, 2, false),
 	}
 
-	if childrenX, ok := tree.Children(999); ok || childrenX != nil {
-		t.Fatalf("Children(999) = (%v, %v), want (nil, false)", childrenX, ok)
-	}
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	t.Log(printTestTree(tree))
 
 	levels := tree.GetNodesByLevel()
-	if got := keysOf(levels[0]); !reflect.DeepEqual(got, []int{1}) {
-		t.Fatalf("level 0 = %v, want [1]", got)
-	}
-	if got := keysOf(levels[1]); !reflect.DeepEqual(got, []int{2, 3}) {
-		t.Fatalf("level 1 = %v, want [2 3]", got)
-	}
-	if got := keysOf(levels[2]); !reflect.DeepEqual(got, []int{4}) {
-		t.Fatalf("level 2 = %v, want [4]", got)
+	assert.Equal(t, []int{1}, keysOf(levels[0]))
+	assert.Equal(t, []int{2, 3}, keysOf(levels[1]))
+	assert.Equal(t, []int{4}, keysOf(levels[2]))
+}
+
+func TestBuildBasicTreeAndQueries_MaxLevel(t *testing.T) {
+	nodes := []*testNode{
+		node(1, 0, true),
+		node(2, 1, false),
+		node(3, 1, false),
+		node(4, 2, false),
 	}
 
-	if max := tree.MaxLevel(); max != 2 {
-		t.Fatalf("MaxLevel = %d, want 2", max)
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	t.Log(printTestTree(tree))
+
+	assert.Equal(t, 2, tree.MaxLevel())
+}
+
+func TestBuildBasicTreeAndQueries_Walk(t *testing.T) {
+	nodes := []*testNode{
+		node(1, 0, true),
+		node(2, 1, false),
+		node(3, 1, false),
+		node(4, 2, false),
 	}
+
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	t.Log(printTestTree(tree))
 
 	var walked []int
 	tree.Walk(func(n *testNode, level int) bool {
@@ -98,9 +176,7 @@ func TestBuildBasicTreeAndQueries(t *testing.T) {
 		walked = append(walked, n.GetKey())
 		return true
 	})
-	if !reflect.DeepEqual(walked, []int{1, 2, 4, 3}) {
-		t.Fatalf("Walk order = %v, want [1 2 4 3]", walked)
-	}
+	assert.Equal(t, []int{1, 2, 4, 3}, walked)
 
 	var early []int
 	tree.Walk(func(n *testNode, level int) bool {
@@ -108,14 +184,22 @@ func TestBuildBasicTreeAndQueries(t *testing.T) {
 		early = append(early, n.GetKey())
 		return len(early) < 2
 	})
-	if !reflect.DeepEqual(early, []int{1, 2}) {
-		t.Fatalf("Walk early stop = %v, want [1 2]", early)
+	assert.Equal(t, []int{1, 2}, early)
+}
+
+func TestBuildBasicTreeAndQueries_Filter(t *testing.T) {
+	nodes := []*testNode{
+		node(1, 0, true),
+		node(2, 1, false),
+		node(3, 1, false),
+		node(4, 2, false),
 	}
 
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	t.Log(printTestTree(tree))
+
 	filtered := tree.Filter(func(n *testNode) bool { return n.GetKey()%2 == 0 })
-	if got := keysOf(filtered); !reflect.DeepEqual(got, []int{2, 4}) {
-		t.Fatalf("Filter even keys = %v, want [2 4]", got)
-	}
+	assert.Equal(t, []int{2, 4}, keysOf(filtered))
 }
 
 func TestBuildDuplicateKeyReportsErrorAndKeepsFirstNode(t *testing.T) {
@@ -134,34 +218,18 @@ func TestBuildDuplicateKeyReportsErrorAndKeepsFirstNode(t *testing.T) {
 		second,
 	})
 
-	if tree.NodeMap[2] != first {
-		t.Fatalf("NodeMap[2] should keep first node")
-	}
+	assert.Equal(t, first, tree.NodeMap[2], "NodeMap[2] should keep first node")
+	assert.Len(t, tree.BuildErrors, 1)
 
-	if len(tree.BuildErrors) != 1 {
-		t.Fatalf("BuildErrors len = %d, want 1", len(tree.BuildErrors))
-	}
 	err := tree.BuildErrors[0]
-	if err.Kind != ErrDuplicateKey {
-		t.Fatalf("error kind = %v, want %v", err.Kind, ErrDuplicateKey)
-	}
-	if err.NodeKey != 2 {
-		t.Fatalf("error node key = %d, want 2", err.NodeKey)
-	}
-	if !errors.Is(err, ErrKindDuplicateKey) {
-		t.Fatalf("error should match ErrKindDuplicateKey")
-	}
-	if len(handled) != 1 {
-		t.Fatalf("error handler called %d times, want 1", len(handled))
-	}
+	assert.Equal(t, ErrDuplicateKey, err.Kind)
+	assert.Equal(t, 2, err.NodeKey)
+	assert.True(t, errors.Is(err, ErrKindDuplicateKey))
+	assert.Len(t, handled, 1)
 
 	children1, ok := tree.Children(1)
-	if !ok {
-		t.Fatalf("Children(1) should exist")
-	}
-	if got := keysOf(children1); !reflect.DeepEqual(got, []int{3}) {
-		t.Fatalf("Children(1) = %v, want [3]", got)
-	}
+	assert.True(t, ok)
+	assert.Equal(t, []int{3}, keysOf(children1))
 }
 
 func TestBuildOrphanStrategies(t *testing.T) {
@@ -191,22 +259,14 @@ func TestBuildOrphanStrategies(t *testing.T) {
 				node(2, 99, false),
 			})
 
-			if got := keysOf(tree.Roots); !reflect.DeepEqual(got, tt.wantRoots) {
-				t.Fatalf("roots = %v, want %v", got, tt.wantRoots)
-			}
+			assert.Equal(t, tt.wantRoots, keysOf(tree.Roots))
+			assert.Len(t, tree.BuildErrors, len(tt.wantErrKinds))
 
-			if len(tree.BuildErrors) != len(tt.wantErrKinds) {
-				t.Fatalf("BuildErrors len = %d, want %d", len(tree.BuildErrors), len(tt.wantErrKinds))
-			}
 			for i, kind := range tt.wantErrKinds {
-				if tree.BuildErrors[i].Kind != kind {
-					t.Fatalf("BuildErrors[%d].Kind = %v, want %v", i, tree.BuildErrors[i].Kind, kind)
-				}
+				assert.Equal(t, kind, tree.BuildErrors[i].Kind)
 			}
 
-			if len(handled) != len(tt.wantErrKinds) {
-				t.Fatalf("handler called %d times, want %d", len(handled), len(tt.wantErrKinds))
-			}
+			assert.Len(t, handled, len(tt.wantErrKinds))
 		})
 	}
 }
@@ -303,16 +363,10 @@ func TestBuildSortingWithComparator(t *testing.T) {
 		WithComparator[int, *testNode](OrderComparator[*testNode, int]{}),
 	).Build([]*testNode{r1, r2, c1, c2})
 
-	if got := keysOf(tree.Roots); !reflect.DeepEqual(got, []int{2, 1}) {
-		t.Fatalf("sorted roots = %v, want [2 1]", got)
-	}
+	assert.Equal(t, []int{2, 1}, keysOf(tree.Roots))
 	children1, ok := tree.Children(1)
-	if !ok {
-		t.Fatalf("Children(1) should exist")
-	}
-	if got := keysOf(children1); !reflect.DeepEqual(got, []int{4, 3}) {
-		t.Fatalf("sorted children(1) = %v, want [4 3]", got)
-	}
+	assert.True(t, ok)
+	assert.Equal(t, []int{4, 3}, keysOf(children1))
 }
 
 func TestComparators(t *testing.T) {
