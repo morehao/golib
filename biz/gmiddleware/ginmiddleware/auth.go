@@ -48,13 +48,13 @@ func JWTAuth(secretKey string, opts ...AuthOption) gin.HandlerFunc {
 
 		tokenStr := extractToken(ctx)
 		if tokenStr == "" {
-			unauthorized(ctx, gerror.Error{Code: 401, Msg: "missing auth token"})
+			gincontext.Abort(ctx, gerror.Error{Code: 401, Msg: "missing auth token"})
 			return
 		}
 
 		claims, err := auth.Parse(tokenStr)
 		if err != nil {
-			unauthorized(ctx, gerror.Error{Code: 401, Msg: "invalid token: " + err.Error()})
+			gincontext.Abort(ctx, gerror.Error{Code: 401, Msg: "invalid token: " + err.Error()})
 			return
 		}
 
@@ -90,6 +90,4 @@ func extractToken(ctx *gin.Context) string {
 	return auth
 }
 
-func unauthorized(ctx *gin.Context, err gerror.Error) {
-	ctx.AbortWithStatusJSON(401, err)
-}
+

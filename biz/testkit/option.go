@@ -33,7 +33,7 @@ func NewContext(opts ...Option) *gin.Context {
 	}
 
 	if _, exists := ctx.Get(glog.KeyRequestId); !exists {
-		ctx.Set(glog.KeyRequestId, generateRequestID())
+		ctx.Set(glog.KeyRequestId, glog.GenRequestID())
 	}
 
 	return ctx
