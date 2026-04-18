@@ -33,6 +33,10 @@ func GetDeptID(ctx *gin.Context) uint {
 	return ctx.GetUint(gcontext.KeyDeptID)
 }
 
+func GetRequestID(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyRequestID)
+}
+
 func GetString(ctx *gin.Context, key string) string {
 	return ctx.GetString(key)
 }

@@ -10,6 +10,7 @@ const (
 	KeyDeptID    = "deptID"
 	KeyOrgID     = "orgID"
 	KeyAuthToken = "authToken"
+	KeyRequestID = "requestID"
 )
 
 func NilCtx(ctx context.Context) bool {

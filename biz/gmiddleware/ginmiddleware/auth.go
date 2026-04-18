@@ -17,18 +17,18 @@ const (
 )
 
 type authConfig struct {
-	whiteList []string
+	skipPaths []string
 }
 
-type Option func(*authConfig)
+type AuthOption func(*authConfig)
 
-func WithWhiteList(whiteList []string) Option {
+func WithAuthSkipPaths(paths ...string) AuthOption {
 	return func(c *authConfig) {
-		c.whiteList = whiteList
+		c.skipPaths = append(c.skipPaths, paths...)
 	}
 }
 
-func JWTAuth(secretKey string, opts ...Option) gin.HandlerFunc {
+func JWTAuth(secretKey string, opts ...AuthOption) gin.HandlerFunc {
 	cfg := &authConfig{}
 	for _, opt := range opts {
 		opt(cfg)
@@ -41,7 +41,7 @@ func JWTAuth(secretKey string, opts ...Option) gin.HandlerFunc {
 			return
 		}
 
-		if isWhiteListed(ctx.Request.URL.Path, cfg.whiteList) {
+		if isSkippedPath(ctx.Request.URL.Path, cfg.skipPaths) {
 			ctx.Next()
 			return
 		}
@@ -70,8 +70,8 @@ func JWTAuth(secretKey string, opts ...Option) gin.HandlerFunc {
 	}
 }
 
-func isWhiteListed(path string, whiteList []string) bool {
-	for _, p := range whiteList {
+func isSkippedPath(path string, skipPaths []string) bool {
+	for _, p := range skipPaths {
 		if strings.HasPrefix(path, p) {
 			return true
 		}
