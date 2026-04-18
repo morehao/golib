@@ -4,18 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// GenRequestID 生成requestId
 func GenRequestID() string {
-	// 生成纳秒时间戳
-	nanosecond := uint64(time.Now().UnixNano())
-	// nanosecond&0x7FFFFFFF 使用位运算与操作，将 nanosecond 的二进制表示的最高位（最高位是符号位）清零，将其转换为正整数。
-	// |0x80000000 使用位运算或操作，将二进制表示的最高位设置为 1，以确保结果是一个正整数。这样做的目的是为了确保结果是正数，而不是负数。
-	requestId := strconv.FormatUint(nanosecond&0x7FFFFFFF|0x80000000, 10)
-	return requestId
+	return uuid.Must(uuid.NewV7()).String()
 }
 
 // GetRequestID 从 context 中获取 requestId
