@@ -10,9 +10,10 @@ import (
 )
 
 type DtoRender struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-	Data any    `json:"data"`
+	Code      int    `json:"code"`
+	RequestID string `json:"requestID"`
+	Msg       string `json:"msg"`
+	Data      any    `json:"data"`
 }
 
 func Success(ctx *gin.Context, data any) {
@@ -26,6 +27,7 @@ func SuccessWithFormat(ctx *gin.Context, data any) {
 func renderSuccess(ctx *gin.Context, data any, withFormat bool) {
 	r := gcontext.NewResponseRender()
 	r.SetCode(0)
+	r.SetRequestID(GetRequestID(ctx))
 	r.SetMsg("success")
 	if withFormat {
 		r.SetDataWithFormat(data)
@@ -36,17 +38,18 @@ func renderSuccess(ctx *gin.Context, data any, withFormat bool) {
 }
 
 func Fail(ctx *gin.Context, err error) {
-	r := buildErrorResponse(err)
+	r := buildErrorResponse(ctx, err)
 	ctx.JSON(http.StatusOK, r)
 }
 
 func Abort(ctx *gin.Context, err error) {
-	r := buildErrorResponse(err)
+	r := buildErrorResponse(ctx, err)
 	ctx.AbortWithStatusJSON(http.StatusOK, r)
 }
 
-func buildErrorResponse(err error) gcontext.ResponseRender {
+func buildErrorResponse(ctx *gin.Context, err error) gcontext.ResponseRender {
 	r := gcontext.NewResponseRender()
+	r.SetRequestID(GetRequestID(ctx))
 	var gErr gerror.Error
 	if errors.As(err, &gErr) {
 		r.SetCode(gErr.Code)

@@ -13,6 +13,7 @@ type ResponseRender interface {
 	SetMsg(string)
 	SetData(any)
 	SetDataWithFormat(any)
+	SetRequestID(string)
 }
 
 func NewResponseRender() ResponseRender {
@@ -20,14 +21,20 @@ func NewResponseRender() ResponseRender {
 }
 
 type responseRender struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-	Data any    `json:"data"`
+	Code      int    `json:"code"`
+	RequestID string `json:"requestID"`
+	Msg       string `json:"msg"`
+	Data      any    `json:"data"`
 }
 
 func (r *responseRender) SetCode(code int) {
 	r.Code = code
 }
+
+func (r *responseRender) SetRequestID(requestID string) {
+	r.RequestID = requestID
+}
+
 func (r *responseRender) SetMsg(msg string) {
 	r.Msg = msg
 }

@@ -45,7 +45,7 @@ var defaultCorsConfig = corsConfig{
 	exposeHeaders:   []string{"Content-Length"},
 	maxAge:          12 * time.Hour,
 	allowAllOrigins: true,
-	whiteList:       []string{},
+	skipPaths:       []string{},
 }
 
 // CORS 返回跨域处理的中间件
@@ -66,6 +66,7 @@ var defaultCorsConfig = corsConfig{
 //	router.Use(ginmiddleware.CORS(
 //	    ginmiddleware.WithAllowAllOrigins(false),
 //	    ginmiddleware.WithAddAllowOrigins("https://example.com"),
+//	    ginmiddleware.WithCorsSkipPaths("/health", "/metrics"),
 //	))
 func CORS(opts ...CorsOption) gin.HandlerFunc {
 	config := defaultCorsConfig
@@ -74,7 +75,7 @@ func CORS(opts ...CorsOption) gin.HandlerFunc {
 	}
 
 	return func(ctx *gin.Context) {
-		if isWhiteListed(ctx.Request.URL.Path, config.whiteList) {
+		if isSkippedPath(ctx.Request.URL.Path, config.skipPaths) {
 			ctx.Next()
 			return
 		}
@@ -122,13 +123,25 @@ type corsConfig struct {
 	exposeHeaders   []string      // 客户端可访问的响应头
 	maxAge          time.Duration // 预检请求缓存时间
 	allowAllOrigins bool          // 是否允许所有来源
-	whiteList       []string      // 白名单路径，跳过 CORS 处理
+	skipPaths       []string      // 跳过 CORS 处理的路径
 }
 
 // CorsOption CORS 中间件配置选项
 type CorsOption func(*corsConfig)
 
 // WithAddAllowOrigins 追加允许的来源
+func WithCorsSkipPaths(paths ...string) CorsOption {
+	return func(c *corsConfig) {
+		c.skipPaths = append(c.skipPaths, paths...)
+	}
+}
+
+func WithAllowAllOrigins(allow bool) CorsOption {
+	return func(c *corsConfig) {
+		c.allowAllOrigins = allow
+	}
+}
+
 func WithAddAllowOrigins(origins ...string) CorsOption {
 	return func(c *corsConfig) {
 		c.allowOrigins = append(c.allowOrigins, origins...)

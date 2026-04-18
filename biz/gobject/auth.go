@@ -1,5 +1,13 @@
 package gobject
 
+type TokenType string
+
+const (
+	TokenTypeTemp    TokenType = "temp"
+	TokenTypeAuth    TokenType = "auth"
+	TokenTypeRefresh TokenType = "refresh"
+)
+
 type UserClaims struct {
 	// UserID 用户ID
 	UserID uint `json:"userId"`
@@ -15,4 +23,6 @@ type UserClaims struct {
 	RoleIDs []uint `json:"roleIds"`
 	// UserType 用户类型
 	UserType string `json:"userType"`
+	// TokenType 令牌类型: temp-临时令牌, auth-登录鉴权令牌, refresh-刷新令牌
+	TokenType TokenType `json:"tokenType"`
 }

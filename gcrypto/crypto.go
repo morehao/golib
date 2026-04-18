@@ -2,7 +2,9 @@ package gcrypto
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 )
 
@@ -26,4 +28,9 @@ func getKeyFromEnvOrDefault(envKey, defaultKey string) string {
 		return key
 	}
 	return defaultKey
+}
+
+func SHA256Hash(data string) string {
+	h := sha256.Sum256([]byte(data))
+	return fmt.Sprintf("%x", h)
 }
