@@ -21,18 +21,18 @@ func (m *loggingMiddleware) handle(resp *resty.Response) error {
 	cost := glog.GetRequestCost(resp.Request.Time, time.Now())
 
 	fields := []any{
-		glog.KeyProto, glog.ValueProtoHttp,
-		glog.KeyUrl, resp.Request.URL,
-		glog.KeyMethod, resp.Request.Method,
-		glog.KeyHttpStatusCode, resp.StatusCode(),
-		glog.KeyCost, cost,
-		glog.KeyRequestBody, resp.Request.Body,
-		glog.KeyResponseBody, resp.Result(),
-		glog.KeyRequestQuery, resp.Request.QueryParams.Encode(),
+		glog.KeyNetworkProtocolName, glog.ValueNetworkProtoHTTP,
+		glog.KeyUrlFull, resp.Request.URL,
+		glog.KeyHttpRequestMethod, resp.Request.Method,
+		glog.KeyHttpResponseStatusCode, resp.StatusCode(),
+		glog.KeyAppRequestDurationMs, cost,
+		glog.KeyHttpRequestBody, resp.Request.Body,
+		glog.KeyHttpResponseBody, resp.Result(),
+		glog.KeyUrlQuery, resp.Request.QueryParams.Encode(),
 	}
 
 	if resp.IsError() {
-		fields = append(fields, glog.KeyErrorMsg, resp.Error())
+		fields = append(fields, glog.KeyAppErrorMessage, resp.Error())
 		m.logger.Errorw(ctx, "HTTP request failed", fields...)
 	} else {
 		m.logger.Infow(ctx, "HTTP request success", fields...)

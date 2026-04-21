@@ -66,8 +66,3 @@ func New(cfg *GormConfig, opts ...Option) (*gorm.DB, error) {
 	return db, nil
 }
 
-func WithLogConfig(logConfig *glog.LogConfig) Option {
-	return optionFunc(func(cfg *GormConfig) {
-		cfg.loggerConfig = logConfig
-	})
-}

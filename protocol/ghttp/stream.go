@@ -86,8 +86,8 @@ func (c *Client) streamDo(ctx context.Context, method, path string, opt RequestO
 	reqData, _ := c.formatLogMsg(urlData, nil)
 	glog.Debugw(ctx, "http stream "+method+" request started",
 		glog.KV(glog.KeyService, c.Service),
-		glog.KV(glog.KeyUrl, reqURL),
-		glog.KV(glog.KeyHttpParams, reqData),
+		glog.KV(glog.KeyUrlFull, reqURL),
+		glog.KV(glog.KeyHttpRequestBody, reqData),
 	)
 
 	result, err := c.doStream(ctx, request)
@@ -126,9 +126,9 @@ func (c *Client) doStream(ctx context.Context, request *http.Request) (*StreamRe
 		costTime := time.Since(startTime).Milliseconds()
 		glog.Infow(ctx, "http stream request failed",
 			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrl, request.URL.String()),
-			glog.KV(glog.KeyHttpResponseCode, 0),
-			glog.KV(glog.KeyCost, costTime),
+			glog.KV(glog.KeyUrlFull, request.URL.String()),
+			glog.KV(glog.KeyHttpResponseStatusCode, 0),
+			glog.KV(glog.KeyAppRequestDurationMs, costTime),
 			glog.KV("error", err.Error()),
 		)
 		return nil, fmt.Errorf("http stream request failed: %w", err)
@@ -137,9 +137,9 @@ func (c *Client) doStream(ctx context.Context, request *http.Request) (*StreamRe
 	costTime := time.Since(startTime).Milliseconds()
 	glog.Infow(ctx, "http stream request connected",
 		glog.KV(glog.KeyService, c.Service),
-		glog.KV(glog.KeyUrl, request.URL.String()),
-		glog.KV(glog.KeyHttpResponseCode, resp.StatusCode),
-		glog.KV(glog.KeyCost, costTime),
+		glog.KV(glog.KeyUrlFull, request.URL.String()),
+		glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
+		glog.KV(glog.KeyAppRequestDurationMs, costTime),
 	)
 
 	result := &StreamResult{

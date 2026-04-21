@@ -16,7 +16,7 @@ func TestNew(t *testing.T) {
 		Service:   "app",
 		Level:     glog.DebugLevel,
 		Writer:    glog.WriterConsole,
-		ExtraKeys: []string{glog.KeyRequestId},
+		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)
@@ -32,7 +32,7 @@ func TestNew(t *testing.T) {
 
 	// 创建带有 requestId 的上下文
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, glog.KeyRequestId, "12312312312312")
+	ctx = context.WithValue(ctx, glog.KeyAppRequestID, "12312312312312")
 
 	// 测试一个成功的 GET 命令
 	key := "test123"
@@ -77,7 +77,7 @@ func TestNewWithoutInitLog(t *testing.T) {
 
 	// 创建带有 requestId 的上下文
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, glog.KeyRequestId, "12312312312312")
+	ctx = context.WithValue(ctx, glog.KeyAppRequestID, "12312312312312")
 
 	// 测试一个成功的 GET 命令
 	key := "test123"

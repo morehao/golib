@@ -49,7 +49,7 @@ func TestClientPostRequest(t *testing.T) {
 func TestClientWithTraceID(t *testing.T) {
 	client := NewClient()
 
-	ctx := context.WithValue(context.Background(), glog.KeyTraceId, "trace-123")
+	ctx := context.WithValue(context.Background(), glog.KeyTraceID, "trace-123")
 
 	resp, err := client.R().
 		SetContext(ctx).
@@ -142,7 +142,7 @@ func TestClientInjectsOTelTraceAndRequestID(t *testing.T) {
 
 	ctx, span := tp.Tracer("gresty-test").Start(context.Background(), "outbound")
 	defer span.End()
-	ctx = context.WithValue(ctx, glog.KeyRequestId, requestID)
+	ctx = context.WithValue(ctx, glog.KeyAppRequestID, requestID)
 
 	resp, err := client.R().
 		SetContext(ctx).

@@ -15,7 +15,7 @@ func GenRequestID() string {
 
 // GetRequestID 从 context 中获取 requestId
 func GetRequestID(ctx context.Context) string {
-	requestIdVal := ctx.Value(KeyRequestId)
+	requestIdVal := ctx.Value(KeyAppRequestID)
 	if requestIdVal == nil {
 		return ""
 	}

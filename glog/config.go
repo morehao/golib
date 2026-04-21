@@ -34,6 +34,21 @@ type LogConfig struct {
 	EnableOTELTrace bool `json:"enable_otel_trace" yaml:"enable_otel_trace"`
 }
 
+func AppendExtraKeys(cfg *LogConfig, keys ...string) {
+	for _, key := range keys {
+		exists := false
+		for _, ek := range cfg.ExtraKeys {
+			if ek == key {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			cfg.ExtraKeys = append(cfg.ExtraKeys, key)
+		}
+	}
+}
+
 func GetDefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		Service:         defaultServiceName,

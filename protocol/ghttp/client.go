@@ -313,10 +313,10 @@ func (c *Client) httpDo(ctx context.Context, method, path string, opt RequestOpt
 	reqData, respData := c.formatLogMsg(urlData, body.Response)
 	glog.Debugw(ctx, "http "+method+" request",
 		glog.KV(glog.KeyService, c.Service),
-		glog.KV(glog.KeyUrl, reqURL),
-		glog.KV(glog.KeyHttpParams, reqData),
+		glog.KV(glog.KeyUrlFull, reqURL),
+		glog.KV(glog.KeyHttpRequestBody, reqData),
 		glog.KV(glog.KeyHttpResponseCode, body.HttpCode),
-		glog.KV(glog.KeyHttpResponse, string(respData)),
+		glog.KV(glog.KeyHttpResponseBody, string(respData)),
 	)
 
 	msg := "http request success"
@@ -424,9 +424,9 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 		costTime := time.Since(startTime).Milliseconds()
 		fields := []glog.Field{
 			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrl, request.URL.String()),
-			glog.KV(glog.KeyHttpResponseCode, 0),
-			glog.KV(glog.KeyCost, costTime),
+			glog.KV(glog.KeyUrlFull, request.URL.String()),
+			glog.KV(glog.KeyHttpResponseStatusCode, 0),
+			glog.KV(glog.KeyAppRequestDurationMs, costTime),
 			glog.KV("error", err.Error()),
 		}
 		return result, fields, fmt.Errorf("http request failed: %w", err)
@@ -438,9 +438,9 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 		costTime := time.Since(startTime).Milliseconds()
 		fields := []glog.Field{
 			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrl, request.URL.String()),
-			glog.KV(glog.KeyHttpResponseCode, resp.StatusCode),
-			glog.KV(glog.KeyCost, costTime),
+			glog.KV(glog.KeyUrlFull, request.URL.String()),
+			glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
+			glog.KV(glog.KeyAppRequestDurationMs, costTime),
 			glog.KV("error", err.Error()),
 		}
 		return result, fields, fmt.Errorf("read response body failed: %w", err)
@@ -453,9 +453,9 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 	costTime := time.Since(startTime).Milliseconds()
 	fields := []glog.Field{
 		glog.KV(glog.KeyService, c.Service),
-		glog.KV(glog.KeyUrl, request.URL.String()),
-		glog.KV(glog.KeyHttpResponseCode, resp.StatusCode),
-		glog.KV(glog.KeyCost, costTime),
+		glog.KV(glog.KeyUrlFull, request.URL.String()),
+		glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
+		glog.KV(glog.KeyAppRequestDurationMs, costTime),
 	}
 
 	if resp.StatusCode >= 400 {

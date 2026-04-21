@@ -38,3 +38,9 @@ type optionFunc func(*GormConfig)
 func (opt optionFunc) apply(cfg *GormConfig) {
 	opt(cfg)
 }
+
+func WithLogConfig(logConfig *glog.LogConfig) Option {
+	return optionFunc(func(cfg *GormConfig) {
+		cfg.loggerConfig = logConfig
+	})
+}

@@ -176,7 +176,7 @@ func TestExtraKeys(t *testing.T) {
 		Level:     DebugLevel,
 		Writer:    WriterConsole,
 		Dir:       tempDir,
-		ExtraKeys: []string{KeyTraceId, "user_id", KeyRequestId},
+		ExtraKeys: []string{KeyTraceID, "user_id", KeyAppRequestID},
 	}
 
 	// 初始化日志器
@@ -190,9 +190,9 @@ func TestExtraKeys(t *testing.T) {
 
 	// 创建带有额外字段的上下文
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, KeyTraceId, "123456")
+	ctx = context.WithValue(ctx, KeyTraceID, "123456")
 	ctx = context.WithValue(ctx, "user_id", "user123")
-	ctx = context.WithValue(ctx, KeyRequestId, "req789")
+	ctx = context.WithValue(ctx, KeyAppRequestID, "req789")
 	// 添加一个不在 ExtraKeys 中的字段，用于测试过滤
 	ctx = context.WithValue(ctx, "other_field", "should_not_appear")
 
@@ -305,8 +305,8 @@ func TestOTELTraceFieldsInjected(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.Contains(t, content, KeyTraceId)
-	assert.Contains(t, content, KeySpanId)
+	assert.Contains(t, content, KeyTraceID)
+	assert.Contains(t, content, KeySpanID)
 	assert.Contains(t, content, KeyTraceFlags)
 }
 
@@ -341,8 +341,8 @@ func TestOTELTraceFieldsDisabled(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+KeyTraceId+`"`)
-	assert.NotContains(t, content, `"`+KeySpanId+`"`)
+	assert.NotContains(t, content, `"`+KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+KeySpanID+`"`)
 	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
 }
 
@@ -377,8 +377,8 @@ func TestOTELTraceOptionOverridesConfig(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+KeyTraceId+`"`)
-	assert.NotContains(t, content, `"`+KeySpanId+`"`)
+	assert.NotContains(t, content, `"`+KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+KeySpanID+`"`)
 	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
 }
 
@@ -406,7 +406,21 @@ func TestOTELTraceWithoutSpanContext(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+KeyTraceId+`"`)
-	assert.NotContains(t, content, `"`+KeySpanId+`"`)
+	assert.NotContains(t, content, `"`+KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+KeySpanID+`"`)
 	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
+}
+
+func TestAppendExtraKeys(t *testing.T) {
+	cfg := &LogConfig{ExtraKeys: []string{"a", "b"}}
+	AppendExtraKeys(cfg, "b", "c")
+	assert.Equal(t, []string{"a", "b", "c"}, cfg.ExtraKeys)
+
+	cfg = &LogConfig{}
+	AppendExtraKeys(cfg, KeyAppRequestID)
+	assert.Equal(t, []string{KeyAppRequestID}, cfg.ExtraKeys)
+
+	cfg = &LogConfig{ExtraKeys: []string{KeyAppRequestID}}
+	AppendExtraKeys(cfg, KeyAppRequestID)
+	assert.Equal(t, []string{KeyAppRequestID}, cfg.ExtraKeys)
 }

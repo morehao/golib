@@ -40,19 +40,19 @@ func (l *esLog) LogRoundTrip(req *http.Request, res *http.Response, err error, s
 	var fields []any
 	fields = append(fields,
 		glog.KeyService, l.service,
-		glog.KeyProto, glog.ValueProtoES,
-		glog.KeyRequestStartTime, glog.FormatRequestTime(start),
-		glog.KeyRequestEndTime, glog.FormatRequestTime(end),
-		glog.KeyCost, cost,
-		glog.KeyRalCode, ralCode,
-		glog.KeyDslMethod, method,
-		glog.KeyDslPath, path,
+		glog.KeyNetworkProtocolName, glog.ValueNetworkProtoElasticsearch,
+		glog.KeyAppRequestStartTime, glog.FormatRequestTime(start),
+		glog.KeyAppRequestEndTime, glog.FormatRequestTime(end),
+		glog.KeyAppRequestDurationMs, cost,
+		glog.KeyAppResponseCode, ralCode,
+		glog.KeyDbOperationMethod, method,
+		glog.KeyDbOperationPath, path,
 	)
 	msg := "es execute success"
 	if err != nil {
 		ralCode = -1
 		msg = err.Error()
-		fields = append(fields, glog.KeyErrorMsg, msg)
+		fields = append(fields, glog.KeyAppErrorMessage, msg)
 		l.logger.Errorw(ctx, msg, fields...)
 	}
 
@@ -64,7 +64,7 @@ func (l *esLog) LogRoundTrip(req *http.Request, res *http.Response, err error, s
 		} else {
 			buf.ReadFrom(req.Body)
 		}
-		fields = append(fields, glog.KeyDsl, buf.String())
+		fields = append(fields, glog.KeyDbStatement, buf.String())
 	}
 	var affectedRows int
 	if res.Body != nil && res.Body != http.NoBody {
@@ -85,7 +85,7 @@ func (l *esLog) LogRoundTrip(req *http.Request, res *http.Response, err error, s
 			affectedRows = l.parseAffectedRows(method, resBody)
 		}
 		fields = append(fields,
-			glog.KeyAffectedRows, affectedRows,
+			glog.KeyDbAffectedRows, affectedRows,
 		)
 	}
 	if ralCode != 200 {
