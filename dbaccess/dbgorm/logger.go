@@ -33,6 +33,7 @@ func newOrmLogger(cfg *ormConfig) (*ormLogger, error) {
 	if cfg.Service == "" {
 		s = cfg.Database
 	}
+	glog.AppendExtraKeys(cfg.loggerConfig, glog.KeyAppRequestID)
 	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(6))
 	if err != nil {
 		return nil, err
@@ -83,10 +84,10 @@ func (l *ormLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 
 	fields := l.commonFields(ctx)
 	fields = append(fields,
-		glog.KeyAffectedRows, rows,
-		glog.KeyCost, cost,
-		glog.KeyRalCode, ralCode,
-		glog.KeySql, sql,
+		glog.KeyDbAffectedRows, rows,
+		glog.KeyAppRequestDurationMs, cost,
+		glog.KeyAppResponseCode, ralCode,
+		glog.KeyDbStatement, sql,
 	)
 
 	if l.SlowThreshold > 0 && cost >= float64(l.SlowThreshold/time.Millisecond) {
@@ -99,6 +100,6 @@ func (l *ormLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 
 func (l *ormLogger) commonFields(ctx context.Context) []interface{} {
 	return []interface{}{
-		glog.KeyDatabase, l.Database,
+		glog.KeyDbName, l.Database,
 	}
 }

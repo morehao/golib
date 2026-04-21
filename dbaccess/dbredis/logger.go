@@ -32,7 +32,7 @@ func (l redisLogger) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		begin := time.Now()
 		fields := l.commonFields(ctx)
 		fields = append(fields,
-			glog.KeyCmd, cmd.FullName(),
+			glog.KeyDbOperation, cmd.FullName(),
 		)
 		var ralCode int
 		if err := cmd.Err(); err != nil {
@@ -41,9 +41,9 @@ func (l redisLogger) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 			end := time.Now()
 			cost := glog.GetRequestCost(begin, end)
 			fields = append(fields,
-				glog.KeyCmdContent, cmd.String(),
-				glog.KeyRalCode, ralCode,
-				glog.KeyCost, cost,
+				glog.KeyDbOperationContent, cmd.String(),
+				glog.KeyAppResponseCode, ralCode,
+				glog.KeyAppRequestDurationMs, cost,
 			)
 			l.Logger.Errorw(ctx, msg, fields...)
 			return err
@@ -54,9 +54,9 @@ func (l redisLogger) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		end := time.Now()
 		cost := glog.GetRequestCost(begin, end)
 		fields = append(fields,
-			glog.KeyCmdContent, cmd.String(),
-			glog.KeyRalCode, ralCode,
-			glog.KeyCost, cost,
+			glog.KeyDbOperationContent, cmd.String(),
+			glog.KeyAppResponseCode, ralCode,
+			glog.KeyAppRequestDurationMs, cost,
 		)
 
 		l.Logger.Debugw(ctx, "redis execute success", fields...)
@@ -75,16 +75,16 @@ func (l redisLogger) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.P
 		// 准备日志字段
 		fields := l.commonFields(ctx)
 		fields = append(fields,
-			glog.KeyCmdContent, l.cmdsToString(cmds),
-			glog.KeyCost, cost,
+			glog.KeyDbOperationContent, l.cmdsToString(cmds),
+			glog.KeyAppRequestDurationMs, cost,
 		)
 
 		// 根据执行结果记录日志
 		if err != nil {
-			fields = append(fields, glog.KeyRalCode, -1)
+			fields = append(fields, glog.KeyAppResponseCode, -1)
 			l.Logger.Errorw(ctx, fmt.Sprintf("redis pipeline execute failed, err: %v", err), fields...)
 		} else {
-			fields = append(fields, glog.KeyRalCode, 0)
+			fields = append(fields, glog.KeyAppResponseCode, 0)
 			l.Logger.Debugw(ctx, "redis pipeline execute success", fields...)
 		}
 		return err
@@ -101,8 +101,8 @@ func (l redisLogger) cmdsToString(cmds []redis.Cmder) string {
 }
 func (l redisLogger) commonFields(ctx context.Context) []any {
 	fields := []any{
-		glog.KeyAddr, l.Addr,
-		glog.KeyDatabase, l.Database,
+		glog.KeyServerAddress, l.Addr,
+		glog.KeyDbName, l.Database,
 	}
 	return fields
 }

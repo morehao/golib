@@ -367,7 +367,7 @@ func TestGetStreamInjectsOTelTraceAndRequestID(t *testing.T) {
 
 	ctx, span := tp.Tracer("ghttp-stream-test").Start(context.Background(), "stream-outbound")
 	defer span.End()
-	ctx = context.WithValue(ctx, glog.KeyRequestId, requestID)
+	ctx = context.WithValue(ctx, glog.KeyAppRequestID, requestID)
 
 	stream, err := client.GetStream(ctx, "/", RequestOption{})
 	assert.Nil(t, err)

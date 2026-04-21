@@ -19,6 +19,10 @@ func (n *noopExporter) Shutdown(context.Context) error {
 	return nil
 }
 
+func noopExporterFactory(ctx context.Context) (sdktrace.SpanExporter, error) {
+	return &noopExporter{}, nil
+}
+
 func TestInit(t *testing.T) {
 	cfg := DefaultConfig("trace-test")
 	provider, err := Init(context.Background(), cfg, func(ctx context.Context) (sdktrace.SpanExporter, error) {
@@ -65,7 +69,7 @@ func TestValidateConfig(t *testing.T) {
 	err = ValidateConfig(invalidTimeoutCfg)
 	assert.NotNil(t, err)
 
-	invalidTimeoutCfg.BatchTimeout = -1 * time.Second
+	invalidTimeoutCfg.BatchTimeout = -1 * time.Second //nolint:staticcheck
 	err = ValidateConfig(invalidTimeoutCfg)
 	assert.NotNil(t, err)
 }
@@ -116,7 +120,7 @@ func TestValidateSamplerType(t *testing.T) {
 
 func TestConfigTimeoutValidation(t *testing.T) {
 	cfg := DefaultConfig("trace-test")
-	cfg.ExportTimeout = -1 * time.Second
+	cfg.ExportTimeout = -1 * time.Second //nolint:staticcheck
 	err := ValidateConfig(cfg)
 	assert.NotNil(t, err)
 }
@@ -141,4 +145,68 @@ func TestParseSampler(t *testing.T) {
 	sampler, err = ParseSampler("unknown")
 	assert.NotNil(t, err)
 	assert.Equal(t, SamplerType(""), sampler)
+}
+
+func TestNewProviderDisabled(t *testing.T) {
+	cfg := TraceConfig{Enable: false}
+	provider, err := NewProvider(context.Background(), "test-service", "dev", cfg, noopExporterFactory)
+	assert.Nil(t, err)
+	assert.Nil(t, provider)
+}
+
+func TestNewProviderEndpointEmpty(t *testing.T) {
+	cfg := TraceConfig{
+		Enable: true,
+		OTLP:   OTLPConfig{Endpoint: ""},
+	}
+	provider, err := NewProvider(context.Background(), "test-service", "dev", cfg, noopExporterFactory)
+	assert.Nil(t, err)
+	assert.Nil(t, provider)
+}
+
+func TestNewProviderEndpointWhitespace(t *testing.T) {
+	cfg := TraceConfig{
+		Enable: true,
+		OTLP:   OTLPConfig{Endpoint: "   "},
+	}
+	provider, err := NewProvider(context.Background(), "test-service", "dev", cfg, noopExporterFactory)
+	assert.Nil(t, err)
+	assert.Nil(t, provider)
+}
+
+func TestNewProviderInvalidSampler(t *testing.T) {
+	cfg := TraceConfig{
+		Enable:  true,
+		Sampler: "invalid",
+		OTLP:    OTLPConfig{Endpoint: "localhost:4317"},
+	}
+	provider, err := NewProvider(context.Background(), "test-service", "dev", cfg, noopExporterFactory)
+	assert.Nil(t, provider)
+	assert.NotNil(t, err)
+}
+
+func TestNewProviderSuccess(t *testing.T) {
+	cfg := TraceConfig{
+		Enable:         true,
+		ServiceVersion: "1.0.0",
+		Sampler:        "traceidratio",
+		TraceIDRatio:   1.0,
+		OTLP: OTLPConfig{
+			Endpoint: "localhost:4317",
+			Insecure: true,
+		},
+	}
+	provider, err := NewProvider(context.Background(), "test-service", "dev", cfg, noopExporterFactory)
+	assert.Nil(t, err)
+	assert.NotNil(t, provider)
+
+	shutdownErr := provider.Shutdown(context.Background())
+	assert.Nil(t, shutdownErr)
+}
+
+func TestNewProviderNilCtx(t *testing.T) {
+	cfg := TraceConfig{Enable: false}
+	provider, err := NewProvider(nil, "test-service", "dev", cfg, noopExporterFactory)
+	assert.Nil(t, err)
+	assert.Nil(t, provider)
 }

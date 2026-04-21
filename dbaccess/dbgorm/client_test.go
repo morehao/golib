@@ -14,7 +14,7 @@ func TestNew(t *testing.T) {
 		Service:   "app",
 		Level:     glog.DebugLevel,
 		Writer:    glog.WriterConsole,
-		ExtraKeys: []string{glog.KeyRequestId},
+		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)
@@ -50,7 +50,7 @@ func TestNewWithoutService(t *testing.T) {
 		Service:   "app",
 		Level:     glog.DebugLevel,
 		Writer:    glog.WriterConsole,
-		ExtraKeys: []string{glog.KeyRequestId},
+		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)
@@ -79,7 +79,7 @@ func TestNewWithLogConfig(t *testing.T) {
 		Service:   "custom-service",
 		Level:     glog.DebugLevel,
 		Writer:    glog.WriterConsole,
-		ExtraKeys: []string{glog.KeyRequestId},
+		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(customLogCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)
@@ -109,7 +109,7 @@ func TestNewPostgres(t *testing.T) {
 		Service:   "app",
 		Level:     glog.DebugLevel,
 		Writer:    glog.WriterConsole,
-		ExtraKeys: []string{glog.KeyRequestId},
+		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)
@@ -282,7 +282,7 @@ func TestNew_MySQL_URI(t *testing.T) {
 		Service:   "app",
 		Level:     glog.DebugLevel,
 		Writer:    glog.WriterConsole,
-		ExtraKeys: []string{glog.KeyRequestId},
+		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)
@@ -312,7 +312,7 @@ func TestNew_PostgreSQL_URI(t *testing.T) {
 		Service:   "app",
 		Level:     glog.DebugLevel,
 		Writer:    glog.WriterConsole,
-		ExtraKeys: []string{glog.KeyRequestId},
+		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)
@@ -377,7 +377,7 @@ func TestNewWithInvalidURL(t *testing.T) {
 		Service:   "app",
 		Level:     glog.DebugLevel,
 		Writer:    glog.WriterConsole,
-		ExtraKeys: []string{glog.KeyRequestId},
+		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
 	assert.Nil(t, initLogErr)

@@ -196,7 +196,7 @@ func TestGetInjectsOTelTraceAndRequestID(t *testing.T) {
 
 	ctx, span := tp.Tracer("ghttp-test").Start(context.Background(), "outbound")
 	defer span.End()
-	ctx = context.WithValue(ctx, glog.KeyRequestId, requestID)
+	ctx = context.WithValue(ctx, glog.KeyAppRequestID, requestID)
 
 	_, err := client.Get(ctx, "/", RequestOption{
 		Headers: map[string]string{

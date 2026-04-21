@@ -11,6 +11,10 @@ const (
 	KeyOrgID     = "orgID"
 	KeyAuthToken = "authToken"
 	KeyRequestID = "requestID"
+	KeyTraceID   = "traceID"
+	KeySpanID    = "spanID"
+	KeyTraceFlags = "traceFlags"
+	KeyUrlFull   = "urlFull"
 )
 
 func NilCtx(ctx context.Context) bool {

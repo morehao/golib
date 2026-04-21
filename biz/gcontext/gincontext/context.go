@@ -37,6 +37,22 @@ func GetRequestID(ctx *gin.Context) string {
 	return ctx.GetString(gcontext.KeyRequestID)
 }
 
+func GetTraceID(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyTraceID)
+}
+
+func GetSpanID(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeySpanID)
+}
+
+func GetTraceFlags(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyTraceFlags)
+}
+
+func GetURLFull(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyUrlFull)
+}
+
 func GetString(ctx *gin.Context, key string) string {
 	return ctx.GetString(key)
 }

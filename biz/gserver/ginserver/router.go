@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/morehao/golib/biz/gmiddleware/ginmiddleware"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
 type Version struct {
@@ -26,6 +28,8 @@ func NewRouterGroups(engine *gin.Engine, appName string, versions ...Version) *R
 			continue
 		}
 		group := engine.Group(fmt.Sprintf("/%s/%s", versionName, normalizePathPart(appName)))
+		group.Use(otelgin.Middleware(appName))
+		group.Use(ginmiddleware.AccessLog())
 		if len(version.Middlewares) > 0 {
 			group.Use(version.Middlewares...)
 		}

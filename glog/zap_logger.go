@@ -261,8 +261,8 @@ func (l *zapLogger) extraFields(ctx context.Context) []any {
 			if sc.IsValid() {
 				hasOTELTraceFields = true
 				fields = append(fields,
-					zap.String(KeyTraceId, sc.TraceID().String()),
-					zap.String(KeySpanId, sc.SpanID().String()),
+					zap.String(KeyTraceID, sc.TraceID().String()),
+					zap.String(KeySpanID, sc.SpanID().String()),
 					zap.String(KeyTraceFlags, sc.TraceFlags().String()),
 				)
 			}
@@ -270,7 +270,7 @@ func (l *zapLogger) extraFields(ctx context.Context) []any {
 	}
 
 	for _, key := range l.cfg.ExtraKeys {
-		if hasOTELTraceFields && (key == KeyTraceId || key == KeySpanId || key == KeyTraceFlags) {
+		if hasOTELTraceFields && (key == KeyTraceID || key == KeySpanID || key == KeyTraceFlags) {
 			continue
 		}
 		if v := ctx.Value(key); v != nil {
