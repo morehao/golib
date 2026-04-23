@@ -2,6 +2,8 @@ package configkv
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 
 	"gorm.io/gorm"
 )
@@ -9,64 +11,101 @@ import (
 var instance *kv
 
 type kv struct {
-	store Store
+	store *store
 }
 
-func New(db *gorm.DB) *kv {
+const (
+	JsonCodecType CodecType = "json"
+	TomlCodecType CodecType = "toml"
+	YamlCodecType CodecType = "yaml"
+)
+
+type CodecType = string
+
+type Option func(*options)
+
+type options struct {
+	codecType CodecType
+}
+
+func WithCodecType(ct CodecType) Option {
+	return func(o *options) {
+		o.codecType = ct
+	}
+}
+
+func New(db *gorm.DB, opts ...Option) *kv {
+	o := &options{codecType: JsonCodecType}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	var codec Codec
+	switch o.codecType {
+	case TomlCodecType:
+		codec = &TOMLCodec{}
+	case YamlCodecType:
+		codec = &YAMLCodec{}
+	default:
+		codec = &JSONCodec{}
+	}
+
 	c, err := newAESCrypto([]byte(defaultCryptoKey))
 	if err != nil {
 		return nil
 	}
-	s := &store{
-		db:     db,
-		codec:  YAMLCodec{},
-		crypto: c,
-	}
+	s := newStore(db, codec, c)
 	return &kv{store: s}
 }
 
 func (k *kv) GetValue(ctx context.Context, group, key string, dest any) error {
-	val, err := k.store.Get(ctx, group, key)
+	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return err
 	}
-	return val.Unmarshal(dest)
+
+	switch cfg.ValueType {
+	case "object":
+		return k.store.codec.Unmarshal([]byte(cfg.Value), dest)
+	default:
+		return fmt.Errorf("use GetString/GetInt64/GetBool for %s", cfg.ValueType)
+	}
 }
 
 func (k *kv) GetString(ctx context.Context, group, key string) (string, error) {
-	val, err := k.store.Get(ctx, group, key)
+	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return "", err
 	}
-	return val.String(), nil
+	return cfg.Value, nil
 }
 
 func (k *kv) GetInt64(ctx context.Context, group, key string) (int64, error) {
-	val, err := k.store.Get(ctx, group, key)
+	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return 0, err
 	}
-	return val.Int64(), nil
+	return strconv.ParseInt(cfg.Value, 10, 64)
 }
 
 func (k *kv) GetFloat64(ctx context.Context, group, key string) (float64, error) {
-	val, err := k.store.Get(ctx, group, key)
+	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return 0, err
 	}
-	return val.Float64(), nil
+	return strconv.ParseFloat(cfg.Value, 64)
 }
 
 func (k *kv) GetBool(ctx context.Context, group, key string) (bool, error) {
-	val, err := k.store.Get(ctx, group, key)
+	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return false, err
 	}
-	return val.Bool(), nil
+	return strconv.ParseBool(cfg.Value)
 }
 
-func Init(db *gorm.DB) {
-	instance = New(db)
+func Init(db *gorm.DB, opts ...Option) {
+	instance = New(db, opts...)
 }
 
 func GetValue(ctx context.Context, group, key string, dest any) error {

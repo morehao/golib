@@ -2,78 +2,7 @@ package configkv
 
 import (
 	"testing"
-	"time"
 )
-
-func TestValueString(t *testing.T) {
-	v := stringValue("hello")
-	if v.String() != "hello" {
-		t.Errorf("expected 'hello', got '%s'", v.String())
-	}
-}
-
-func TestValueInt(t *testing.T) {
-	v := stringValue("123")
-	if v.Int() != 123 {
-		t.Errorf("expected 123, got %d", v.Int())
-	}
-}
-
-func TestValueInt64(t *testing.T) {
-	v := stringValue("9223372036854775807")
-	if v.Int64() != 9223372036854775807 {
-		t.Errorf("expected 9223372036854775807, got %d", v.Int64())
-	}
-}
-
-func TestValueFloat64(t *testing.T) {
-	v := stringValue("3.14")
-	if v.Float64() != 3.14 {
-		t.Errorf("expected 3.14, got %f", v.Float64())
-	}
-}
-
-func TestValueBool(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"true", true},
-		{"false", false},
-		{"1", true},
-		{"0", false},
-	}
-	for _, tt := range tests {
-		v := stringValue(tt.input)
-		if v.Bool() != tt.expected {
-			t.Errorf("input '%s': expected %v, got %v", tt.input, tt.expected, v.Bool())
-		}
-	}
-}
-
-func TestValueDuration(t *testing.T) {
-	v := stringValue("30s")
-	if v.Duration() != 30*time.Second {
-		t.Errorf("expected 30s, got %v", v.Duration())
-	}
-
-	v2 := stringValue("1h30m")
-	if v2.Duration() != 1*time.Hour+30*time.Minute {
-		t.Errorf("expected 1h30m, got %v", v2.Duration())
-	}
-}
-
-func TestValueIsZero(t *testing.T) {
-	v := stringValue("")
-	if !v.IsZero() {
-		t.Error("expected empty string to be zero")
-	}
-
-	v2 := stringValue("hello")
-	if v2.IsZero() {
-		t.Error("expected 'hello' to not be zero")
-	}
-}
 
 func TestJSONCodec(t *testing.T) {
 	codec := JSONCodec{}

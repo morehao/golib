@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-type Config struct {
+type ConfigEntity struct {
 	ID          int64     `gorm:"primaryKey;autoIncrement"`
 	GroupName   string    `gorm:"column:group_name;type:varchar(64);not null;uniqueIndex:uk_group_key"`
 	Key         string    `gorm:"column:key;type:varchar(128);not null;uniqueIndex:uk_group_key"`
@@ -15,6 +15,6 @@ type Config struct {
 	UpdatedAt   time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }
 
-func (Config) TableName() string {
+func (ConfigEntity) TableName() string {
 	return "core_config"
 }

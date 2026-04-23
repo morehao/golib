@@ -17,19 +17,13 @@ var (
 	errUnsupportedValueType = errors.New("unsupported value type")
 )
 
-type Store interface {
-	Set(ctx context.Context, group, key string, val any) error
-	Delete(ctx context.Context, group, key string) error
-	Get(ctx context.Context, group, key string) (Value, error)
-}
-
 type store struct {
 	db     *gorm.DB
 	codec  Codec
 	crypto *aesCrypto
 }
 
-func NewStore(db *gorm.DB, codec Codec, crypto *aesCrypto) Store {
+func newStore(db *gorm.DB, codec Codec, crypto *aesCrypto) *store {
 	return &store{
 		db:     db,
 		codec:  codec,
@@ -65,7 +59,7 @@ func (s *store) marshalValue(valueType string, val any) (string, bool, error) {
 			return "", false, fmt.Errorf("cannot convert %T to bool", val)
 		}
 
-	case "json", "yaml", "toml":
+	case "object":
 		data, err := s.codec.Marshal(val)
 		if err != nil {
 			return "", false, fmt.Errorf("marshal failed: %w", err)
@@ -101,7 +95,7 @@ func (s *store) Set(ctx context.Context, group, key string, val any) error {
 		return err
 	}
 
-	config := Config{
+	config := ConfigEntity{
 		GroupName: group,
 		Key:       key,
 		ValueType: valueType,
@@ -127,10 +121,8 @@ func (s *store) inferValueType(val any) string {
 		return "int64"
 	case bool:
 		return "bool"
-	case map[string]any, []any:
-		return "json"
 	default:
-		return "json"
+		return "object"
 	}
 }
 
@@ -138,21 +130,18 @@ func (s *store) Delete(ctx context.Context, group, key string) error {
 	if group == "" || key == "" {
 		return errors.New("group and key are required")
 	}
-	return s.db.WithContext(ctx).Where("group_name = ? AND `key` = ?", group, key).Delete(&Config{}).Error
+	return s.db.WithContext(ctx).Where("group_name = ? AND `key` = ?", group, key).Delete(&ConfigEntity{}).Error
 }
 
-func (s *store) Get(ctx context.Context, group, key string) (Value, error) {
+func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, error) {
 	if group == "" || key == "" {
 		return nil, errors.New("group and key are required")
 	}
 
-	var config Config
+	var config ConfigEntity
 	err := s.db.WithContext(ctx).Where("group_name = ? AND `key` = ?", group, key).First(&config).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return stringValue(""), nil
-		}
-		return nil, err
+		return &ConfigEntity{}, nil
 	}
 
 	value := config.Value
@@ -165,7 +154,8 @@ func (s *store) Get(ctx context.Context, group, key string) (Value, error) {
 			return nil, fmt.Errorf("decrypt failed: %w", err)
 		}
 		value = plaintext
+		config.Value = plaintext
 	}
 
-	return stringValue(value), nil
+	return &config, nil
 }
