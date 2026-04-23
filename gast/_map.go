@@ -8,6 +8,7 @@ const (
 	UserGetPageListErr = 100104
 	UserNotExistErr    = 100105
 	UserLoginErr       = 100001
+	TableNameUser      = "user"
 )
 
 var userErrorMsgMap = map[int]string{
@@ -15,5 +16,5 @@ var userErrorMsgMap = map[int]string{
 	UserDeleteErr:      "删除用户失败",
 	UserUpdateErr:      "修改用户失败",
 	UserGetDetailErr:   "查看用户失败",
-	UserGetPageListErr: "查看用户列表失败", UserLoginErr: "用户登录失败",
+	UserGetPageListErr: "查看用户列表失败", UserLoginErr: "用户登录失败", UserLoginErr: "用户登录失败",
 }

@@ -448,48 +448,48 @@ func appendMapKV(cl *ast.CompositeLit, keyName, value string) {
 }
 
 // AddConstToFile 向 Go 文件中追加常量（若不存在则创建 const 块，自动检查重名，自动 gofmt）
-func AddConstToFile(filePath, constName, constValue string) error {
+func AddConstToFile(filePath, constName, constValue string, constKind token.Token) error {
 	fileSet := token.NewFileSet()
 	node, err := parser.ParseFile(fileSet, filePath, nil, parser.AllErrors)
 	if err != nil {
 		return err
 	}
 
-	// 检查是否已存在该常量定义
-	if constExists(node, constName) {
-		return nil // 已存在，跳过追加
+	if ConstExists(node, constName) {
+		return nil
+	}
+
+	value := constValue
+	if constKind == token.STRING {
+		value = fmt.Sprintf("\"%s\"", constValue)
 	}
 
 	added := false
 
-	// 查找已有 const 分组
 	for _, decl := range node.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.CONST {
 			continue
 		}
 
-		// 找到了 const 分组，直接追加
 		genDecl.Specs = append(genDecl.Specs, &ast.ValueSpec{
 			Names:  []*ast.Ident{ast.NewIdent(constName)},
-			Values: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: constValue}},
+			Values: []ast.Expr{&ast.BasicLit{Kind: constKind, Value: value}},
 		})
 		added = true
 		break
 	}
 
-	// 如果没有 const 分组，创建一个新的
 	if !added {
 		newDecl := &ast.GenDecl{
 			Tok: token.CONST,
 			Specs: []ast.Spec{
 				&ast.ValueSpec{
 					Names:  []*ast.Ident{ast.NewIdent(constName)},
-					Values: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: constValue}},
+					Values: []ast.Expr{&ast.BasicLit{Kind: constKind, Value: value}},
 				},
 			},
 		}
-		// 插入到文件顶部（import 之后）
 		insertAt := 0
 		for i, decl := range node.Decls {
 			if genDecl, ok := decl.(*ast.GenDecl); ok && genDecl.Tok == token.IMPORT {
@@ -499,7 +499,6 @@ func AddConstToFile(filePath, constName, constValue string) error {
 		node.Decls = append(node.Decls[:insertAt], append([]ast.Decl{newDecl}, node.Decls[insertAt:]...)...)
 	}
 
-	// 使用 gofmt 格式化写回文件
 	var buf bytes.Buffer
 	if err := printer.Fprint(&buf, fileSet, node); err != nil {
 		return err
@@ -514,7 +513,7 @@ func AddConstToFile(filePath, constName, constValue string) error {
 }
 
 // constExists 检查常量是否已存在
-func constExists(node *ast.File, constName string) bool {
+func ConstExists(node *ast.File, constName string) bool {
 	for _, decl := range node.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.CONST {

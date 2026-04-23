@@ -15,17 +15,41 @@ type Plugin struct {
 	TenantIDField string
 }
 
-func NewPlugin(skipTables ...string) *Plugin {
-	m := make(map[string]struct{}, len(skipTables))
-	for _, t := range skipTables {
-		normalized := normalizeTableName(t)
-		if normalized != "" {
-			m[normalized] = struct{}{}
+type Option func(*options)
+
+type options struct {
+	skipTablesMap map[string]struct{}
+	tenantIDField string
+}
+
+func WithSkipTables(tables []string) Option {
+	return func(o *options) {
+		for _, t := range tables {
+			normalized := normalizeTableName(t)
+			if normalized != "" {
+				o.skipTablesMap[normalized] = struct{}{}
+			}
 		}
 	}
+}
+
+func WithTenantIDField(field string) Option {
+	return func(o *options) {
+		o.tenantIDField = field
+	}
+}
+
+func New(opts ...Option) *Plugin {
+	o := &options{
+		skipTablesMap: make(map[string]struct{}),
+		tenantIDField: "tenant_id",
+	}
+	for _, opt := range opts {
+		opt(o)
+	}
 	return &Plugin{
-		skipTablesMap: m,
-		TenantIDField: "tenant_id",
+		skipTablesMap: o.skipTablesMap,
+		TenantIDField: o.tenantIDField,
 	}
 }
 

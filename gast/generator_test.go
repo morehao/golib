@@ -1,6 +1,7 @@
 package gast
 
 import (
+	"go/token"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,6 +57,12 @@ func TestAddMapKVToFile(t *testing.T) {
 
 func TestAddConstToFile(t *testing.T) {
 	filePath := "./_map.go"
-	err := AddConstToFile(filePath, "UserLoginErr", "100001")
+	err := AddConstToFile(filePath, "UserLoginErr", "100001", token.INT)
+	assert.Nil(t, err)
+}
+
+func TestAddConstToFile_String(t *testing.T) {
+	filePath := "./_map.go"
+	err := AddConstToFile(filePath, "TableNameUser", "user", token.STRING)
 	assert.Nil(t, err)
 }
