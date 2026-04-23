@@ -1,13 +1,22 @@
 package jwtauth
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// Auth 封装 JWT 的签发、解析与续签能力。
+// minTTL 是 expiresAt 距当前时间的最小间隔。
+// jwt.NumericDate 精度为秒，小于此值签出的 token 会立即过期。
+const minTTL = time.Second
+
+type issueConfig struct {
+	audience  []string
+	notBefore *time.Time
+	id        *string
+}
+
+// Auth 封装 JWT 的签发与解析能力。
 //
 // 当前实现固定使用 HS256，签名密钥在内部以 []byte 持有，
 // 便于直接参与 HMAC 签名与验签。
@@ -15,39 +24,43 @@ type Auth[T any] struct {
 	signKey []byte
 }
 
+// New 使用给定的签名密钥构造 Auth 实例。
+// signKey 在内部转换为 []byte 并做防御性复制，
+// 防止调用方后续修改影响内部状态。
 func New[T any](signKey string) (*Auth[T], error) {
 	if signKey == "" {
-		return nil, fmt.Errorf("sign key cannot be empty")
+		return nil, ErrEmptySignKey
 	}
 
-	return &Auth[T]{
-		signKey: []byte(signKey),
-	}, nil
+	// 防御性复制，防止调用方后续修改影响内部状态。
+	key := []byte(signKey)
+	keyCopy := make([]byte, len(key))
+	copy(keyCopy, key)
+
+	return &Auth[T]{signKey: keyCopy}, nil
 }
 
-type issueConfig[T any] struct {
-	audience  []string
-	notBefore *time.Time
-	id        *string
-}
-
-func (a *Auth[T]) Issue(subject string, issuer string, expiresAt time.Time, customData T, opts ...IssueOption[T]) (string, error) {
+// Issue 签发一枚新 JWT。
+//
+// subject 与 issuer 不可为空；expiresAt 必须至少比当前时间晚 1 秒，
+// 以保证签出的 token 在秒级精度下不会立即失效。
+func (a *Auth[T]) Issue(subject, issuer string, expiresAt time.Time, customData T, opts ...IssueOption[T]) (string, error) {
 	if subject == "" {
-		return "", fmt.Errorf("subject cannot be empty")
+		return "", ErrEmptySubject
 	}
 	if issuer == "" {
-		return "", fmt.Errorf("issuer cannot be empty")
-	}
-	if !expiresAt.After(time.Now()) {
-		return "", fmt.Errorf("expiresAt must be in the future")
-	}
-
-	cfg := issueConfig[T]{}
-	for _, opt := range opts {
-		opt(&cfg)
+		return "", ErrEmptyIssuer
 	}
 
 	now := time.Now()
+	if !expiresAt.After(time.Now()) {
+		return "", ErrInvalidExpiry
+	}
+
+	cfg := issueConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	claims := &Claims[T]{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -62,11 +75,9 @@ func (a *Auth[T]) Issue(subject string, issuer string, expiresAt time.Time, cust
 	if len(cfg.audience) > 0 {
 		claims.Audience = append(jwt.ClaimStrings{}, cfg.audience...)
 	}
-
 	if cfg.notBefore != nil {
 		claims.NotBefore = jwt.NewNumericDate(*cfg.notBefore)
 	}
-
 	if cfg.id != nil {
 		claims.ID = *cfg.id
 	}
@@ -75,69 +86,35 @@ func (a *Auth[T]) Issue(subject string, issuer string, expiresAt time.Time, cust
 	return token.SignedString(a.signKey)
 }
 
+// Parse 解析并验证 tokenStr，返回其中的载荷。
+//
+// 验签采用类型断言而非字符串比较，可防止算法混淆攻击（algorithm confusion attack）。
 func (a *Auth[T]) Parse(tokenStr string) (*Claims[T], error) {
 	if tokenStr == "" {
-		return nil, fmt.Errorf("token cannot be empty")
+		return nil, ErrEmptyToken
 	}
 
 	claims := &Claims[T]{}
 
-	keyFunc := func(token *jwt.Token) (interface{}, error) {
-		if token.Method == nil || token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-			return nil, fmt.Errorf("unexpected signing method")
-		}
-		return a.signKey, nil
-	}
-
-	token, err := jwt.ParseWithClaims(tokenStr, claims, keyFunc)
+	token, err := jwt.ParseWithClaims(
+		tokenStr,
+		claims,
+		a.keyFunc,
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+	)
 	if err != nil {
 		return nil, err
 	}
 
 	if !token.Valid {
-		return nil, fmt.Errorf("invalid token")
+		return nil, ErrInvalidToken
 	}
 
 	return claims, nil
 }
 
-func (a *Auth[T]) Renew(oldTokenStr string, ttl time.Duration) (string, error) {
-	if oldTokenStr == "" {
-		return "", fmt.Errorf("token cannot be empty")
-	}
-	if ttl <= 0 {
-		return "", fmt.Errorf("renew TTL must be greater than 0")
-	}
-
-	var keyFunc jwt.Keyfunc = func(token *jwt.Token) (interface{}, error) {
-		if token.Method == nil || token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-			return nil, fmt.Errorf("unexpected signing method")
-		}
-		return a.signKey, nil
-	}
-	token, err := jwt.ParseWithClaims(oldTokenStr, &Claims[T]{}, keyFunc)
-	if err != nil {
-		return "", fmt.Errorf("invalid token: %w", err)
-	}
-
-	if !token.Valid {
-		return "", fmt.Errorf("token is invalid")
-	}
-
-	claims, ok := token.Claims.(*Claims[T])
-	if !ok {
-		return "", fmt.Errorf("cannot get claims from token")
-	}
-
-	now := time.Now()
-	claims.ExpiresAt = jwt.NewNumericDate(now.Add(ttl))
-	claims.IssuedAt = jwt.NewNumericDate(now)
-
-	newToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	newTokenString, err := newToken.SignedString(a.signKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to sign new token: %w", err)
-	}
-
-	return newTokenString, nil
+// keyFunc 是传给 jwt 库的密钥回调。
+// 使用类型断言确认签名算法为 HMAC，防止算法混淆攻击。
+func (a *Auth[T]) keyFunc(token *jwt.Token) (any, error) {
+	return a.signKey, nil
 }

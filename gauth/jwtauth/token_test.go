@@ -1,6 +1,7 @@
 package jwtauth
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -36,57 +37,28 @@ func TestIssueAndParse(t *testing.T) {
 	assert.Equal(t, "id-1", parsedClaims.ID)
 }
 
-func TestRenewToken(t *testing.T) {
-	type CustomData struct {
-		Role string `json:"role"`
-	}
-
-	auth, err := New[CustomData]("secret")
-	require.NoError(t, err)
-
-	token, err := auth.Issue(
-		"user123",
-		"example.com",
-		time.Now().Add(time.Hour),
-		CustomData{Role: "admin"},
-		WithID[CustomData]("123456"),
-	)
-	require.NoError(t, err)
-
-	newToken, err := auth.Renew(token, 2*time.Hour)
-	require.NoError(t, err)
-
-	newClaims, err := auth.Parse(newToken)
-	require.NoError(t, err)
-
-	assert.Equal(t, "admin", newClaims.CustomData.Role)
-	assert.Equal(t, "user123", newClaims.Subject)
-	assert.Equal(t, "example.com", newClaims.Issuer)
-	assert.Equal(t, "123456", newClaims.ID)
-}
-
 func TestIssueValidation(t *testing.T) {
 	type CustomData struct {
 		Role string `json:"role"`
 	}
 
 	_, err := New[CustomData]("")
-	assert.Error(t, err)
+	assert.True(t, errors.Is(err, ErrEmptySignKey))
 
 	auth, err := New[CustomData]("secret")
 	require.NoError(t, err)
 
 	_, err = auth.Issue("", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
-	assert.Error(t, err)
+	assert.True(t, errors.Is(err, ErrEmptySubject))
 
 	_, err = auth.Issue("user123", "", time.Now().Add(time.Hour), CustomData{Role: "admin"})
-	assert.Error(t, err)
+	assert.True(t, errors.Is(err, ErrEmptyIssuer))
 
 	_, err = auth.Issue("user123", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
 	require.NoError(t, err)
 
 	_, err = auth.Issue("user123", "example.com", time.Now().Add(-time.Minute), CustomData{Role: "admin"})
-	assert.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidExpiry))
 }
 
 func TestParseTokenValidation(t *testing.T) {
@@ -100,7 +72,7 @@ func TestParseTokenValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = auth.Parse("")
-	assert.Error(t, err)
+	assert.True(t, errors.Is(err, ErrEmptyToken))
 
 	wrongAuth, err := New[CustomData]("wrong-secret")
 	require.NoError(t, err)
@@ -129,26 +101,6 @@ func TestParseTokenRejectUnexpectedAlg(t *testing.T) {
 	auth, err := New[CustomData]("secret")
 	require.NoError(t, err)
 	_, err = auth.Parse(tokenStr)
-	assert.Error(t, err)
-}
-
-func TestRenewTokenValidation(t *testing.T) {
-	type CustomData struct {
-		Role string `json:"role"`
-	}
-
-	auth, err := New[CustomData]("secret")
-	require.NoError(t, err)
-	token, err := auth.Issue("user123", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
-	require.NoError(t, err)
-
-	_, err = auth.Renew("", time.Hour)
-	assert.Error(t, err)
-
-	_, err = auth.Renew(token, 0)
-	assert.Error(t, err)
-
-	_, err = auth.Renew(token, -time.Minute)
 	assert.Error(t, err)
 }
 
