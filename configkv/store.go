@@ -13,7 +13,7 @@ const (
 )
 
 var (
-	errCryptoNotConfigured = errors.New("crypto key not configured")
+	errCryptoNotConfigured  = errors.New("crypto key not configured")
 	errUnsupportedValueType = errors.New("unsupported value type")
 )
 
@@ -21,34 +21,20 @@ type Store interface {
 	Set(ctx context.Context, group, key string, val any) error
 	Delete(ctx context.Context, group, key string) error
 	Get(ctx context.Context, group, key string) (Value, error)
-	GetGroup(ctx context.Context, group string) (map[string]Value, error)
 }
 
 type store struct {
-	db    *gorm.DB
-	codec Codec
-	crypto Crypto
+	db     *gorm.DB
+	codec  Codec
+	crypto *aesCrypto
 }
 
-func NewStore(db *gorm.DB, opts ...Option) Store {
-	o := &options{
-		codec: JSONCodec{},
+func NewStore(db *gorm.DB, codec Codec, crypto *aesCrypto) Store {
+	return &store{
+		db:     db,
+		codec:  codec,
+		crypto: crypto,
 	}
-	for _, opt := range opts {
-		opt(o)
-	}
-
-	s := &store{
-		db:    db,
-		codec: o.codec,
-	}
-	if o.cryptoKey != nil {
-		c, err := NewAESCrypto(o.cryptoKey)
-		if err == nil {
-			s.crypto = c
-		}
-	}
-	return s
 }
 
 func (s *store) marshalValue(valueType string, val any) (string, bool, error) {
@@ -182,30 +168,4 @@ func (s *store) Get(ctx context.Context, group, key string) (Value, error) {
 	}
 
 	return stringValue(value), nil
-}
-
-func (s *store) GetGroup(ctx context.Context, group string) (map[string]Value, error) {
-	var configs []Config
-	err := s.db.WithContext(ctx).Where("group_name = ?", group).Find(&configs).Error
-	if err != nil {
-		return nil, err
-	}
-
-	result := make(map[string]Value)
-	for _, config := range configs {
-		value := config.Value
-		if config.ValueType == "secret_string" {
-			if s.crypto == nil {
-				return nil, errCryptoNotConfigured
-			}
-			plaintext, err := s.crypto.Decrypt(value)
-			if err != nil {
-				return nil, fmt.Errorf("decrypt failed for key %s: %w", config.Key, err)
-			}
-			value = plaintext
-		}
-		result[config.Key] = stringValue(value)
-	}
-
-	return result, nil
 }

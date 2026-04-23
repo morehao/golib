@@ -1,93 +1,43 @@
 package configkv
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
-	"fmt"
 	"strings"
+
+	"github.com/morehao/golib/gcrypto"
 )
 
 const (
-	encryptedPrefix = "enc:"
+	defaultCryptoKey = "SASItKkEmhTtfAKAr1+8N0Oq2tP2+c6LW0GQ7ovlFJs="
+	encryptedPrefix  = "enc:"
 )
 
-var (
-	errInvalidKeySize    = errors.New("invalid key size: must be 16, 24, or 32 bytes")
-	errCiphertextTooShort = errors.New("ciphertext too short")
-	errInvalidPrefix     = errors.New("invalid ciphertext format")
-)
-
-type Crypto interface {
-	Encrypt(plaintext string) (string, error)
-	Decrypt(ciphertext string) (string, error)
-}
+var errInvalidKey = errors.New("invalid key")
 
 type aesCrypto struct {
-	key []byte
+	aes *gcrypto.AES
 }
 
-func NewAESCrypto(key []byte) (Crypto, error) {
-	keyLen := len(key)
-	if keyLen != 16 && keyLen != 24 && keyLen != 32 {
-		return nil, errInvalidKeySize
+func newAESCrypto(key []byte) (*aesCrypto, error) {
+	aes, err := gcrypto.NewAES(string(key))
+	if err != nil {
+		return nil, err
 	}
-	return &aesCrypto{key: key}, nil
+	return &aesCrypto{aes: aes}, nil
 }
 
 func (c *aesCrypto) Encrypt(plaintext string) (string, error) {
-	block, err := aes.NewCipher(c.key)
+	ciphertext, err := c.aes.EncryptString(plaintext)
 	if err != nil {
 		return "", err
 	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return "", err
-	}
-
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return encryptedPrefix + base64.StdEncoding.EncodeToString(ciphertext), nil
+	return encryptedPrefix + ciphertext, nil
 }
 
 func (c *aesCrypto) Decrypt(ciphertext string) (string, error) {
 	if !strings.HasPrefix(ciphertext, encryptedPrefix) {
-		return "", errInvalidPrefix
+		return "", errors.New("invalid ciphertext format")
 	}
-
 	ct := strings.TrimPrefix(ciphertext, encryptedPrefix)
-	data, err := base64.StdEncoding.DecodeString(ct)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode base64: %w", err)
-	}
-
-	block, err := aes.NewCipher(c.key)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return "", errCiphertextTooShort
-	}
-
-	nonce, data := data[:nonceSize], data[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, data, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return string(plaintext), nil
+	return c.aes.DecryptString(ct)
 }

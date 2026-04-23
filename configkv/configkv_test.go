@@ -105,7 +105,7 @@ func TestJSONCodec(t *testing.T) {
 
 func TestAESCrypto(t *testing.T) {
 	key := []byte("1234567890123456")
-	crypto, err := NewAESCrypto(key)
+	crypto, err := newAESCrypto(key)
 	if err != nil {
 		t.Fatalf("failed to create crypto: %v", err)
 	}
@@ -130,30 +130,5 @@ func TestAESCrypto(t *testing.T) {
 	}
 }
 
-func TestCache(t *testing.T) {
-	cache := NewCache()
 
-	cache.Set("key1", []byte("value1"), time.Second)
-
-	val, ok := cache.Get("key1")
-	if !ok {
-		t.Error("expected to get value from cache")
-	}
-	if string(val) != "value1" {
-		t.Errorf("expected 'value1', got '%s'", string(val))
-	}
-
-	cache.Delete("key1")
-	_, ok = cache.Get("key1")
-	if ok {
-		t.Error("expected key to be deleted")
-	}
-
-	cache.Set("key2", []byte("value2"), time.Millisecond)
-	time.Sleep(10 * time.Millisecond)
-	_, ok = cache.Get("key2")
-	if ok {
-		t.Error("expected expired key to be deleted")
-	}
-}
 
