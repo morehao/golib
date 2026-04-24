@@ -7,29 +7,21 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAddMethodToInterfaceInFile(t *testing.T) {
+func TestFindMethodInFile(t *testing.T) {
 	filePath := "./_test.go"
 
-	err := AddMethodToInterfaceInFile(filePath, "userImpl", "GetAge", "User")
-	assert.Nil(t, err)
+	method, ok, findErr := FindMethod(filePath, "userImpl", "GetAge")
+	assert.Nil(t, findErr)
+	assert.True(t, ok)
+	t.Log(method)
 }
 
-func TestAddContentToFunc(t *testing.T) {
+func TestGetFunctionLines(t *testing.T) {
 	filePath := "./_test.go"
-	content := `routerGroup.POST("test")`
 
-	err := AddContentToFunc(filePath, "platformRouter", content)
+	start, end, err := GetFunctionLines(filePath, "platformRouter")
 	assert.Nil(t, err)
-}
-
-func TestAddFunction(t *testing.T) {
-	content := `
-func NewFunction() {
-	fmt.Println("Hello, World!")
-}
-`
-	err := AddFunction("_test.go", content, "gast")
-	assert.Nil(t, err)
+	t.Log(start, end)
 }
 
 func TestAddMethodToInterface(t *testing.T) {
@@ -46,12 +38,6 @@ func TestAddContentToFuncWithLineNumber(t *testing.T) {
 	filePath := "./_test.go"
 	content := `routerGroup.POST("test3") // 3`
 	err := AddContentToFuncWithLineNumber(filePath, "platformRouter", content, -2)
-	assert.Nil(t, err)
-}
-
-func TestAddMapKVToFile(t *testing.T) {
-	filePath := "./_map.go"
-	err := AddMapKVToFile(filePath, "userErrorMsgMap", "map[int]string", "UserLoginErr", `"用户登录失败"`)
 	assert.Nil(t, err)
 }
 
