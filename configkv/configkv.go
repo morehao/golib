@@ -42,7 +42,7 @@ func (k *kv) GetValue(ctx context.Context, group, key string, dest any) error {
 			return fmt.Errorf("%w: %s", errNoCodecRegistered, cfg.ValueType)
 		}
 		return codec.Unmarshal([]byte(cfg.Value), dest)
-	case ValueTypeString, ValueTypeInt, ValueTypeBool, ValueTypeFloat, ValueTypeSecretString:
+	case ValueTypeString, ValueTypeInt, ValueTypeBool, ValueTypeFloat:
 		return fmt.Errorf("use GetString/GetInt64/GetBool for %s", cfg.ValueType)
 	default:
 		return fmt.Errorf("%w: %s", errUnsupportedValueType, cfg.ValueType)
@@ -81,6 +81,14 @@ func (k *kv) GetBool(ctx context.Context, group, key string) (bool, error) {
 	return strconv.ParseBool(cfg.Value)
 }
 
+func (k *kv) SetEncrypted(ctx context.Context, group, key string, valueType ValueType, val any) error {
+	return k.store.SetEncrypted(ctx, group, key, valueType, val)
+}
+
+func (k *kv) Set(ctx context.Context, group, key string, valueType ValueType, val any) error {
+	return k.store.Set(ctx, group, key, valueType, val)
+}
+
 func Init(db *gorm.DB) {
 	instance = New(db)
 }
@@ -103,4 +111,12 @@ func GetFloat64(ctx context.Context, group, key string) (float64, error) {
 
 func GetBool(ctx context.Context, group, key string) (bool, error) {
 	return instance.GetBool(ctx, group, key)
+}
+
+func SetEncrypted(ctx context.Context, group, key string, valueType ValueType, val any) error {
+	return instance.SetEncrypted(ctx, group, key, valueType, val)
+}
+
+func Set(ctx context.Context, group, key string, valueType ValueType, val any) error {
+	return instance.Set(ctx, group, key, valueType, val)
 }

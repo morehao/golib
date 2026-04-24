@@ -64,19 +64,6 @@ func (s *store) marshalValue(valueType ValueType, val any) (string, bool, error)
 		}
 		return string(data), false, nil
 
-	case ValueTypeSecretString:
-		if v, ok := val.(string); ok {
-			if s.crypto == nil {
-				return "", false, errCryptoNotConfigured
-			}
-			ciphertext, err := s.crypto.Encrypt(v)
-			if err != nil {
-				return "", false, fmt.Errorf("encrypt failed: %w", err)
-			}
-			return ciphertext, true, nil
-		}
-		return "", false, errSecretStringRequiresStringValue
-
 	default:
 		return "", false, errUnsupportedValueType
 	}
@@ -87,19 +74,17 @@ func (s *store) Set(ctx context.Context, group, key string, valueType ValueType,
 		return errGroupAndKeyRequired
 	}
 
-	value, encrypted, err := s.marshalValue(valueType, val)
+	value, _, err := s.marshalValue(valueType, val)
 	if err != nil {
 		return err
 	}
 
 	config := ConfigEntity{
-		GroupName: group,
-		Key:       key,
-		ValueType: valueType,
-		Value:     value,
-	}
-	if encrypted {
-		config.ValueType = ValueTypeSecretString
+		GroupName:      group,
+		Key:            key,
+		ValueType:      valueType,
+		Value:          value,
+		EncryptionMode: EncryptionModePlain,
 	}
 
 	err = s.db.WithContext(ctx).Save(&config).Error
@@ -111,6 +96,36 @@ func (s *store) Delete(ctx context.Context, group, key string) error {
 		return errGroupAndKeyRequired
 	}
 	return s.db.WithContext(ctx).Where("group_name = ? AND `key` = ?", group, key).Delete(&ConfigEntity{}).Error
+}
+
+func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType ValueType, val any) error {
+	if group == "" || key == "" {
+		return errGroupAndKeyRequired
+	}
+
+	value, _, err := s.marshalValue(valueType, val)
+	if err != nil {
+		return err
+	}
+
+	if s.crypto == nil {
+		return errCryptoNotConfigured
+	}
+
+	ciphertext, err := s.crypto.Encrypt(value)
+	if err != nil {
+		return fmt.Errorf("encrypt failed: %w", err)
+	}
+
+	config := ConfigEntity{
+		GroupName:      group,
+		Key:            key,
+		ValueType:      valueType,
+		Value:          ciphertext,
+		EncryptionMode: EncryptionModeEncrypted,
+	}
+
+	return s.db.WithContext(ctx).Save(&config).Error
 }
 
 func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, error) {
@@ -125,7 +140,7 @@ func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, erro
 	}
 
 	value := config.Value
-	if config.ValueType == ValueTypeSecretString {
+	if config.EncryptionMode == EncryptionModeEncrypted {
 		if s.crypto == nil {
 			return nil, errCryptoNotConfigured
 		}
