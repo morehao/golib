@@ -22,6 +22,31 @@ type zapLoggerConfig struct {
 	enableOTELTrace bool
 }
 
+// newZapLogger 初始化zapLogger
+func newZapLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
+	if cfg == nil {
+		cfg = GetDefaultLogConfig()
+	}
+	optCfg := &optConfig{}
+	for _, opt := range opts {
+		opt.apply(optCfg)
+	}
+	logger, err := getZapLogger(cfg, optCfg)
+	if err != nil {
+		return nil, err
+	}
+	enableOTELTrace := cfg.EnableOTELTrace
+	if optCfg.enableOTELTrace != nil {
+		enableOTELTrace = *optCfg.enableOTELTrace
+	}
+
+	return &zapLogger{
+		logger:          logger,
+		cfg:             cfg,
+		enableOTELTrace: enableOTELTrace,
+	}, nil
+}
+
 func getZapLogger(cfg *LogConfig, optCfg *optConfig) (*zap.Logger, error) {
 	// 创建基础配置
 	zapCfg := &zapLoggerConfig{
@@ -174,7 +199,7 @@ func (l *zapLogger) Fatalw(ctx context.Context, msg string, kvs ...any) {
 	l.ctxLogw(FatalLevel, ctx, msg, kvs...)
 }
 
-func (l *zapLogger) Close() {
+func (l *zapLogger) Sync() {
 	_ = l.logger.Sugar().Sync()
 }
 

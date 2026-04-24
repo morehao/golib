@@ -11,7 +11,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
@@ -64,7 +64,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestNewWithoutInitLog(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 
 	cfg := &RedisConfig{
 		Service:  "test",

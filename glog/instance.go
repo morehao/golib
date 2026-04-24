@@ -8,13 +8,24 @@ type loggerInstance struct {
 	Logger
 }
 
-// defaultLoggerInstance 默认的日志实例
 var defaultLoggerInstance *loggerInstance
 
-// InitLogger 初始化日志系统
 func InitLogger(cfg *LogConfig, opts ...Option) error {
+	var logger Logger
+	var err error
 
-	logger, err := newZapLogger(cfg, opts...)
+	opt := getOptConfig(opts...)
+	loggerType := opt.loggerType
+	if loggerType == 0 {
+		loggerType = LoggerTypeZap
+	}
+
+	switch loggerType {
+	case LoggerTypeSlog:
+		logger, err = newSlogLogger(cfg, opts...)
+	default:
+		logger, err = newZapLogger(cfg, opts...)
+	}
 	if err != nil {
 		return err
 	}
@@ -23,11 +34,22 @@ func InitLogger(cfg *LogConfig, opts ...Option) error {
 	return nil
 }
 
-// NewLogger 创建并返回一个全新的logger实例
-// 每次调用都会创建完全独立的logger实例，不会复用已有实例
 func NewLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
-	// 确保每次都创建全新的logger实例，避免callerSkip累加等问题
-	logger, err := newZapLogger(cfg, opts...)
+	var logger Logger
+	var err error
+
+	opt := getOptConfig(opts...)
+	loggerType := opt.loggerType
+	if loggerType == 0 {
+		loggerType = LoggerTypeZap
+	}
+
+	switch loggerType {
+	case LoggerTypeSlog:
+		logger, err = newSlogLogger(cfg, opts...)
+	default:
+		logger, err = newZapLogger(cfg, opts...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -41,8 +63,6 @@ func GetDefaultLogger() Logger {
 func GetLoggerConfig() *LogConfig {
 	return defaultLoggerInstance.getConfig()
 }
-
-// 以下函数使用Context中的logger，如果没有则使用默认logger
 
 func Debug(ctx context.Context, args ...any) {
 	defaultLoggerInstance.Debug(ctx, args...)
@@ -116,7 +136,6 @@ func Fatalw(ctx context.Context, msg string, kvs ...any) {
 	defaultLoggerInstance.Fatalw(ctx, msg, kvs...)
 }
 
-// Close 关闭所有logger
-func Close() {
-	defaultLoggerInstance.Close()
+func Sync() {
+	defaultLoggerInstance.Logger.Sync()
 }

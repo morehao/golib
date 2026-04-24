@@ -9,7 +9,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
@@ -45,7 +45,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestNewWithoutService(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
@@ -74,7 +74,7 @@ func TestNewWithoutService(t *testing.T) {
 }
 
 func TestNewWithLogConfig(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	customLogCfg := &glog.LogConfig{
 		Service:   "custom-service",
 		Level:     glog.DebugLevel,
@@ -104,7 +104,7 @@ func TestNewWithLogConfig(t *testing.T) {
 }
 
 func TestNewPostgres(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
@@ -277,7 +277,7 @@ func TestParseURL(t *testing.T) {
 }
 
 func TestNew_MySQL_URI(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
@@ -307,7 +307,7 @@ func TestNew_MySQL_URI(t *testing.T) {
 }
 
 func TestNew_PostgreSQL_URI(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
@@ -372,7 +372,7 @@ func TestDetectFromURL_InvalidFormat(t *testing.T) {
 }
 
 func TestNewWithInvalidURL(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,

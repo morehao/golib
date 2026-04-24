@@ -11,7 +11,7 @@ import (
 )
 
 func TestNewTypedES(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
@@ -40,7 +40,7 @@ func TestNewTypedES(t *testing.T) {
 }
 
 func TestNewSimpleES(t *testing.T) {
-	defer glog.Close()
+	defer glog.Sync()
 	logCfg := &glog.LogConfig{
 		Service:   "test",
 		Level:     glog.DebugLevel,

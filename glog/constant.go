@@ -8,6 +8,7 @@ type LoggerType uint8
 
 const (
 	LoggerTypeZap LoggerType = iota + 1
+	LoggerTypeSlog
 )
 
 const (

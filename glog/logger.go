@@ -32,7 +32,7 @@ type Logger interface {
 	Fatalf(ctx context.Context, format string, kvs ...any)
 	Fatalw(ctx context.Context, msg string, kvs ...any)
 	getConfig() *LogConfig
-	Close()
+	Sync()
 }
 
 func getDefaultLogger() (Logger, error) {
@@ -40,29 +40,4 @@ func getDefaultLogger() (Logger, error) {
 		return defaultLoggerInstance, nil
 	}
 	return newZapLogger(GetDefaultLogConfig(), WithCallerSkip(defaultLogCallerSkip))
-}
-
-// newZapLogger 初始化zapLogger
-func newZapLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
-	if cfg == nil {
-		cfg = GetDefaultLogConfig()
-	}
-	optCfg := &optConfig{}
-	for _, opt := range opts {
-		opt.apply(optCfg)
-	}
-	logger, err := getZapLogger(cfg, optCfg)
-	if err != nil {
-		return nil, err
-	}
-	enableOTELTrace := cfg.EnableOTELTrace
-	if optCfg.enableOTELTrace != nil {
-		enableOTELTrace = *optCfg.enableOTELTrace
-	}
-
-	return &zapLogger{
-		logger:          logger,
-		cfg:             cfg,
-		enableOTELTrace: enableOTELTrace,
-	}, nil
 }
