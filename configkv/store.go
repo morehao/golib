@@ -2,7 +2,6 @@ package configkv
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -12,34 +11,29 @@ const (
 	tableName = "core_config"
 )
 
-var (
-	errCryptoNotConfigured  = errors.New("crypto key not configured")
-	errUnsupportedValueType = errors.New("unsupported value type")
-)
-
 type store struct {
-	db     *gorm.DB
-	codec  Codec
-	crypto *aesCrypto
+	db            *gorm.DB
+	codecRegistry map[ValueType]Codec
+	crypto        *aesCrypto
 }
 
-func newStore(db *gorm.DB, codec Codec, crypto *aesCrypto) *store {
+func newStore(db *gorm.DB, codecRegistry map[ValueType]Codec, crypto *aesCrypto) *store {
 	return &store{
-		db:     db,
-		codec:  codec,
-		crypto: crypto,
+		db:            db,
+		codecRegistry: codecRegistry,
+		crypto:        crypto,
 	}
 }
 
-func (s *store) marshalValue(valueType string, val any) (string, bool, error) {
+func (s *store) marshalValue(valueType ValueType, val any) (string, bool, error) {
 	switch valueType {
-	case "string":
+	case ValueTypeString:
 		if v, ok := val.(string); ok {
 			return v, false, nil
 		}
 		return fmt.Sprintf("%v", val), false, nil
 
-	case "int64":
+	case ValueTypeInt:
 		switch v := val.(type) {
 		case int:
 			return fmt.Sprintf("%d", v), false, nil
@@ -48,10 +42,10 @@ func (s *store) marshalValue(valueType string, val any) (string, bool, error) {
 		case int32:
 			return fmt.Sprintf("%d", v), false, nil
 		default:
-			return "", false, fmt.Errorf("cannot convert %T to int64", val)
+			return "", false, fmt.Errorf("cannot convert %T to int", val)
 		}
 
-	case "bool":
+	case ValueTypeBool:
 		switch v := val.(type) {
 		case bool:
 			return fmt.Sprintf("%t", v), false, nil
@@ -59,14 +53,18 @@ func (s *store) marshalValue(valueType string, val any) (string, bool, error) {
 			return "", false, fmt.Errorf("cannot convert %T to bool", val)
 		}
 
-	case "object":
-		data, err := s.codec.Marshal(val)
+	case ValueTypeJson, ValueTypeToml, ValueTypeYaml:
+		codec := s.codecRegistry[valueType]
+		if codec == nil {
+			return "", false, fmt.Errorf("%w: %s", errNoCodecRegistered, valueType)
+		}
+		data, err := codec.Marshal(val)
 		if err != nil {
 			return "", false, fmt.Errorf("marshal failed: %w", err)
 		}
 		return string(data), false, nil
 
-	case "secret_string":
+	case ValueTypeSecretString:
 		if v, ok := val.(string); ok {
 			if s.crypto == nil {
 				return "", false, errCryptoNotConfigured
@@ -77,19 +75,18 @@ func (s *store) marshalValue(valueType string, val any) (string, bool, error) {
 			}
 			return ciphertext, true, nil
 		}
-		return "", false, fmt.Errorf("secret_string requires string value")
+		return "", false, errSecretStringRequiresStringValue
 
 	default:
 		return "", false, errUnsupportedValueType
 	}
 }
 
-func (s *store) Set(ctx context.Context, group, key string, val any) error {
+func (s *store) Set(ctx context.Context, group, key string, valueType ValueType, val any) error {
 	if group == "" || key == "" {
-		return errors.New("group and key are required")
+		return errGroupAndKeyRequired
 	}
 
-	valueType := s.inferValueType(val)
 	value, encrypted, err := s.marshalValue(valueType, val)
 	if err != nil {
 		return err
@@ -102,40 +99,23 @@ func (s *store) Set(ctx context.Context, group, key string, val any) error {
 		Value:     value,
 	}
 	if encrypted {
-		config.ValueType = "secret_string"
+		config.ValueType = ValueTypeSecretString
 	}
 
 	err = s.db.WithContext(ctx).Save(&config).Error
 	return err
 }
 
-func (s *store) inferValueType(val any) string {
-	switch val.(type) {
-	case string:
-		return "string"
-	case int:
-		return "int64"
-	case int64:
-		return "int64"
-	case int32:
-		return "int64"
-	case bool:
-		return "bool"
-	default:
-		return "object"
-	}
-}
-
 func (s *store) Delete(ctx context.Context, group, key string) error {
 	if group == "" || key == "" {
-		return errors.New("group and key are required")
+		return errGroupAndKeyRequired
 	}
 	return s.db.WithContext(ctx).Where("group_name = ? AND `key` = ?", group, key).Delete(&ConfigEntity{}).Error
 }
 
 func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, error) {
 	if group == "" || key == "" {
-		return nil, errors.New("group and key are required")
+		return nil, errGroupAndKeyRequired
 	}
 
 	var config ConfigEntity
@@ -145,7 +125,7 @@ func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, erro
 	}
 
 	value := config.Value
-	if config.ValueType == "secret_string" {
+	if config.ValueType == ValueTypeSecretString {
 		if s.crypto == nil {
 			return nil, errCryptoNotConfigured
 		}

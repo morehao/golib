@@ -1,25 +1,21 @@
 package configkv
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/morehao/golib/gcrypto"
 )
 
 const (
-	defaultCryptoKey = "SASItKkEmhTtfAKAr1+8N0Oq2tP2+c6LW0GQ7ovlFJs="
-	encryptedPrefix  = "enc:"
+	encryptedPrefix = "enc:"
 )
-
-var errInvalidKey = errors.New("invalid key")
 
 type aesCrypto struct {
 	aes *gcrypto.AES
 }
 
-func newAESCrypto(key []byte) (*aesCrypto, error) {
-	aes, err := gcrypto.NewAES(string(key))
+func newAESCrypto() (*aesCrypto, error) {
+	aes, err := gcrypto.NewAES("")
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +32,7 @@ func (c *aesCrypto) Encrypt(plaintext string) (string, error) {
 
 func (c *aesCrypto) Decrypt(ciphertext string) (string, error) {
 	if !strings.HasPrefix(ciphertext, encryptedPrefix) {
-		return "", errors.New("invalid ciphertext format")
+		return "", errInvalidCiphertextFormat
 	}
 	ct := strings.TrimPrefix(ciphertext, encryptedPrefix)
 	return c.aes.DecryptString(ct)

@@ -14,47 +14,18 @@ type kv struct {
 	store *store
 }
 
-const (
-	JsonCodecType CodecType = "json"
-	TomlCodecType CodecType = "toml"
-	YamlCodecType CodecType = "yaml"
-)
-
-type CodecType = string
-
-type Option func(*options)
-
-type options struct {
-	codecType CodecType
-}
-
-func WithCodecType(ct CodecType) Option {
-	return func(o *options) {
-		o.codecType = ct
-	}
-}
-
-func New(db *gorm.DB, opts ...Option) *kv {
-	o := &options{codecType: JsonCodecType}
-	for _, opt := range opts {
-		opt(o)
+func New(db *gorm.DB) *kv {
+	registry := map[ValueType]Codec{
+		ValueTypeJson: &JSONCodec{},
+		ValueTypeToml: &TOMLCodec{},
+		ValueTypeYaml: &YAMLCodec{},
 	}
 
-	var codec Codec
-	switch o.codecType {
-	case TomlCodecType:
-		codec = &TOMLCodec{}
-	case YamlCodecType:
-		codec = &YAMLCodec{}
-	default:
-		codec = &JSONCodec{}
-	}
-
-	c, err := newAESCrypto([]byte(defaultCryptoKey))
+	c, err := newAESCrypto()
 	if err != nil {
 		return nil
 	}
-	s := newStore(db, codec, c)
+	s := newStore(db, registry, c)
 	return &kv{store: s}
 }
 
@@ -65,10 +36,16 @@ func (k *kv) GetValue(ctx context.Context, group, key string, dest any) error {
 	}
 
 	switch cfg.ValueType {
-	case "object":
-		return k.store.codec.Unmarshal([]byte(cfg.Value), dest)
-	default:
+	case ValueTypeJson, ValueTypeToml, ValueTypeYaml:
+		codec := k.store.codecRegistry[cfg.ValueType]
+		if codec == nil {
+			return fmt.Errorf("%w: %s", errNoCodecRegistered, cfg.ValueType)
+		}
+		return codec.Unmarshal([]byte(cfg.Value), dest)
+	case ValueTypeString, ValueTypeInt, ValueTypeBool, ValueTypeFloat, ValueTypeSecretString:
 		return fmt.Errorf("use GetString/GetInt64/GetBool for %s", cfg.ValueType)
+	default:
+		return fmt.Errorf("%w: %s", errUnsupportedValueType, cfg.ValueType)
 	}
 }
 
@@ -104,8 +81,8 @@ func (k *kv) GetBool(ctx context.Context, group, key string) (bool, error) {
 	return strconv.ParseBool(cfg.Value)
 }
 
-func Init(db *gorm.DB, opts ...Option) {
-	instance = New(db, opts...)
+func Init(db *gorm.DB) {
+	instance = New(db)
 }
 
 func GetValue(ctx context.Context, group, key string, dest any) error {
