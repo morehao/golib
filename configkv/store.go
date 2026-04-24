@@ -139,18 +139,19 @@ func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, erro
 		return &ConfigEntity{}, nil
 	}
 
-	value := config.Value
+	return s.decryptEntity(&config), nil
+}
+
+func (s *store) decryptEntity(config *ConfigEntity) *ConfigEntity {
 	if config.EncryptionMode == EncryptionModeEncrypted {
 		if s.crypto == nil {
-			return nil, errCryptoNotConfigured
+			return config
 		}
-		plaintext, err := s.crypto.Decrypt(value)
+		plaintext, err := s.crypto.Decrypt(config.Value)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt failed: %w", err)
+			return config
 		}
-		value = plaintext
 		config.Value = plaintext
 	}
-
-	return &config, nil
+	return config
 }

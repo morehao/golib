@@ -1,6 +1,10 @@
 package configkv
 
-import "gorm.io/gorm"
+import (
+	"fmt"
+
+	"gorm.io/gorm"
+)
 
 // ValueType 配置值的数据类型
 type ValueType string
@@ -45,4 +49,36 @@ type ConfigEntity struct {
 
 func (ConfigEntity) TableName() string {
 	return "core_config"
+}
+
+type ConfigCond struct {
+	Group      string
+	Key        string
+	ValueType  string
+	Status     string
+	Page       int
+	PageSize   int
+	OrderField string
+}
+
+func (c *ConfigCond) BuildCondition(db *gorm.DB, tableName string) {
+	if c.Group != "" {
+		db.Where(fmt.Sprintf("%s.group_name = ?", tableName), c.Group)
+	}
+	if c.Key != "" {
+		db.Where(fmt.Sprintf("%s.key LIKE ?", tableName), "%"+c.Key+"%")
+	}
+	if c.ValueType != "" {
+		db.Where(fmt.Sprintf("%s.value_type = ?", tableName), c.ValueType)
+	}
+	if c.Status != "" {
+		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)
+	}
+	if c.OrderField != "" {
+		db.Order(c.OrderField)
+	}
+}
+
+func (c *ConfigCond) GetPageInfo() (page int, pageSize int) {
+	return c.Page, c.PageSize
 }

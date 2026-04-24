@@ -4,11 +4,16 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"gorm.io/gorm"
 )
 
-var instance *kv
+var (
+	instance *kv
+	adminAPI *AdminAPI
+	once     sync.Once
+)
 
 type kv struct {
 	store *store
@@ -23,10 +28,15 @@ func New(db *gorm.DB) *kv {
 
 	c, err := newAESCrypto()
 	if err != nil {
-		return nil
+		panic("init configkv crypto failed: " + err.Error())
 	}
 	s := newStore(db, registry, c)
+	adminAPI = newAdmin(s)
 	return &kv{store: s}
+}
+
+func (k *kv) GetStore() *store {
+	return k.store
 }
 
 func (k *kv) GetValue(ctx context.Context, group, key string, dest any) error {
@@ -81,16 +91,22 @@ func (k *kv) GetBool(ctx context.Context, group, key string) (bool, error) {
 	return strconv.ParseBool(cfg.Value)
 }
 
-func (k *kv) SetEncrypted(ctx context.Context, group, key string, valueType ValueType, val any) error {
-	return k.store.SetEncrypted(ctx, group, key, valueType, val)
-}
-
-func (k *kv) Set(ctx context.Context, group, key string, valueType ValueType, val any) error {
-	return k.store.Set(ctx, group, key, valueType, val)
-}
-
 func Init(db *gorm.DB) {
-	instance = New(db)
+	once.Do(func() {
+		registry := map[ValueType]Codec{
+			ValueTypeJson: &JSONCodec{},
+			ValueTypeToml: &TOMLCodec{},
+			ValueTypeYaml: &YAMLCodec{},
+		}
+
+		c, err := newAESCrypto()
+		if err != nil {
+			panic("init configkv crypto failed: " + err.Error())
+		}
+		s := newStore(db, registry, c)
+		adminAPI = newAdmin(s)
+		instance = &kv{store: s}
+	})
 }
 
 func GetValue(ctx context.Context, group, key string, dest any) error {
@@ -113,10 +129,6 @@ func GetBool(ctx context.Context, group, key string) (bool, error) {
 	return instance.GetBool(ctx, group, key)
 }
 
-func SetEncrypted(ctx context.Context, group, key string, valueType ValueType, val any) error {
-	return instance.SetEncrypted(ctx, group, key, valueType, val)
-}
-
-func Set(ctx context.Context, group, key string, valueType ValueType, val any) error {
-	return instance.Set(ctx, group, key, valueType, val)
+func GetAdmin() *AdminAPI {
+	return adminAPI
 }
