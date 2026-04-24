@@ -1,9 +1,12 @@
 package gutil
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // GetFileExtension 获取文件扩展名
@@ -52,4 +55,14 @@ func CreateDir(dir string) error {
 		}
 	}
 	return nil
+}
+
+func LoadYamlConfig(filepath string, dest any) {
+	if fileContent, readErr := os.ReadFile(filepath); readErr != nil {
+		panic(fmt.Sprintf("load config fail, filepath: %s error: %s", filepath, readErr.Error()))
+	} else {
+		if err := yaml.Unmarshal(fileContent, dest); err != nil {
+			panic(fmt.Sprintf("unmarshal config fail, filepath: %s error: %s", filepath, err.Error()))
+		}
+	}
 }

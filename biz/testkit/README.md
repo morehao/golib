@@ -14,9 +14,10 @@ package config
 
 import (
     "os"
-    
+
     "github.com/morehao/golib/biz/testkit"
     "github.com/morehao/golib/glog"
+    "github.com/morehao/golib/gutil"
 )
 
 type myserviceInitializer struct {
@@ -36,7 +37,7 @@ func (m *myserviceInitializer) Initialize() error {
     configPath := m.FindConfigPath() // 或自定义路径
     
     // 2. 加载配置
-    LoadConfig(configPath)
+    gutil.LoadYamlConfig(configPath)
     
     // 3. 初始化日志
     logCfg, _ := Conf.Log["default"]

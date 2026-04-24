@@ -26,6 +26,7 @@ func TestAES_EncryptDecrypt(t *testing.T) {
 	if string(decrypted) != plaintext {
 		t.Fatalf("Decrypted text doesn't match. Expected: %s, Got: %s", plaintext, string(decrypted))
 	}
+	t.Logf("decrypted: %s", decrypted)
 }
 
 func TestAES_EncryptDecryptString(t *testing.T) {

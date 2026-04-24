@@ -11,35 +11,6 @@ import (
 	"strings"
 )
 
-func ParseFile(file string) (interface{}, error) {
-	fileSet := token.NewFileSet()
-	node, err := parser.ParseFile(fileSet, file, nil, parser.ParseComments)
-	if err != nil {
-		return nil, err
-	}
-
-	serviceVars := make(map[string]string) // 用于存储service实例化变量
-
-	// 提取文件中所有service变量的实例化
-	ast.Inspect(node, func(n ast.Node) bool {
-		if decl, ok := n.(*ast.GenDecl); ok && decl.Tok == token.VAR {
-			for _, spec := range decl.Specs {
-				if valueSpec, ok := spec.(*ast.ValueSpec); ok {
-					for _, name := range valueSpec.Names {
-						if valueSpec.Values != nil {
-							if callExpr, ok := valueSpec.Values[0].(*ast.SelectorExpr); ok {
-								serviceVars[name.Name] = callExpr.Sel.Name
-							}
-						}
-					}
-				}
-			}
-		}
-		return true
-	})
-	return nil, err
-}
-
 func HasPackageKeywords(file string) (bool, error) {
 	fileSet := token.NewFileSet()
 	node, parseErr := parser.ParseFile(fileSet, file, nil, parser.ParseComments)
@@ -276,56 +247,6 @@ func fieldListToString(fl *ast.FieldList, isResults bool) string {
 	}
 	// 参数列表始终需要括号
 	return "(" + strings.Join(fields, ", ") + ")"
-}
-
-// GetFunctionContent 从给定文件中返回指定函数的内容。
-func GetFunctionContent(filePath, funcName string) (string, error) {
-	fileSet := token.NewFileSet()
-	node, err := parser.ParseFile(fileSet, filePath, nil, parser.ParseComments)
-	if err != nil {
-		return "", err
-	}
-
-	// 查找函数的起始和结束位置
-	var startLine, endLine int
-	ast.Inspect(node, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok {
-			return true
-		}
-		if fn.Name.Name == funcName {
-			startLine = fileSet.Position(fn.Pos()).Line
-			endLine = fileSet.Position(fn.End()).Line
-		}
-		return true
-	})
-
-	if startLine == 0 {
-		return "", os.ErrNotExist
-	}
-
-	// 按行读取文件并提取函数内容
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	currentLine := 0
-	var funcContent strings.Builder
-	for scanner.Scan() {
-		currentLine++
-		if currentLine >= startLine && currentLine <= endLine {
-			funcContent.WriteString(scanner.Text() + "\n")
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return "", err
-	}
-
-	return funcContent.String(), nil
 }
 
 // GetFunctionLines 获取指定文件中指定函数的起始和结束行数

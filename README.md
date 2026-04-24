@@ -1,108 +1,270 @@
-# golib简介
-`golib`是一个golang工具组件库，包含了一些个人在项目开发过程中总结的一些常用的工具函数和组件。
+# golib
 
-组件列表：
-- [codegen](#codegen) 代码生成工具
-- [conc](#conc) 并发控制组件（包含 concpool、concqueue、concsem）
-- `conf` 配置文件读取组件
-- [dbaccess](#dbaccess) 数据库客户端组件（支持 MySQL、Redis、Elasticsearch）
-- `distlock` 分布式锁组件（不支持可重入）
-- [excel](#excel) Excel 读写组件
-- `gast` 语法树工具
-- `gauth` 鉴权组件（包含 jwtauth）
-- `gcontext` 上下文工具组件
-- `gerror` 错误处理组件
-- `glog` 日志组件
-- `gtrace` OpenTelemetry Trace 初始化组件
-- `gutil` 常用工具函数集合
-- [protocol](#protocol) 协议组件（包含 ghttp、gresty）
-- `ratelimit` 限流组件
+`golib` is a golang utility library containing common tool functions and components summarized from personal project development experience.
 
-# 安装
+Components:
+- [biz](#biz) Business components
+- [codegen](#codegen) Code generation tools
+- [concurrency](#concurrency) Concurrency control components (includes concpool, concqueue, concsem)
+- [configkv](#configkv) Configuration management component
+- [dbaccess](#dbaccess) Database client components (supports MySQL, Redis, Elasticsearch)
+- [distlock](#distlock) Distributed lock component (non-reentrant)
+- [excel](#excel) Excel read/write component
+- [gast](#gast) AST syntax tree tool
+- [gauth](#gauth) Authentication component (includes jwtauth)
+- [gcrypto](#gcrypto) Encryption/decryption component
+- [gerror](#gerror) Error handling component
+- [glog](#glog) Logging component
+- [gtrace](#gtrace) OpenTelemetry Trace initialization component
+- [gtree](#gtree) Tree structure construction tool
+- [gutil](#gutil) Common utility functions collection
+- [protocol](#protocol) Protocol components (includes ghttp, gresty)
+- [ratelimit](#ratelimit) Rate limiting component
+
+# Installation
 ```bash
 go get github.com/morehao/golib
 ```
 
-# 组件使用说明
+# Components
+
+## biz
+
+### Overview
+`biz` is a business component package providing commonly used infrastructure components for business development.
+
+### Sub-components
+- **gcontext**: Context utilities, including request ID, user ID, tenant ID and other context key-value definitions and formatting
+- **gobject**: Common business objects, including user authentication info (UserClaims), operator info (OperatorBaseInfo), pagination query (PageQuery)
+- **gconstant**: Business constant definitions, including error codes (100000 series), API versions, etc.
+- **gserver**: Gin server related, including route grouping and middleware integration
+- **gmiddleware**: Gin middleware, including JWT authentication, CORS, access logging, Token blacklist
+- **gormplugin**: GORM plugins, including multi-tenant plugin (automatically adds tenant_id filter conditions)
+- **genericdao**: Generic DAO,封装基础的增删改查操作
+- **testkit**: Testing toolkit, supporting test initializer and context building
+
+### Features
+- Business scenario-oriented, ready to use
+- Unified error code specification
+- Integrated JWT authentication and multi-tenant support
 
 ## codegen
 
-### 简介
-`codegen` 是一个代码生成工具，通过读取数据库表结构，支持生成基础的 CRUD 代码，包括 router、controller、service、dto、model、errorCode 等。
+### Overview
+`codegen` is a code generation tool that reads database table structures and supports generating basic CRUD code, including router, controller, service, dto, model, errorCode, etc.
 
-### 特性
-- 支持 MySQL 数据库
-- 支持模板自定义和模板参数自定义
-- 支持基于模板生成代码
+### Features
+- Supports MySQL database
+- Supports PostgreSQL database
+- Supports template customization and template parameter customization
+- Supports code generation based on templates
 
-### 使用
-使用示例参照 [codegen 单测](codegen/gen_test.go)
+### Usage
+For usage examples, refer to [codegen unit tests](codegen/gen_test.go)
 
-## conc
+## concurrency
 
-### 简介
-`conc` 是并发控制组件集合，提供了多种并发场景的解决方案。
+### Overview
+`concurrency` is a concurrency control component collection providing solutions for various concurrency scenarios.
 
-### 子组件
-- **concpool**: 工作池，支持任务提交、并发控制、优雅关闭等功能
-- **concqueue**: 基于生产者-消费者模型的并发任务队列，支持并发控制和错误统计
-- **concsem**: 信号量控制，用于限制并发数量
+### Sub-components
+- **concpool**: Worker pool, supports task submission, concurrency control, graceful shutdown and other features
+- **concqueue**: Concurrent task queue based on producer-consumer model, supports concurrency control and error statistics
+- **concsem**: Semaphore control, used to limit concurrent numbers
 
-### 特性
-- 支持灵活的并发数控制
-- 支持任务队列管理
-- 支持优雅关闭和错误收集
-- 线程安全
+### Features
+- Flexible concurrency control
+- Task queue management
+- Graceful shutdown and error collection
+- Thread-safe
 
-### 使用
-使用示例参照 [concqueue 使用说明](conc/concqueue/README.md)
+### Usage
+For usage examples, refer to [concqueue usage](concurrency/concqueue/README.md)
 
-## database
+## configkv
 
-### 简介
-`database` 是数据库客户端组件集合，提供了多种数据库的封装和连接管理。
+### Overview
+`configkv` is a configuration management component based on database key-value storage, supporting multiple data types and encryption.
 
-### 子组件
-- **dbmysql**: MySQL 数据库客户端，基于 GORM 封装
-- **dbredis**: Redis 客户端，基于 go-redis 封装
-- **dbes**: Elasticsearch 客户端，基于官方客户端封装
+### Features
+- Supports json/toml/yaml/string/int/bool/float types
+- Supports encrypted storage
+- Based on GORM
 
-### 特性
-- 统一的配置接口
-- 集成日志记录
-- 支持连接池配置
-- 支持超时控制
+## dbaccess
+
+### Overview
+`dbaccess` is a database client component collection providing encapsulation and connection management for multiple databases.
+
+### Sub-components
+- **dbgorm**: MySQL/PostgreSQL database client, based on GORM
+- **dbredis**: Redis client, based on go-redis
+- **dbes**: Elasticsearch client, based on official client
+
+### Features
+- Unified configuration interface
+- Integrated logging
+- Connection pool configuration support
+- Timeout control support
+
+### Usage
+For usage examples, refer to [dbaccess usage](dbaccess/README.md)
+
+## distlock
+
+### Overview
+`distlock` is a distributed lock component based on Redis, using redsync algorithm, supporting automatic renewal.
+
+### Features
+- Redis-based distributed lock
+- Automatic renewal (lock keepalive)
+- Non-reentrant
 
 ## excel
 
-### 简介
-`excel` 是基于 `excelize` 的简单封装，支持通过结构体便捷地读写 Excel 文件。
+### Overview
+`excel` is a simple wrapper around `excelize`, supporting convenient Excel file read/write through structs.
 
-无论是读取 Excel 还是写入 Excel，都需要定义一个结构体，结构体的字段通过 tag（即 `ex`）来指定 Excel 的相关信息。
+Both reading and writing Excel require defining a struct, with struct fields specifying Excel-related information through tags (`ex`).
 
-### 特性
-- 通过结构体标签定义 Excel 列映射关系
-- 支持读取和写入 Excel 文件
-- 支持基于 validator 的数据验证
+### Features
+- Define Excel column mapping through struct tags
+- Support reading and writing Excel files
+- Support data validation based on validator
 
-### 使用
-使用示例参照 [excel 使用说明](excel/README.md)
+### Usage
+For usage examples, refer to [excel usage](excel/README.md)
+
+## gast
+
+### Overview
+`gast` is a Go AST syntax tree operation tool, supporting AST analysis and code generation.
+
+### Features
+- Support function/method lookup
+- Support interface method addition
+- Support constant addition
+- Syntax tree traversal and manipulation
+
+## gauth
+
+### Overview
+`gauth` is an authentication component containing JWT authentication capabilities.
+
+### Sub-components
+- **jwtauth**: Generic JWT signing and parsing, supports HS256 algorithm, supports renewal
+
+### Features
+- Generic JWT signing and parsing
+- Token renewal support
+- Token blacklist support
+
+### Usage
+For usage examples, refer to [jwtauth usage](gauth/jwtauth/README.md)
+
+## gcrypto
+
+### Overview
+`gcrypto` is an encryption/decryption component providing common symmetric and asymmetric encryption functions.
+
+### Sub-components
+- **aes**: Supports AES-128/192/256, GCM mode (recommended) and CBC mode
+- **rsa**: Supports encryption, decryption, signing, verification, PEM format keys
+- **bcrypt**: Password hashing and verification
+
+### Features
+- Environment variable configuration for keys
+- GCM mode provides authenticated encryption
+- RSA supports multiple padding modes
+
+### Usage
+For usage examples, refer to [gcrypto usage](gcrypto/README.md)
+
+## gerror
+
+### Overview
+`gerror` is an error handling component providing business error code encapsulation, supporting error chains and call stacks.
+
+### Features
+- Supports errors.Is/As
+- Error chain wrapping
+- Call stack recording
+- Business error code specification
+
+## glog
+
+### Overview
+`glog` is a logging component based on zap providing high-performance logging functionality.
+
+### Features
+- Console/File output support
+- OTel integration
+- Structured logging support
+- High-performance log writing
+
+## gtrace
+
+### Overview
+`gtrace` is an OpenTelemetry Trace initialization component supporting distributed tracing.
+
+### Features
+- OTLP gRPC/HTTP export support
+- Exporter disable mechanism
+- Integrated zap logging
+
+### Usage
+For usage examples, refer to [gtrace usage](gtrace/README.md)
+
+## gtree
+
+### Overview
+`gtree` is a tree structure construction tool, a generic tree data structure building library supporting building trees from node lists.
+
+### Features
+- Provides TreeNode interface, only need to implement GetKey(), GetParentKey(), IsRoot() methods
+- Orphan node handling (ignore, promote to root, error)
+- Circular reference detection
+- Node sorting (ID, Name, Order or multi-level combination)
+- Pre-order traversal and level-order traversal
+
+## gutil
+
+### Overview
+`gutil` is a collection of common utility functions providing commonly used tool functions during development.
+
+### Sub-components
+- Random number generation
+- String processing
+- Date/time operations
+- Type conversion
+- Slice/Map operations
+- File processing
 
 ## protocol
 
-### 简介
-`protocol` 是协议相关组件集合，提供了 HTTP 客户端的封装。
+### Overview
+`protocol` is a protocol-related component collection providing HTTP client encapsulation.
 
-### 子组件
-- **ghttp**: 增强的 HTTP 客户端，支持结构体映射、连接池、智能重试等功能
-- **gresty**: 基于 Resty 的 HTTP 客户端封装，支持 SSE（Server-Sent Events）
+### Sub-components
+- **ghttp**: Enhanced HTTP client, supports struct mapping, connection pool, smart retry and other features
+- **gresty**: HTTP client wrapper based on Resty, supports SSE (Server-Sent Events)
 
-### 特性
-- 支持结构体自动映射
-- 支持连接池优化
-- 支持智能重试机制（4xx 不重试，5xx 重试）
-- 支持 SSE 长连接
-- 丰富的配置选项
+### Features
+- Struct automatic mapping support
+- Connection pool optimization
+- Smart retry mechanism (no retry for 4xx, retry for 5xx)
+- SSE long connection support
+- Rich configuration options
 
-### 使用
-使用示例参照 [ghttp 使用说明](protocol/ghttp/README.md)
+### Usage
+For usage examples, refer to [ghttp usage](protocol/ghttp/README.md)
+
+## ratelimit
+
+### Overview
+`ratelimit` is a rate limiting component supporting Redis-based and local time window/token bucket rate limiting.
+
+### Features
+- Redis rate limiting (go-redis-rate)
+- Local rate limiting (timeRateLimiter)
+- Degradation handling support

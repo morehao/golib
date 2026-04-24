@@ -15,7 +15,7 @@ const (
 )
 
 // 默认AES密钥（32字节 = AES-256）
-const defaultAESKey = "golib-default-aes-key-32bytes!!"
+const defaultAESKey = "a08IPHBa9ObST20fUxDxJKAbgMOh1LkW+EDwWgrpB6w="
 
 // AESKeySize 支持的AES密钥长度
 const (
