@@ -47,13 +47,17 @@ func newSlogLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 	}
 
 	serviceName, moduleName := cfg.Service, cfg.Module
-	if cfg.Service == "" {
+	if serviceName == "" {
 		serviceName = defaultServiceName
 	}
-	if cfg.Module == "" {
+	if moduleName == "" {
 		moduleName = defaultModuleName
 	}
-	logger = logger.With(slog.String("service", serviceName), slog.String("module", moduleName))
+
+	logger = logger.With(
+		slog.String("service", serviceName),
+		slog.String("module", moduleName),
+	)
 
 	return &slogLogger{
 		logger:          logger,
@@ -68,80 +72,87 @@ func (l *slogLogger) getConfig() *LogConfig {
 }
 
 func (l *slogLogger) Debug(ctx context.Context, args ...any) {
-	l.ctxLog(DebugLevel, ctx, args...)
+	l.ctxLog(ctx, DebugLevel, fmt.Sprint(args...))
 }
 
-func (l *slogLogger) Debugf(ctx context.Context, format string, kvs ...any) {
-	l.ctxLogf(DebugLevel, ctx, format, kvs...)
+func (l *slogLogger) Debugf(ctx context.Context, format string, args ...any) {
+	l.ctxLog(ctx, DebugLevel, fmt.Sprintf(format, args...))
 }
 
 func (l *slogLogger) Debugw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(DebugLevel, ctx, msg, kvs...)
+	l.ctxLog(ctx, DebugLevel, msg, kvs...)
 }
 
 func (l *slogLogger) Info(ctx context.Context, args ...any) {
-	l.ctxLog(InfoLevel, ctx, args...)
+	l.ctxLog(ctx, InfoLevel, fmt.Sprint(args...))
 }
 
-func (l *slogLogger) Infof(ctx context.Context, format string, kvs ...any) {
-	l.ctxLogf(InfoLevel, ctx, format, kvs...)
+func (l *slogLogger) Infof(ctx context.Context, format string, args ...any) {
+	l.ctxLog(ctx, InfoLevel, fmt.Sprintf(format, args...))
 }
 
 func (l *slogLogger) Infow(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(InfoLevel, ctx, msg, kvs...)
+	l.ctxLog(ctx, InfoLevel, msg, kvs...)
 }
 
 func (l *slogLogger) Warn(ctx context.Context, args ...any) {
-	l.ctxLog(WarnLevel, ctx, args...)
+	l.ctxLog(ctx, WarnLevel, fmt.Sprint(args...))
 }
 
-func (l *slogLogger) Warnf(ctx context.Context, format string, kvs ...any) {
-	l.ctxLogf(WarnLevel, ctx, format, kvs...)
+func (l *slogLogger) Warnf(ctx context.Context, format string, args ...any) {
+	l.ctxLog(ctx, WarnLevel, fmt.Sprintf(format, args...))
 }
 
 func (l *slogLogger) Warnw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(WarnLevel, ctx, msg, kvs...)
+	l.ctxLog(ctx, WarnLevel, msg, kvs...)
 }
 
 func (l *slogLogger) Error(ctx context.Context, args ...any) {
-	l.ctxLog(ErrorLevel, ctx, args...)
+	l.ctxLog(ctx, ErrorLevel, fmt.Sprint(args...))
 }
 
-func (l *slogLogger) Errorf(ctx context.Context, format string, kvs ...any) {
-	l.ctxLogf(ErrorLevel, ctx, format, kvs...)
+func (l *slogLogger) Errorf(ctx context.Context, format string, args ...any) {
+	l.ctxLog(ctx, ErrorLevel, fmt.Sprintf(format, args...))
 }
 
 func (l *slogLogger) Errorw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(ErrorLevel, ctx, msg, kvs...)
+	l.ctxLog(ctx, ErrorLevel, msg, kvs...)
 }
 
 func (l *slogLogger) Panic(ctx context.Context, args ...any) {
-	l.ctxLog(PanicLevel, ctx, args...)
-	panic(fmt.Sprint(args...))
+	msg := fmt.Sprint(args...)
+	l.ctxLog(ctx, PanicLevel, msg)
+	panic(msg)
 }
 
-func (l *slogLogger) Panicf(ctx context.Context, format string, kvs ...any) {
-	l.ctxLogf(PanicLevel, ctx, format, kvs...)
-	panic(fmt.Sprintf(format, kvs...))
+func (l *slogLogger) Panicf(ctx context.Context, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	l.ctxLog(ctx, PanicLevel, msg)
+	panic(msg)
 }
 
 func (l *slogLogger) Panicw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(PanicLevel, ctx, msg, kvs...)
+	l.ctxLog(ctx, PanicLevel, msg, kvs...)
 	panic(msg)
 }
 
 func (l *slogLogger) Fatal(ctx context.Context, args ...any) {
-	l.ctxLog(FatalLevel, ctx, args...)
+	msg := fmt.Sprint(args...)
+	l.ctxLog(ctx, FatalLevel, msg)
+	l.Sync()
 	os.Exit(1)
 }
 
-func (l *slogLogger) Fatalf(ctx context.Context, format string, kvs ...any) {
-	l.ctxLogf(FatalLevel, ctx, format, kvs...)
+func (l *slogLogger) Fatalf(ctx context.Context, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	l.ctxLog(ctx, FatalLevel, msg)
+	l.Sync()
 	os.Exit(1)
 }
 
 func (l *slogLogger) Fatalw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(FatalLevel, ctx, msg, kvs...)
+	l.ctxLog(ctx, FatalLevel, msg, kvs...)
+	l.Sync()
 	os.Exit(1)
 }
 
@@ -151,86 +162,64 @@ func (l *slogLogger) Sync() {
 	}
 }
 
-func (l *slogLogger) ctxLog(level Level, ctx context.Context, kvs ...any) {
-	if nilCtx(ctx) || skipLog(ctx) {
+// ======================= 核心统一入口 =======================
+
+func (l *slogLogger) ctxLog(ctx context.Context, level Level, msg string, kvs ...any) {
+	if skipLog(ctx) {
 		return
 	}
 
-	args := append(l.extraFields(ctx), kvs...)
+	// 自动补齐 kvs，避免 slog panic
+	kvs = normalizeKVs(kvs)
+
+	// 注入 extra fields（OTEL + ctx）
+	kvs = append(l.extraFields(ctx), kvs...)
+
 	switch level {
 	case DebugLevel:
-		l.logger.DebugContext(ctx, "", args...)
+		l.logger.DebugContext(ctx, msg, kvs...)
 	case InfoLevel:
-		l.logger.InfoContext(ctx, "", args...)
+		l.logger.InfoContext(ctx, msg, kvs...)
 	case WarnLevel:
-		l.logger.WarnContext(ctx, "", args...)
+		l.logger.WarnContext(ctx, msg, kvs...)
 	case ErrorLevel:
-		l.logger.ErrorContext(ctx, "", args...)
-	case PanicLevel, FatalLevel:
-		l.logger.ErrorContext(ctx, "", args...)
+		l.logger.ErrorContext(ctx, msg, kvs...)
+	case PanicLevel:
+		l.logger.ErrorContext(ctx, msg, append(kvs, slog.String("level", "panic"))...)
+	case FatalLevel:
+		l.logger.ErrorContext(ctx, msg, append(kvs, slog.String("level", "fatal"))...)
 	}
 }
 
-func (l *slogLogger) ctxLogf(level Level, ctx context.Context, format string, kvs ...any) {
-	if nilCtx(ctx) || skipLog(ctx) {
-		return
-	}
+// ======================= 辅助函数 =======================
 
-	args := append(l.extraFields(ctx), kvs...)
-	switch level {
-	case DebugLevel:
-		l.logger.DebugContext(ctx, format, args...)
-	case InfoLevel:
-		l.logger.InfoContext(ctx, format, args...)
-	case WarnLevel:
-		l.logger.WarnContext(ctx, format, args...)
-	case ErrorLevel:
-		l.logger.ErrorContext(ctx, format, args...)
-	case PanicLevel, FatalLevel:
-		l.logger.ErrorContext(ctx, format, args...)
+// 防止 kvs 不是 key-value 导致 panic
+func normalizeKVs(kvs []any) []any {
+	if len(kvs)%2 != 0 {
+		kvs = append(kvs, "(MISSING)")
 	}
-}
-
-func (l *slogLogger) ctxLogw(level Level, ctx context.Context, msg string, kvs ...any) {
-	if nilCtx(ctx) || skipLog(ctx) {
-		return
-	}
-
-	args := append(l.extraFields(ctx), kvs...)
-	switch level {
-	case DebugLevel:
-		l.logger.DebugContext(ctx, msg, args...)
-	case InfoLevel:
-		l.logger.InfoContext(ctx, msg, args...)
-	case WarnLevel:
-		l.logger.WarnContext(ctx, msg, args...)
-	case ErrorLevel:
-		l.logger.ErrorContext(ctx, msg, args...)
-	case PanicLevel, FatalLevel:
-		l.logger.ErrorContext(ctx, msg, args...)
-	}
+	return kvs
 }
 
 func (l *slogLogger) extraFields(ctx context.Context) []any {
 	var fields []any
-	hasOTELTraceFields := false
+
+	// OTEL trace 注入
 	if l.enableOTELTrace {
-		span := trace.SpanFromContext(ctx)
-		if span != nil {
-			sc := span.SpanContext()
-			if sc.IsValid() {
-				hasOTELTraceFields = true
-				fields = append(fields,
-					slog.String(KeyTraceID, sc.TraceID().String()),
-					slog.String(KeySpanID, sc.SpanID().String()),
-					slog.String(KeyTraceFlags, sc.TraceFlags().String()),
-				)
-			}
+		sc := trace.SpanFromContext(ctx).SpanContext()
+		if sc.IsValid() {
+			fields = append(fields,
+				slog.String(KeyTraceID, sc.TraceID().String()),
+				slog.String(KeySpanID, sc.SpanID().String()),
+				slog.String(KeyTraceFlags, sc.TraceFlags().String()),
+			)
 		}
 	}
 
+	// ctx 自定义字段
 	for _, key := range l.cfg.ExtraKeys {
-		if hasOTELTraceFields && (key == KeyTraceID || key == KeySpanID || key == KeyTraceFlags) {
+		// 避免重复 trace 字段
+		if key == KeyTraceID || key == KeySpanID || key == KeyTraceFlags {
 			continue
 		}
 		if v := ctx.Value(key); v != nil {
