@@ -5,33 +5,31 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-
-	"go.opentelemetry.io/otel/trace"
 )
 
+// slogLogger 是对外暴露的 Logger 实现。
+// 横切关注点（OTEL trace、ctx extra keys、hook）统一由 gSlogHandler 处理，
+// 本层只负责：参数组装、级别路由、Panic/Fatal 的运行时副作用。
 type slogLogger struct {
-	logger          *slog.Logger
-	cfg             *LogConfig
-	enableOTELTrace bool
-	fileWriter      *gSlogFileWriter
+	logger     *slog.Logger
+	cfg        *LogConfig
+	fileWriter *gSlogFileWriter
 }
 
 func newSlogLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 	if cfg == nil {
 		cfg = GetDefaultLogConfig()
 	}
+
 	optCfg := &optConfig{}
 	for _, opt := range opts {
 		opt.apply(optCfg)
 	}
 
-	enableOTELTrace := cfg.EnableOTELTrace
-	if optCfg.enableOTELTrace != nil {
-		enableOTELTrace = *optCfg.enableOTELTrace
-	}
-
-	var logger *slog.Logger
-	var fileWriter *gSlogFileWriter
+	var (
+		logger     *slog.Logger
+		fileWriter *gSlogFileWriter
+	)
 
 	if cfg.Writer == WriterConsole {
 		handler := newSlogHandler(cfg, optCfg, os.Stdout)
@@ -46,24 +44,25 @@ func newSlogLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 		logger = slog.New(handler)
 	}
 
-	serviceName, moduleName := cfg.Service, cfg.Module
+	serviceName := cfg.Service
 	if serviceName == "" {
 		serviceName = defaultServiceName
 	}
+	moduleName := cfg.Module
 	if moduleName == "" {
 		moduleName = defaultModuleName
 	}
 
+	// 固定字段只在构造时 With 一次，后续所有日志自动携带
 	logger = logger.With(
 		slog.String("service", serviceName),
 		slog.String("module", moduleName),
 	)
 
 	return &slogLogger{
-		logger:          logger,
-		cfg:             cfg,
-		enableOTELTrace: enableOTELTrace,
-		fileWriter:      fileWriter,
+		logger:     logger,
+		cfg:        cfg,
+		fileWriter: fileWriter,
 	}, nil
 }
 
@@ -71,90 +70,118 @@ func (l *slogLogger) getConfig() *LogConfig {
 	return l.cfg
 }
 
+// ---------------------------------------------------------------------------
+// Debug
+// ---------------------------------------------------------------------------
+
 func (l *slogLogger) Debug(ctx context.Context, args ...any) {
-	l.ctxLog(ctx, DebugLevel, fmt.Sprint(args...))
+	l.log(ctx, DebugLevel, fmt.Sprint(args...))
 }
 
 func (l *slogLogger) Debugf(ctx context.Context, format string, args ...any) {
-	l.ctxLog(ctx, DebugLevel, fmt.Sprintf(format, args...))
+	l.log(ctx, DebugLevel, fmt.Sprintf(format, args...))
 }
 
 func (l *slogLogger) Debugw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLog(ctx, DebugLevel, msg, kvs...)
+	l.log(ctx, DebugLevel, msg, kvs...)
 }
 
+// ---------------------------------------------------------------------------
+// Info
+// ---------------------------------------------------------------------------
+
 func (l *slogLogger) Info(ctx context.Context, args ...any) {
-	l.ctxLog(ctx, InfoLevel, fmt.Sprint(args...))
+	l.log(ctx, InfoLevel, fmt.Sprint(args...))
 }
 
 func (l *slogLogger) Infof(ctx context.Context, format string, args ...any) {
-	l.ctxLog(ctx, InfoLevel, fmt.Sprintf(format, args...))
+	l.log(ctx, InfoLevel, fmt.Sprintf(format, args...))
 }
 
 func (l *slogLogger) Infow(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLog(ctx, InfoLevel, msg, kvs...)
+	l.log(ctx, InfoLevel, msg, kvs...)
 }
 
+// ---------------------------------------------------------------------------
+// Warn
+// ---------------------------------------------------------------------------
+
 func (l *slogLogger) Warn(ctx context.Context, args ...any) {
-	l.ctxLog(ctx, WarnLevel, fmt.Sprint(args...))
+	l.log(ctx, WarnLevel, fmt.Sprint(args...))
 }
 
 func (l *slogLogger) Warnf(ctx context.Context, format string, args ...any) {
-	l.ctxLog(ctx, WarnLevel, fmt.Sprintf(format, args...))
+	l.log(ctx, WarnLevel, fmt.Sprintf(format, args...))
 }
 
 func (l *slogLogger) Warnw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLog(ctx, WarnLevel, msg, kvs...)
+	l.log(ctx, WarnLevel, msg, kvs...)
 }
 
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
+
 func (l *slogLogger) Error(ctx context.Context, args ...any) {
-	l.ctxLog(ctx, ErrorLevel, fmt.Sprint(args...))
+	l.log(ctx, ErrorLevel, fmt.Sprint(args...))
 }
 
 func (l *slogLogger) Errorf(ctx context.Context, format string, args ...any) {
-	l.ctxLog(ctx, ErrorLevel, fmt.Sprintf(format, args...))
+	l.log(ctx, ErrorLevel, fmt.Sprintf(format, args...))
 }
 
 func (l *slogLogger) Errorw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLog(ctx, ErrorLevel, msg, kvs...)
+	l.log(ctx, ErrorLevel, msg, kvs...)
 }
+
+// ---------------------------------------------------------------------------
+// Panic —— 写日志后 panic
+// ---------------------------------------------------------------------------
 
 func (l *slogLogger) Panic(ctx context.Context, args ...any) {
 	msg := fmt.Sprint(args...)
-	l.ctxLog(ctx, PanicLevel, msg)
+	l.log(ctx, PanicLevel, msg)
 	panic(msg)
 }
 
 func (l *slogLogger) Panicf(ctx context.Context, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	l.ctxLog(ctx, PanicLevel, msg)
+	l.log(ctx, PanicLevel, msg)
 	panic(msg)
 }
 
 func (l *slogLogger) Panicw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLog(ctx, PanicLevel, msg, kvs...)
+	l.log(ctx, PanicLevel, msg, kvs...)
 	panic(msg)
 }
 
+// ---------------------------------------------------------------------------
+// Fatal —— 写日志后 os.Exit(1)
+// ---------------------------------------------------------------------------
+
 func (l *slogLogger) Fatal(ctx context.Context, args ...any) {
 	msg := fmt.Sprint(args...)
-	l.ctxLog(ctx, FatalLevel, msg)
+	l.log(ctx, FatalLevel, msg)
 	l.Sync()
 	os.Exit(1)
 }
 
 func (l *slogLogger) Fatalf(ctx context.Context, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	l.ctxLog(ctx, FatalLevel, msg)
+	l.log(ctx, FatalLevel, msg)
 	l.Sync()
 	os.Exit(1)
 }
 
 func (l *slogLogger) Fatalw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLog(ctx, FatalLevel, msg, kvs...)
+	l.log(ctx, FatalLevel, msg, kvs...)
 	l.Sync()
 	os.Exit(1)
 }
+
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
 
 func (l *slogLogger) Sync() {
 	if l.fileWriter != nil {
@@ -162,18 +189,19 @@ func (l *slogLogger) Sync() {
 	}
 }
 
-// ======================= 核心统一入口 =======================
+// ---------------------------------------------------------------------------
+// 核心写入入口
+// ---------------------------------------------------------------------------
 
-func (l *slogLogger) ctxLog(ctx context.Context, level Level, msg string, kvs ...any) {
+// log 是所有 public 方法的统一出口。
+// 职责：skipLog 检查 → kvs 合法性修正 → 级别路由。
+// 横切字段（OTEL、ctx extra keys）由 gSlogHandler.Handle 统一注入，此处不重复处理。
+func (l *slogLogger) log(ctx context.Context, level Level, msg string, kvs ...any) {
 	if skipLog(ctx) {
 		return
 	}
 
-	// 自动补齐 kvs，避免 slog panic
 	kvs = normalizeKVs(kvs)
-
-	// 注入 extra fields（OTEL + ctx）
-	kvs = append(l.extraFields(ctx), kvs...)
 
 	switch level {
 	case DebugLevel:
@@ -185,47 +213,22 @@ func (l *slogLogger) ctxLog(ctx context.Context, level Level, msg string, kvs ..
 	case ErrorLevel:
 		l.logger.ErrorContext(ctx, msg, kvs...)
 	case PanicLevel:
-		l.logger.ErrorContext(ctx, msg, append(kvs, slog.String("level", "panic"))...)
+		// 使用自定义 slog.Level 常量，由 replaceLevel ReplaceAttr 转为 "PANIC" 字符串输出，
+		// 不再手动追加 slog.String("level","panic")，避免 JSON key 重复。
+		l.logger.Log(ctx, slogLevelPanic, msg, kvs...)
 	case FatalLevel:
-		l.logger.ErrorContext(ctx, msg, append(kvs, slog.String("level", "fatal"))...)
+		l.logger.Log(ctx, slogLevelFatal, msg, kvs...)
 	}
 }
 
-// ======================= 辅助函数 =======================
+// ---------------------------------------------------------------------------
+// 辅助函数
+// ---------------------------------------------------------------------------
 
-// 防止 kvs 不是 key-value 导致 panic
+// normalizeKVs 确保 kvs 为偶数个元素，防止 slog 因奇数长度产生 !BADKEY。
 func normalizeKVs(kvs []any) []any {
 	if len(kvs)%2 != 0 {
 		kvs = append(kvs, "(MISSING)")
 	}
 	return kvs
-}
-
-func (l *slogLogger) extraFields(ctx context.Context) []any {
-	var fields []any
-
-	// OTEL trace 注入
-	if l.enableOTELTrace {
-		sc := trace.SpanFromContext(ctx).SpanContext()
-		if sc.IsValid() {
-			fields = append(fields,
-				slog.String(KeyTraceID, sc.TraceID().String()),
-				slog.String(KeySpanID, sc.SpanID().String()),
-				slog.String(KeyTraceFlags, sc.TraceFlags().String()),
-			)
-		}
-	}
-
-	// ctx 自定义字段
-	for _, key := range l.cfg.ExtraKeys {
-		// 避免重复 trace 字段
-		if key == KeyTraceID || key == KeySpanID || key == KeyTraceFlags {
-			continue
-		}
-		if v := ctx.Value(key); v != nil {
-			fields = append(fields, slog.Any(key, v))
-		}
-	}
-
-	return fields
 }
