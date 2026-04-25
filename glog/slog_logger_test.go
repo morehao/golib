@@ -61,7 +61,7 @@ func TestSlogLoggerInit(t *testing.T) {
 			Dir:     tempDir,
 		}
 
-		logger, getLoggerErr := newSlogLogger(config, WithLoggerType(LoggerTypeSlog))
+		logger, getLoggerErr := newSlogLogger(config)
 		assert.Nil(t, getLoggerErr)
 		if logger == nil {
 			t.Error("Slog console logger not initialized")
@@ -75,7 +75,7 @@ func TestSlogLoggerInit(t *testing.T) {
 
 func TestSlogLoggerLevels(t *testing.T) {
 	config := testSlogLoggerConfig()
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog))
+	logger, err := newSlogLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
@@ -94,7 +94,7 @@ func TestSlogLoggerLevels(t *testing.T) {
 
 func TestSlogLoggerWithFields(t *testing.T) {
 	config := testSlogLoggerConfig()
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog))
+	logger, err := newSlogLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
@@ -104,7 +104,7 @@ func TestSlogLoggerWithFields(t *testing.T) {
 
 func TestSlogLoggerFormat(t *testing.T) {
 	config := testSlogLoggerConfig()
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog))
+	logger, err := newSlogLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
@@ -175,7 +175,7 @@ func TestSlogLoggerExtraKeys(t *testing.T) {
 		ExtraKeys: []string{KeyTraceID, "user_id", KeyAppRequestID},
 	}
 
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog))
+	logger, err := newSlogLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
@@ -186,7 +186,7 @@ func TestSlogLoggerExtraKeys(t *testing.T) {
 
 	logger.Infow(ctx, "test message with extra fields", "key", "value")
 
-	logger.Sync()
+	logger.Close()
 }
 
 func TestSlogLoggerOTELTrace(t *testing.T) {
@@ -202,7 +202,7 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 		EnableOTELTrace: true,
 	}
 
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog))
+	logger, err := newSlogLogger(config)
 	assert.Nil(t, err)
 
 	tp := trace.NewTracerProvider()
@@ -213,7 +213,7 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
 	logger.Infow(ctx, "otel trace fields", "key", "value")
 	span.End()
-	logger.Sync()
+	logger.Close()
 
 	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "slog-otel_full.log")
 	b, readErr := os.ReadFile(logFile)
@@ -238,7 +238,7 @@ func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 		EnableOTELTrace: false,
 	}
 
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog))
+	logger, err := newSlogLogger(config)
 	assert.Nil(t, err)
 
 	tp := trace.NewTracerProvider()
@@ -249,7 +249,7 @@ func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
 	logger.Infow(ctx, "otel trace fields disabled", "key", "value")
 	span.End()
-	logger.Sync()
+	logger.Close()
 
 	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "slog-otel-disabled_full.log")
 	b, readErr := os.ReadFile(logFile)
@@ -285,7 +285,7 @@ func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
 	logger.Infow(ctx, "otel trace option override", "key", "value")
 	span.End()
-	logger.Sync()
+	logger.Close()
 
 	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "slog-otel-option_full.log")
 	b, readErr := os.ReadFile(logFile)
@@ -310,11 +310,11 @@ func TestSlogLoggerOTELTraceWithoutSpanContext(t *testing.T) {
 		EnableOTELTrace: true,
 	}
 
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog))
+	logger, err := newSlogLogger(config)
 	assert.Nil(t, err)
 
 	logger.Infow(context.Background(), "without span context", "key", "value")
-	logger.Sync()
+	logger.Close()
 
 	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "slog-otel-nospan_full.log")
 	b, readErr := os.ReadFile(logFile)
@@ -371,5 +371,5 @@ func TestSlogLoggerRotation(t *testing.T) {
 
 	assert.True(t, rotated, "Log rotation should occur when file size exceeds MaxSize")
 
-	Sync()
+	Close()
 }

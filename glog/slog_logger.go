@@ -13,7 +13,7 @@ import (
 type slogLogger struct {
 	logger     *slog.Logger
 	cfg        *LogConfig
-	fileWriter *gSlogFileWriter
+	fileWriter *gSlogFileWriter // nil 表示 console 模式
 }
 
 func newSlogLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
@@ -66,8 +66,26 @@ func newSlogLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 	}, nil
 }
 
-func (l *slogLogger) getConfig() *LogConfig {
+func (l *slogLogger) GetConfig() *LogConfig {
 	return l.cfg
+}
+
+// ---------------------------------------------------------------------------
+// With —— 返回携带固定 kv 字段的子 Logger
+// ---------------------------------------------------------------------------
+
+// With 返回一个新的 Logger，所有后续日志都会携带给定的 kvs。
+// 适用于在请求入口绑定 request_id、user_id 等字段，避免每次传参。
+func (l *slogLogger) With(kvs ...any) Logger {
+	if len(kvs) == 0 {
+		return l
+	}
+	kvs = normalizeKVs(kvs)
+	return &slogLogger{
+		logger:     l.logger.With(kvs...),
+		cfg:        l.cfg,
+		fileWriter: l.fileWriter,
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -162,31 +180,33 @@ func (l *slogLogger) Panicw(ctx context.Context, msg string, kvs ...any) {
 func (l *slogLogger) Fatal(ctx context.Context, args ...any) {
 	msg := fmt.Sprint(args...)
 	l.log(ctx, FatalLevel, msg)
-	l.Sync()
+	_ = l.Close()
 	os.Exit(1)
 }
 
 func (l *slogLogger) Fatalf(ctx context.Context, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	l.log(ctx, FatalLevel, msg)
-	l.Sync()
+	_ = l.Close()
 	os.Exit(1)
 }
 
 func (l *slogLogger) Fatalw(ctx context.Context, msg string, kvs ...any) {
 	l.log(ctx, FatalLevel, msg, kvs...)
-	l.Sync()
+	_ = l.Close()
 	os.Exit(1)
 }
 
 // ---------------------------------------------------------------------------
-// Sync
+// Close
 // ---------------------------------------------------------------------------
 
-func (l *slogLogger) Sync() {
+// Close 刷盘并释放底层文件资源，应在服务退出时调用。
+func (l *slogLogger) Close() error {
 	if l.fileWriter != nil {
-		_ = l.fileWriter.Sync()
+		return l.fileWriter.Close()
 	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -213,8 +233,7 @@ func (l *slogLogger) log(ctx context.Context, level Level, msg string, kvs ...an
 	case ErrorLevel:
 		l.logger.ErrorContext(ctx, msg, kvs...)
 	case PanicLevel:
-		// 使用自定义 slog.Level 常量，由 replaceLevel ReplaceAttr 转为 "PANIC" 字符串输出，
-		// 不再手动追加 slog.String("level","panic")，避免 JSON key 重复。
+		// 使用自定义 slog.Level 常量，由 replaceLevel ReplaceAttr 转为 "PANIC" 字符串输出
 		l.logger.Log(ctx, slogLevelPanic, msg, kvs...)
 	case FatalLevel:
 		l.logger.Log(ctx, slogLevelFatal, msg, kvs...)
@@ -226,9 +245,13 @@ func (l *slogLogger) log(ctx context.Context, level Level, msg string, kvs ...an
 // ---------------------------------------------------------------------------
 
 // normalizeKVs 确保 kvs 为偶数个元素，防止 slog 因奇数长度产生 !BADKEY。
+// 始终返回新 slice，避免修改调用方的底层数组。
 func normalizeKVs(kvs []any) []any {
-	if len(kvs)%2 != 0 {
-		kvs = append(kvs, "(MISSING)")
+	if len(kvs)%2 == 0 {
+		return kvs
 	}
-	return kvs
+	fixed := make([]any, len(kvs)+1)
+	copy(fixed, kvs)
+	fixed[len(kvs)] = "(MISSING)"
+	return fixed
 }

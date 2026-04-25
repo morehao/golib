@@ -30,14 +30,14 @@ func TestLogLevels(t *testing.T) {
 }
 
 func TestSync(t *testing.T) {
-	Sync()
+	Close()
 
 	logger, err := getDefaultLogger()
 	assert.Nil(t, err)
 	if logger == nil {
-		t.Error("Default logger not re-initialized after Close")
+		t.Error("Default logger should still work after Close")
 	}
-	defaultLoggerInstance = &loggerInstance{Logger: logger}
+	InitLogger(GetDefaultLogConfig())
 }
 
 func TestLogWithFields(t *testing.T) {

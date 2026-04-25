@@ -33,7 +33,7 @@ func TestInit(t *testing.T) {
 		assert.Nil(t, err)
 
 		Info(context.Background(), "test message")
-		Sync()
+		Close()
 
 		expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
 		expectedFile := filepath.Join(expectedDir, "test-service_full.log")
@@ -143,7 +143,7 @@ func TestExtraKeys(t *testing.T) {
 	t.Log("Logging message with extra fields")
 	logger.Infow(ctx, "test message with extra fields", "key", "value")
 
-	Sync()
+	Close()
 }
 
 func TestLogRotation(t *testing.T) {
@@ -191,7 +191,7 @@ func TestLogRotation(t *testing.T) {
 
 	assert.True(t, rotated, "Log rotation should occur when file size exceeds MaxSize")
 
-	Sync()
+	Close()
 }
 
 func TestOTELTraceFieldsInjected(t *testing.T) {
@@ -218,7 +218,7 @@ func TestOTELTraceFieldsInjected(t *testing.T) {
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
 	logger.Infow(ctx, "otel trace fields", "key", "value")
 	span.End()
-	logger.Sync()
+	logger.Close()
 
 	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-test_full.log")
 	b, readErr := os.ReadFile(logFile)
@@ -254,7 +254,7 @@ func TestOTELTraceFieldsDisabled(t *testing.T) {
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
 	logger.Infow(ctx, "otel trace fields disabled", "key", "value")
 	span.End()
-	logger.Sync()
+	logger.Close()
 
 	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-disabled_full.log")
 	b, readErr := os.ReadFile(logFile)
@@ -290,7 +290,7 @@ func TestOTELTraceOptionOverridesConfig(t *testing.T) {
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
 	logger.Infow(ctx, "otel trace option override", "key", "value")
 	span.End()
-	logger.Sync()
+	logger.Close()
 
 	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-option_full.log")
 	b, readErr := os.ReadFile(logFile)
@@ -319,7 +319,7 @@ func TestOTELTraceWithoutSpanContext(t *testing.T) {
 	assert.Nil(t, err)
 
 	logger.Infow(context.Background(), "without span context", "key", "value")
-	logger.Sync()
+	logger.Close()
 
 	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-nospan_full.log")
 	b, readErr := os.ReadFile(logFile)

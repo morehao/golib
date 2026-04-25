@@ -1,11 +1,3 @@
-/*
- * @Author: morehao morehao@qq.com
- * @Date: 2025-04-26 19:13:30
- * @LastEditors: morehao morehao@qq.com
- * @LastEditTime: 2025-04-27 15:20:49
- * @FilePath: /golib/glog/logger.go
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
- */
 package glog
 
 import (
@@ -26,18 +18,14 @@ type Logger interface {
 	Errorf(ctx context.Context, format string, kvs ...any)
 	Errorw(ctx context.Context, msg string, kvs ...any)
 	Panic(ctx context.Context, args ...any)
-	Panicf(ctx context.Context, format string, kvs ...any)
+	Panicf(ctx context.Context, format string, args ...any)
 	Panicw(ctx context.Context, msg string, kvs ...any)
 	Fatal(ctx context.Context, args ...any)
-	Fatalf(ctx context.Context, format string, kvs ...any)
+	Fatalf(ctx context.Context, format string, args ...any)
 	Fatalw(ctx context.Context, msg string, kvs ...any)
-	getConfig() *LogConfig
-	Sync()
-}
-
-func getDefaultLogger() (Logger, error) {
-	if defaultLoggerInstance != nil {
-		return defaultLoggerInstance, nil
-	}
-	return newZapLogger(GetDefaultLogConfig(), WithCallerSkip(defaultLogCallerSkip))
+	// With 返回一个携带固定 kv 字段的子 Logger，场景示例：用于在请求链路中绑定 request_id 等字段。
+	With(kvs ...any) Logger
+	// Close 确保所有缓冲日志写入完毕并释放底层文件资源。
+	Close() error
+	GetConfig() *LogConfig
 }

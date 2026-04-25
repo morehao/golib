@@ -11,32 +11,22 @@ type loggerInstance struct {
 var defaultLoggerInstance *loggerInstance
 
 func InitLogger(cfg *LogConfig, opts ...Option) error {
-	var logger Logger
-	var err error
-
-	opt := getOptConfig(opts...)
-	loggerType := opt.loggerType
-	if loggerType == 0 {
-		loggerType = LoggerTypeZap
-	}
-
-	switch loggerType {
-	case LoggerTypeSlog:
-		logger, err = newSlogLogger(cfg, opts...)
-	default:
-		logger, err = newZapLogger(cfg, opts...)
-	}
+	logger, err := newLogger(cfg, opts...)
 	if err != nil {
 		return err
 	}
 	defaultLoggerInstance = &loggerInstance{Logger: logger}
-
 	return nil
 }
 
 func NewLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
-	var logger Logger
-	var err error
+	return newLogger(cfg, opts...)
+}
+
+func newLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
+	if cfg == nil {
+		cfg = GetDefaultLogConfig()
+	}
 
 	opt := getOptConfig(opts...)
 	loggerType := opt.loggerType
@@ -46,14 +36,17 @@ func NewLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 
 	switch loggerType {
 	case LoggerTypeSlog:
-		logger, err = newSlogLogger(cfg, opts...)
+		return newSlogLogger(cfg, opts...)
 	default:
-		logger, err = newZapLogger(cfg, opts...)
+		return newZapLogger(cfg, opts...)
 	}
-	if err != nil {
-		return nil, err
+}
+
+func getDefaultLogger() (Logger, error) {
+	if defaultLoggerInstance != nil {
+		return defaultLoggerInstance, nil
 	}
-	return logger, nil
+	return newLogger(GetDefaultLogConfig(), WithCallerSkip(defaultLogCallerSkip))
 }
 
 func GetDefaultLogger() Logger {
@@ -61,7 +54,7 @@ func GetDefaultLogger() Logger {
 }
 
 func GetLoggerConfig() *LogConfig {
-	return defaultLoggerInstance.getConfig()
+	return defaultLoggerInstance.GetConfig()
 }
 
 func Debug(ctx context.Context, args ...any) {
@@ -136,6 +129,6 @@ func Fatalw(ctx context.Context, msg string, kvs ...any) {
 	defaultLoggerInstance.Fatalw(ctx, msg, kvs...)
 }
 
-func Sync() {
-	defaultLoggerInstance.Logger.Sync()
+func Close() {
+	defaultLoggerInstance.Logger.Close()
 }
