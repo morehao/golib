@@ -129,6 +129,6 @@ func Fatalw(ctx context.Context, msg string, kvs ...any) {
 	defaultLoggerInstance.Fatalw(ctx, msg, kvs...)
 }
 
-func Close() {
-	defaultLoggerInstance.Logger.Close()
+func Close() error {
+	return defaultLoggerInstance.Logger.Close()
 }
