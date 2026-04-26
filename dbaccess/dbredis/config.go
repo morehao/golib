@@ -15,6 +15,7 @@ type RedisConfig struct {
 	ReadTimeout  time.Duration `yaml:"read_timeout"`  // 读取超时
 	WriteTimeout time.Duration `yaml:"write_timeout"` // 写入超时
 	loggerConfig *glog.LogConfig
+	callerSkip   int
 }
 
 type Option interface {
@@ -30,5 +31,11 @@ func (opt optionFunc) apply(cfg *RedisConfig) {
 func WithLogConfig(logConfig *glog.LogConfig) Option {
 	return optionFunc(func(cfg *RedisConfig) {
 		cfg.loggerConfig = logConfig
+	})
+}
+
+func WithCallerSkip(skip int) Option {
+	return optionFunc(func(cfg *RedisConfig) {
+		cfg.callerSkip = skip
 	})
 }

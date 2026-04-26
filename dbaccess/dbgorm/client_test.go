@@ -20,7 +20,7 @@ func TestNew(t *testing.T) {
 		Writer:    glog.WriterConsole,
 		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
-	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(1))
+	initLogErr := glog.InitLogger(logCfg)
 	assert.Nil(t, initLogErr)
 
 	cfg := &GormConfig{

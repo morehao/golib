@@ -24,6 +24,7 @@ type ormConfig struct {
 	MaxSqlLen     int
 	SlowThreshold time.Duration
 	loggerConfig  *glog.LogConfig
+	callerSkip    int
 }
 
 func newOrmLogger(cfg *ormConfig) (*ormLogger, error) {
@@ -32,7 +33,11 @@ func newOrmLogger(cfg *ormConfig) (*ormLogger, error) {
 		s = cfg.Database
 	}
 	glog.AppendExtraKeys(cfg.loggerConfig, glog.KeyAppRequestID)
-	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(9))
+	callerSkip := cfg.callerSkip
+	if callerSkip <= 0 {
+		callerSkip = 7
+	}
+	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(callerSkip))
 	if err != nil {
 		return nil, err
 	}

@@ -34,6 +34,7 @@ func New(cfg *GormConfig, opts ...Option) (*gorm.DB, error) {
 		MaxSqlLen:     cfg.MaxSqlLen,
 		SlowThreshold: cfg.SlowThreshold,
 		loggerConfig:  cfg.loggerConfig,
+		callerSkip:    cfg.callerSkip,
 	})
 	if logErr != nil {
 		return nil, fmt.Errorf("create logger failed: %w", logErr)

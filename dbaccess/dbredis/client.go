@@ -45,7 +45,11 @@ func New(cfg *RedisConfig, opts ...Option) (*redis.Client, error) {
 		service = "redis"
 	}
 
-	l, getLoggerErr := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(6))
+	callerSkip := cfg.callerSkip
+	if callerSkip <= 0 {
+		callerSkip = 8
+	}
+	l, getLoggerErr := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(callerSkip))
 	if getLoggerErr != nil {
 		return nil, getLoggerErr
 	}
