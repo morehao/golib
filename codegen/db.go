@@ -53,14 +53,31 @@ type postgresqlTableColumn struct {
 }
 
 type ModelField struct {
-	FieldName    string // 字段名称
-	FieldType    string // 字段数据类型，如int、string
-	ColumnName   string // 列名
-	ColumnType   string // 列数据类型，如varchar(255)
-	ColumnKey    string // 索引类型，如PRI（主键）, UNI（唯一索引）, MUL（非唯一索引）
-	IsNullable   bool   // 是否允许为空
-	DefaultValue string // 默认值
-	Comment      string // 字段注释
+	FieldName      string // 字段名称
+	FieldType      string // 字段数据类型，如int、string
+	ColumnName     string // 列名
+	ColumnType     string // 列数据类型，如varchar(255)
+	ColumnKey      string // 索引类型，如PRI（主键）, UNI（唯一索引）, MUL（非唯一索引）
+	IsNullable     bool   // 是否允许为空
+	DefaultValue   string // 默认值
+	Comment        string // 字段注释
+	IndexName      string // 索引名称
+	IsUniqueIndex  bool   // 是否唯一索引
+}
+
+type mysqlIndexInfo struct {
+	IndexName  string // 索引名称
+	ColumnName string // 列名
+	NonUnique  int    // 0=唯一索引, 1=非唯一索引
+	SeqInIndex int    // 索引中列的序列号
+}
+
+type postgresqlIndexInfo struct {
+	IndexName  string // 索引名称
+	ColumnName string // 列名
+	IsUnique   bool   // 是否唯一索引
+	IsPrimary  bool   // 是否主键
+	SeqInIndex int    // 索引中列的序列号
 }
 
 type TableList []string
