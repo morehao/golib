@@ -59,6 +59,12 @@ func (impl *mysqlImpl) getModelField(db *gorm.DB, dbName string, cfg *ModuleCfg)
 	if err := db.Raw(getColumnSql).Scan(&entities).Error; err != nil {
 		return nil, err
 	}
+
+	indexInfoMap, indexErr := impl.getIndexInfo(db, dbName, cfg.TableName)
+	if indexErr != nil {
+		return nil, indexErr
+	}
+
 	columnTypeMap := mysqlDefaultColumnTypeMap
 	if len(cfg.ColumnTypeMap) > 0 {
 		columnTypeMap = cfg.ColumnTypeMap
@@ -75,9 +81,31 @@ func (impl *mysqlImpl) getModelField(db *gorm.DB, dbName string, cfg *ModuleCfg)
 			DefaultValue: v.ColumnDefault.String,
 			Comment:      v.ColumnComment,
 		}
+		if colIndexInfo, ok := indexInfoMap[v.ColumnName]; ok {
+			item.IndexName = colIndexInfo.IndexName
+			item.IsUniqueIndex = colIndexInfo.NonUnique == 0
+		}
 		modelFieldList = append(modelFieldList, item)
 	}
 	return modelFieldList, nil
+}
+
+func (impl *mysqlImpl) getIndexInfo(db *gorm.DB, dbName, tableName string) (map[string]mysqlIndexInfo, error) {
+	var entities []mysqlIndexInfo
+	getIndexSql := fmt.Sprintf(`
+		SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SEQ_IN_INDEX
+		FROM INFORMATION_SCHEMA.STATISTICS
+		WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s'
+		ORDER BY INDEX_NAME, SEQ_IN_INDEX;
+	`, dbName, tableName)
+	if err := db.Raw(getIndexSql).Scan(&entities).Error; err != nil {
+		return nil, err
+	}
+	indexMap := make(map[string]mysqlIndexInfo)
+	for _, v := range entities {
+		indexMap[v.ColumnName] = v
+	}
+	return indexMap, nil
 }
 
 var mysqlDefaultColumnTypeMap = map[string]string{

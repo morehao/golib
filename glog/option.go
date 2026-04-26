@@ -28,6 +28,7 @@ type optConfig struct {
 	fieldHookFunc   FieldHookFunc
 	messageHookFunc MessageHookFunc
 	enableOTELTrace *bool
+	loggerType      LoggerType
 }
 
 type option func(cfg *optConfig)
@@ -62,4 +63,19 @@ func WithOTELTrace(enabled bool) Option {
 	return option(func(cfg *optConfig) {
 		cfg.enableOTELTrace = &enabled
 	})
+}
+
+// WithLoggerType 设置日志类型
+func WithLoggerType(t LoggerType) Option {
+	return option(func(cfg *optConfig) {
+		cfg.loggerType = t
+	})
+}
+
+func getOptConfig(opts ...Option) *optConfig {
+	cfg := &optConfig{}
+	for _, opt := range opts {
+		opt.apply(cfg)
+	}
+	return cfg
 }

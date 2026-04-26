@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -13,16 +14,19 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
+// ---------------------------------------------------------------------------
+// Encoder
+// ---------------------------------------------------------------------------
+
+// gZapEncoder 只负责 messageHook，fieldHook 已上移到 ctxLogw 层处理。
 type gZapEncoder struct {
 	zapcore.Encoder
-	fieldHookFunc   FieldHookFunc
 	messageHookFunc MessageHookFunc
 }
 
 func getZapEncoder(cfg *zapLoggerConfig) zapcore.Encoder {
 	encoderCfg := zap.NewProductionEncoderConfig()
 	encoderCfg.NameKey = "module"
-	// encoderCfg.EncodeTime 设置为本地时间到纳秒
 	encoderCfg.EncodeTime = func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 		enc.AppendString(t.Format("2006-01-02 15:04:05.000000"))
 	}
@@ -31,94 +35,140 @@ func getZapEncoder(cfg *zapLoggerConfig) zapcore.Encoder {
 	customEncoder := &gZapEncoder{
 		Encoder: encoder,
 	}
-	// 如果配置了字段钩子函数或消息钩子函数，则使用自定义编码器
 	if cfg != nil {
-		customEncoder.fieldHookFunc = cfg.fieldHookFunc
 		customEncoder.messageHookFunc = cfg.messageHookFunc
 	}
-
 	return customEncoder
 }
 
 func (enc *gZapEncoder) Clone() zapcore.Encoder {
-	encoderClone := enc.Encoder.Clone()
 	return &gZapEncoder{
-		Encoder:         encoderClone,
-		fieldHookFunc:   enc.fieldHookFunc,
+		Encoder:         enc.Encoder.Clone(),
 		messageHookFunc: enc.messageHookFunc,
 	}
 }
 
 func (enc *gZapEncoder) EncodeEntry(ent zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
-
-	// 执行字段钩子函数
-	if enc.fieldHookFunc != nil {
-		kvs := make([]Field, 0, len(fields))
-		for _, f := range fields {
-			kvs = append(kvs, KV(f.Key, f.String))
-		}
-		enc.fieldHookFunc(kvs)
-		for i, kv := range kvs {
-			fields[i].Type = zapcore.ReflectType
-			fields[i].Interface = kv.Value
-		}
-	}
-
-	// 执行消息钩子函数
 	if enc.messageHookFunc != nil {
 		ent.Message = enc.messageHookFunc(ent.Message)
 	}
-
-	// 使用修改后的字段进行编码
 	return enc.Encoder.EncodeEntry(ent, fields)
 }
+
+// ---------------------------------------------------------------------------
+// Console writer
+// ---------------------------------------------------------------------------
 
 func getZapStandoutWriter() zapcore.WriteSyncer {
 	return os.Stdout
 }
 
-func getZapFileWriter(cfg *LogConfig, fileSuffix string) (zapcore.WriteSyncer, error) {
-	// 目录始终按天组织
-	dir := strings.TrimSuffix(cfg.Dir, "/") + "/" + time.Now().Format("20060102")
-	if ok := fileExists(dir); !ok {
-		_ = os.MkdirAll(dir, os.ModePerm)
+// ---------------------------------------------------------------------------
+// Daily-rotate file writer
+// ---------------------------------------------------------------------------
+
+// dailyRotateWriter 在每次 Write 时检测日期，跨天后自动切换到新目录/文件。
+// 同时内置 256KB 缓冲，每 5 秒强制刷盘，与原实现保持一致。
+type dailyRotateWriter struct {
+	mu         sync.Mutex
+	cfg        *LogConfig
+	fileSuffix string // "full" or "wf"
+
+	// 当前活跃的 lumberjack logger 及其对应的日期字符串
+	current *lumberjack.Logger
+	today   string
+
+	// 带缓冲的包装层，跨天时需要一并替换
+	buffered *zapcore.BufferedWriteSyncer
+}
+
+func newDailyRotateWriter(cfg *LogConfig, fileSuffix string) (*dailyRotateWriter, error) {
+	w := &dailyRotateWriter{
+		cfg:        cfg,
+		fileSuffix: fileSuffix,
+	}
+	// 初始化当天的 writer
+	if err := w.rotate(time.Now().Format("20060102")); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// rotate 切换到新的日期目录，必须在持有 mu 或初始化阶段调用。
+func (w *dailyRotateWriter) rotate(today string) error {
+	// 关闭旧的缓冲 writer（刷盘）
+	if w.buffered != nil {
+		_ = w.buffered.Stop()
 	}
 
-	// 构建日志文件名（固定格式，由 lumberjack 处理切割）
-	logFilename := fmt.Sprintf("%s_%s.log", cfg.Service, fileSuffix)
-	logFilepath := path.Join(dir, logFilename)
+	dir := strings.TrimSuffix(w.cfg.Dir, "/") + "/" + today
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return fmt.Errorf("glog: mkdir %s: %w", dir, err)
+	}
 
-	// 设置 lumberjack 的默认值
-	maxSize := cfg.MaxSize
+	logFilepath := path.Join(dir, fmt.Sprintf("%s_%s.log", w.cfg.Service, w.fileSuffix))
+
+	maxSize := w.cfg.MaxSize
 	if maxSize <= 0 {
-		maxSize = 100 // 默认 100MB
+		maxSize = 100
 	}
-	maxBackups := cfg.MaxBackups
+	maxBackups := w.cfg.MaxBackups
 	if maxBackups <= 0 {
-		maxBackups = 10 // 默认保留 10 个文件
+		maxBackups = 10
 	}
-	maxAge := cfg.MaxAge
+	maxAge := w.cfg.MaxAge
 	if maxAge <= 0 {
-		maxAge = 7 // 默认保留 7 天
+		maxAge = 7
 	}
 
-	// 使用 lumberjack 实现日志切割和清理
-	lumberjackLogger := &lumberjack.Logger{
+	lj := &lumberjack.Logger{
 		Filename:   logFilepath,
-		MaxSize:    maxSize,    // 单个日志文件的最大大小（MB）
-		MaxBackups: maxBackups, // 保留的旧日志文件数量
-		MaxAge:     maxAge,     // 保留日志文件的最大天数
-		Compress:   cfg.Compress, // 是否压缩旧日志文件
-		LocalTime:  true,         // 使用本地时间
+		MaxSize:    maxSize,
+		MaxBackups: maxBackups,
+		MaxAge:     maxAge,
+		Compress:   w.cfg.Compress,
+		LocalTime:  true,
 	}
 
-	// 创建带缓冲的写入器
-	writer := &zapcore.BufferedWriteSyncer{
-		WS:            zapcore.AddSync(lumberjackLogger),
+	w.current = lj
+	w.today = today
+	w.buffered = &zapcore.BufferedWriteSyncer{
+		WS:            zapcore.AddSync(lj),
 		Size:          256 * 1024,
-		FlushInterval: time.Second * 5,
-		Clock:         nil,
+		FlushInterval: 5 * time.Second,
 	}
+	return nil
+}
 
-	return writer, nil
+// Write 实现 io.Writer，跨天时自动切换。
+func (w *dailyRotateWriter) Write(p []byte) (n int, err error) {
+	today := time.Now().Format("20060102")
+
+	w.mu.Lock()
+	if today != w.today {
+		if rotateErr := w.rotate(today); rotateErr != nil {
+			w.mu.Unlock()
+			return 0, rotateErr
+		}
+	}
+	buf := w.buffered
+	w.mu.Unlock()
+
+	return buf.Write(p)
+}
+
+// Sync 实现 zapcore.WriteSyncer。
+func (w *dailyRotateWriter) Sync() error {
+	w.mu.Lock()
+	buf := w.buffered
+	w.mu.Unlock()
+	if buf != nil {
+		return buf.Sync()
+	}
+	return nil
+}
+
+// getZapFileWriter 返回支持跨天切换的 WriteSyncer。
+func getZapFileWriter(cfg *LogConfig, fileSuffix string) (zapcore.WriteSyncer, error) {
+	return newDailyRotateWriter(cfg, fileSuffix)
 }

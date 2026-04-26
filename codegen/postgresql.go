@@ -54,7 +54,7 @@ func (impl *postgresqlImpl) getModelField(db *gorm.DB, schemaName string, cfg *M
 	// 查询列信息，同时获取注释
 	// PostgreSQL 的注释存储在 pg_description 系统表中
 	getColumnSql := fmt.Sprintf(`
-		SELECT 
+		SELECT
 			c.column_name,
 			c.data_type,
 			c.udt_name,
@@ -85,6 +85,12 @@ func (impl *postgresqlImpl) getModelField(db *gorm.DB, schemaName string, cfg *M
 	primaryKeys, pkErr := impl.getPrimaryKeys(db, schemaName, cfg.TableName)
 	if pkErr != nil {
 		return nil, pkErr
+	}
+
+	// 查询索引信息
+	indexInfoMap, indexErr := impl.getIndexInfo(db, schemaName, cfg.TableName)
+	if indexErr != nil {
+		return nil, indexErr
 	}
 
 	columnTypeMap := postgresqlDefaultColumnTypeMap
@@ -121,6 +127,11 @@ func (impl *postgresqlImpl) getModelField(db *gorm.DB, schemaName string, cfg *M
 		if item.FieldType == "" {
 			item.FieldType = "string"
 		}
+		// 填充索引信息
+		if colIndexInfo, ok := indexInfoMap[v.ColumnName]; ok {
+			item.IndexName = colIndexInfo.IndexName
+			item.IsUniqueIndex = colIndexInfo.IsUnique
+		}
 		modelFieldList = append(modelFieldList, item)
 	}
 	return modelFieldList, nil
@@ -149,6 +160,37 @@ func (impl *postgresqlImpl) getPrimaryKeys(db *gorm.DB, schemaName, tableName st
 		pkMap[col] = struct{}{}
 	}
 	return pkMap, nil
+}
+
+func (impl *postgresqlImpl) getIndexInfo(db *gorm.DB, schemaName, tableName string) (map[string]postgresqlIndexInfo, error) {
+	getIndexSql := fmt.Sprintf(`
+		SELECT
+			i.relname AS index_name,
+			a.attname AS column_name,
+			ix.indisunique AS is_unique,
+			ix.indisprimary AS is_primary,
+			(
+				SELECT array_position(ix.indkey, a.attnum)
+			) AS seq_in_index
+		FROM pg_index ix
+		JOIN pg_class i ON i.oid = ix.indexrelid
+		JOIN pg_namespace n ON n.oid = i.relnamespace
+		JOIN pg_class c ON c.oid = ix.indrelid
+		JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(ix.indkey)
+		WHERE n.nspname = '%s' AND c.relname = '%s'
+			AND i.relname NOT LIKE '%%_pkey'
+		ORDER BY i.relname, seq_in_index;
+	`, schemaName, tableName)
+
+	var entities []postgresqlIndexInfo
+	if err := db.Raw(getIndexSql).Scan(&entities).Error; err != nil {
+		return nil, err
+	}
+	indexMap := make(map[string]postgresqlIndexInfo)
+	for _, v := range entities {
+		indexMap[v.ColumnName] = v
+	}
+	return indexMap, nil
 }
 
 // buildColumnType 构建完整的列类型字符串

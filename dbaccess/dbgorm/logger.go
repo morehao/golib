@@ -3,13 +3,11 @@ package dbgorm
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/morehao/golib/glog"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"gorm.io/gorm/utils"
 )
 
 type ormLogger struct {
@@ -26,6 +24,7 @@ type ormConfig struct {
 	MaxSqlLen     int
 	SlowThreshold time.Duration
 	loggerConfig  *glog.LogConfig
+	callerSkip    int
 }
 
 func newOrmLogger(cfg *ormConfig) (*ormLogger, error) {
@@ -34,7 +33,11 @@ func newOrmLogger(cfg *ormConfig) (*ormLogger, error) {
 		s = cfg.Database
 	}
 	glog.AppendExtraKeys(cfg.loggerConfig, glog.KeyAppRequestID)
-	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(6))
+	callerSkip := cfg.callerSkip
+	if callerSkip <= 0 {
+		callerSkip = 7
+	}
+	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(callerSkip))
 	if err != nil {
 		return nil, err
 	}
@@ -51,19 +54,16 @@ func (l *ormLogger) LogMode(level logger.LogLevel) logger.Interface {
 	return l
 }
 
-func (l *ormLogger) Info(ctx context.Context, msg string, data ...interface{}) {
-	formatMsg := fmt.Sprintf(msg, append([]interface{}{utils.FileWithLineNum()}, data...)...)
-	l.Logger.Infow(ctx, formatMsg, l.commonFields(ctx)...)
+func (l *ormLogger) Info(ctx context.Context, msg string, data ...any) {
+	l.Logger.Infow(ctx, msg, append(l.commonFields(ctx), data...)...)
 }
 
-func (l *ormLogger) Warn(ctx context.Context, msg string, data ...interface{}) {
-	formatMsg := fmt.Sprintf(msg, append([]interface{}{utils.FileWithLineNum()}, data...)...)
-	l.Logger.Warnw(ctx, formatMsg, l.commonFields(ctx)...)
+func (l *ormLogger) Warn(ctx context.Context, msg string, data ...any) {
+	l.Logger.Warnw(ctx, msg, append(l.commonFields(ctx), data...)...)
 }
 
-func (l *ormLogger) Error(ctx context.Context, msg string, data ...interface{}) {
-	formatMsg := fmt.Sprintf(msg, append([]interface{}{utils.FileWithLineNum()}, data...)...)
-	l.Logger.Errorw(ctx, formatMsg, l.commonFields(ctx)...)
+func (l *ormLogger) Error(ctx context.Context, msg string, data ...any) {
+	l.Logger.Errorw(ctx, msg, append(l.commonFields(ctx), data...)...)
 }
 
 func (l *ormLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
@@ -98,8 +98,8 @@ func (l *ormLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 	}
 }
 
-func (l *ormLogger) commonFields(ctx context.Context) []interface{} {
-	return []interface{}{
+func (l *ormLogger) commonFields(ctx context.Context) []any {
+	return []any{
 		glog.KeyDbName, l.Database,
 	}
 }

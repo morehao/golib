@@ -14,6 +14,7 @@ type GormConfig struct {
 	MaxIdleConns    int           `yaml:"max_idle_conns"`    // 最大空闲连接数
 	MaxOpenConns    int           `yaml:"max_open_conns"`    // 最大打开连接数
 	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"` // 连接最大存活时间
+	callerSkip      int
 	loggerConfig    *glog.LogConfig
 }
 
@@ -42,5 +43,11 @@ func (opt optionFunc) apply(cfg *GormConfig) {
 func WithLogConfig(logConfig *glog.LogConfig) Option {
 	return optionFunc(func(cfg *GormConfig) {
 		cfg.loggerConfig = logConfig
+	})
+}
+
+func WithCallerSkip(skip int) Option {
+	return optionFunc(func(cfg *GormConfig) {
+		cfg.callerSkip = skip
 	})
 }

@@ -8,6 +8,7 @@ type ESConfig struct {
 	User         string `yaml:"user"`     // 用户名
 	Password     string `yaml:"password"` // 密码
 	loggerConfig *glog.LogConfig
+	callerSkip   int
 }
 
 type Option interface {
@@ -23,5 +24,11 @@ func (opt optionFunc) apply(cfg *ESConfig) {
 func WithLogConfig(logConfig *glog.LogConfig) Option {
 	return optionFunc(func(cfg *ESConfig) {
 		cfg.loggerConfig = logConfig
+	})
+}
+
+func WithCallerSkip(skip int) Option {
+	return optionFunc(func(cfg *ESConfig) {
+		cfg.callerSkip = skip
 	})
 }
