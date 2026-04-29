@@ -20,6 +20,12 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 	valueType := ValueType(req.ValueType)
 	if valueType == "" {
 		valueType = ValueTypeString
+	} else if err := validateValueType(req.ValueType); err != nil {
+		return err
+	}
+
+	if err := validateValue(valueType, req.Value); err != nil {
+		return err
 	}
 
 	status := StatusEnabled
@@ -45,16 +51,33 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 }
 
 func (a *AdminAPI) Update(ctx context.Context, id uint, req *UpdateReq) error {
+	var entity ConfigEntity
+	if err := a.store.db.WithContext(ctx).Where("id = ?", id).First(&entity).Error; err != nil {
+		return err
+	}
+
 	updateMap := make(map[string]any)
 
 	if req.Value != "" {
-		updateMap["value"] = req.Value
+		if err := validateValue(entity.ValueType, req.Value); err != nil {
+			return err
+		}
+
+		if req.Encrypted {
+			ciphertext, err := a.store.crypto.Encrypt(req.Value)
+			if err != nil {
+				return err
+			}
+			updateMap["value"] = ciphertext
+			updateMap["encryption_mode"] = EncryptionModeEncrypted
+		} else {
+			updateMap["value"] = req.Value
+			updateMap["encryption_mode"] = EncryptionModePlain
+		}
+	} else if req.Encrypted {
+		return errValueRequiredForEncryption
 	}
-	if req.Encrypted {
-		updateMap["encryption_mode"] = EncryptionModeEncrypted
-	} else {
-		updateMap["encryption_mode"] = EncryptionModePlain
-	}
+
 	if req.Status != "" {
 		updateMap["status"] = req.Status
 	}

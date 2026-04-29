@@ -9,20 +9,12 @@ const (
 )
 
 type UserClaims struct {
-	// UserID 用户ID
-	UserID uint `json:"userId"`
-	// PersonID 自然人ID
-	PersonID uint `json:"personId"`
-	// TenantID 租户ID
-	TenantID uint `json:"tenantId"`
-	// OrgID 组织ID
-	OrgID uint `json:"orgId"`
-	// DeptID 部门ID
-	DeptID uint `json:"deptId"`
-	// RoleIDs 角色ID列表
-	RoleIDs []uint `json:"roleIds"`
-	// UserType 用户类型
-	UserType string `json:"userType"`
-	// TokenType 令牌类型: temp-临时令牌, auth-登录鉴权令牌, refresh-刷新令牌
-	TokenType TokenType `json:"tokenType"`
+	UserID     uint      `json:"userId"`     // 用户ID
+	PersonID   uint      `json:"personId"`   // 自然人ID
+	TenantID   uint      `json:"tenantId"`   // 租户ID
+	OrgID      uint      `json:"orgId"`      // 组织ID
+	DeptID     uint      `json:"deptId"`     // 部门ID
+	RoleIDs    []uint    `json:"roleIds"`    // 角色ID列表
+	UserType   string    `json:"userType"`   // 用户类型
+	TokenType  TokenType `json:"tokenType"`  // 令牌类型: temp-临时令牌, auth-登录鉴权令牌, refresh-刷新令牌
 }
