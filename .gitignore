@@ -26,4 +26,4 @@ go.work.sum
 codegen/tmp/*
 **/log/**
 .history
-
+docs/superpowers/
