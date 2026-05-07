@@ -2,6 +2,7 @@ package excel
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xuri/excelize/v2"
@@ -72,5 +73,31 @@ func TestReadFile(t *testing.T) {
 	}
 	if rows[0].Age != 30 {
 		t.Fatalf("expected age 30, got %d", rows[0].Age)
+	}
+}
+
+func TestReadFromExcelize_StrictHeader(t *testing.T) {
+	f := excelize.NewFile()
+	sheet := f.GetSheetName(0)
+
+	if err := f.SetSheetRow(sheet, "A1", &[]interface{}{"姓名"}); err != nil {
+		t.Fatalf("set header row failed: %v", err)
+	}
+	if err := f.SetSheetRow(sheet, "A2", &[]interface{}{"张三"}); err != nil {
+		t.Fatalf("set data row failed: %v", err)
+	}
+
+	rows, rowErrs, err := ReadFromExcelize[readAPIRow](f, WithReadSheet(sheet), WithStrictHeader(true))
+	if err == nil {
+		t.Fatalf("expected strict header error, got nil")
+	}
+	if !strings.Contains(err.Error(), "required column \"年龄\" not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
+	if len(rowErrs) != 0 {
+		t.Fatalf("expected 0 row errors, got %d", len(rowErrs))
 	}
 }
