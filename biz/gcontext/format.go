@@ -83,9 +83,6 @@ func formatSeq(val reflect.Value, precision int, hasPrecision bool) {
 
 func formatMap(val reflect.Value, precision int, hasPrecision bool) {
 	if val.IsNil() {
-		if val.CanSet() {
-			val.Set(reflect.MakeMap(val.Type()))
-		}
 		return
 	}
 	elemKind := val.Type().Elem().Kind()

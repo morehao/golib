@@ -131,7 +131,9 @@ func TestPostStream(t *testing.T) {
 
 	buf := make([]byte, 1024)
 	n, err := stream.Read(buf)
-	assert.Nil(t, err)
+	if err != nil {
+		assert.Equal(t, io.EOF, err)
+	}
 	assert.Equal(t, "stream response", string(buf[:n]))
 }
 
@@ -304,14 +306,14 @@ func TestStreamLargeData(t *testing.T) {
 	buf := make([]byte, 1024)
 	for {
 		n, err := stream.Read(buf)
-		if err == io.EOF {
-			break
-		}
-		assert.Nil(t, err)
 		if n > 0 {
 			lines := strings.Count(string(buf[:n]), "\n")
 			receivedCount += lines
 		}
+		if err == io.EOF {
+			break
+		}
+		assert.Nil(t, err)
 	}
 
 	assert.Equal(t, lineCount, receivedCount)

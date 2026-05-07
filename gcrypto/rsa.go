@@ -39,13 +39,11 @@ func NewRSA(privateKeyPEM, publicKeyPEM string) (*RSA, error) {
 		if err != nil {
 			return nil, err
 		}
-		publicKey = &privateKey.PublicKey
 	} else if envKey := os.Getenv(RSAPrivateKeyEnv); envKey != "" {
 		privateKey, err = parsePrivateKeyPEM([]byte(envKey))
 		if err != nil {
 			return nil, err
 		}
-		publicKey = &privateKey.PublicKey
 	}
 
 	// 处理公钥（如果私钥已经提供了公钥，且没有明确指定公钥参数，则不需要从环境变量获取）
