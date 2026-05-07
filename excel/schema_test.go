@@ -9,8 +9,8 @@ import (
 func TestBuildSchema(t *testing.T) {
 	t.Run("parse col and alias tags", func(t *testing.T) {
 		type row struct {
-			Name string `ex:"col:姓名,alias:名字|name"`
-			Age  int    `ex:"col:年龄"`
+			Name string `excel:"col=姓名,alias=名字|name"`
+			Age  int    `excel:"col=年龄"`
 		}
 
 		schema, err := buildSchema(reflect.TypeOf(row{}), nil)
@@ -47,8 +47,8 @@ func TestBuildSchema(t *testing.T) {
 
 	t.Run("duplicate column conflict returns error", func(t *testing.T) {
 		type row struct {
-			Name  string `ex:"col:姓名"`
-			Alias string `ex:"col:别名,alias:姓名"`
+			Name  string `excel:"col=姓名"`
+			Alias string `excel:"col=别名,alias=姓名"`
 		}
 
 		_, err := buildSchema(reflect.TypeOf(row{}), nil)
@@ -60,8 +60,26 @@ func TestBuildSchema(t *testing.T) {
 		}
 	})
 
+	t.Run("ignore legacy ex tag key", func(t *testing.T) {
+		type row struct {
+			Name string `ex:"col=姓名"`
+			Age  int    `excel:"col=年龄"`
+		}
+
+		schema, err := buildSchema(reflect.TypeOf(row{}), nil)
+		if err != nil {
+			t.Fatalf("buildSchema returned error: %v", err)
+		}
+		if len(schema) != 1 {
+			t.Fatalf("expected 1 schema entry, got %d", len(schema))
+		}
+		if schema[0].fieldName != "Age" || schema[0].column != "年龄" {
+			t.Fatalf("expected only Age mapped to 年龄, got %#v", schema)
+		}
+	})
+
 	t.Run("parseExcelTag supports col and alias only", func(t *testing.T) {
-		tagMap, err := parseExcelTag("col:姓名,alias:名字|name")
+		tagMap, err := parseExcelTag("col=姓名,alias=名字|name")
 		if err != nil {
 			t.Fatalf("parseExcelTag returned error: %v", err)
 		}

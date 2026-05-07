@@ -39,7 +39,7 @@ func buildSchema(typ reflect.Type, explicit []ColumnRule) ([]columnSchema, error
 			continue
 		}
 
-		tagValue := field.Tag.Get(tagExcel)
+		tagValue := field.Tag.Get("excel")
 		if strings.TrimSpace(tagValue) == "" {
 			continue
 		}
@@ -133,14 +133,14 @@ func parseExcelTag(tag string) (map[string]string, error) {
 		return result, nil
 	}
 
-	parts := strings.Split(tag, tagSeparator)
+	parts := strings.Split(tag, ",")
 	for _, raw := range parts {
 		part := strings.TrimSpace(raw)
 		if part == "" {
 			continue
 		}
 
-		kv := strings.SplitN(part, tagKeySeparator, 2)
+		kv := strings.SplitN(part, "=", 2)
 		if len(kv) != 2 {
 			return nil, fmt.Errorf("invalid excel tag segment %q", part)
 		}
