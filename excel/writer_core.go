@@ -19,7 +19,7 @@ func writeWorkbook[T any](f *excelize.File, rows []T, cfg writeConfig) error {
 		return fmt.Errorf("headerRow must be >= 1")
 	}
 
-	schema, err := schemaForWrite[T](nil)
+	schema, err := schemaForWrite[T](cfg.columns)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func writeWorkbook[T any](f *excelize.File, rows []T, cfg writeConfig) error {
 	return nil
 }
 
-func schemaForWrite[T any](rules []ColumnRule) ([]columnSchema, error) {
+func schemaForWrite[T any](columns []string) ([]columnSchema, error) {
 	var zero T
 	typ := reflect.TypeOf(zero)
 	for typ != nil && typ.Kind() == reflect.Ptr {
@@ -93,23 +93,19 @@ func schemaForWrite[T any](rules []ColumnRule) ([]columnSchema, error) {
 	if err != nil {
 		return nil, err
 	}
-	merged, err := buildSchemaFromRules(typ, append([]columnSchema(nil), base...), rules)
-	if err != nil {
-		return nil, err
-	}
-	if len(rules) == 0 {
-		return merged, nil
+	if len(columns) == 0 {
+		return base, nil
 	}
 
-	idxByField := make(map[string]int, len(merged))
-	for i := range merged {
-		idxByField[merged[i].fieldName] = i
+	idxByField := make(map[string]int, len(base))
+	for i := range base {
+		idxByField[base[i].fieldName] = i
 	}
 
-	ordered := make([]columnSchema, 0, len(merged))
-	used := make(map[string]struct{}, len(merged))
-	for _, rule := range rules {
-		fieldName := strings.TrimSpace(rule.Field)
+	ordered := make([]columnSchema, 0, len(base))
+	used := make(map[string]struct{}, len(base))
+	for _, field := range columns {
+		fieldName := strings.TrimSpace(field)
 		if fieldName == "" {
 			continue
 		}
@@ -120,15 +116,15 @@ func schemaForWrite[T any](rules []ColumnRule) ([]columnSchema, error) {
 		if _, exists := used[fieldName]; exists {
 			continue
 		}
-		ordered = append(ordered, merged[idx])
+		ordered = append(ordered, base[idx])
 		used[fieldName] = struct{}{}
 	}
 
-	for i := range merged {
-		if _, exists := used[merged[i].fieldName]; exists {
+	for i := range base {
+		if _, exists := used[base[i].fieldName]; exists {
 			continue
 		}
-		ordered = append(ordered, merged[i])
+		ordered = append(ordered, base[i])
 	}
 
 	return ordered, nil
