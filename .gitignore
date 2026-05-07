@@ -27,3 +27,4 @@ codegen/tmp/*
 **/log/**
 .history
 docs/superpowers/
+.worktrees/

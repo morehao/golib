@@ -11,15 +11,33 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestGenModuleCode(t *testing.T) {
+func openMySQLForTest(t *testing.T) *gorm.DB {
+	t.Helper()
 	dsn := "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True"
-	db, openErr := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	assert.Nil(t, openErr)
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Skipf("skip mysql-dependent test: %v", err)
+	}
+	return db
+}
+
+func openPostgresForTest(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Skipf("skip postgres-dependent test: %v", err)
+	}
+	return db
+}
+
+func TestGenModuleCode(t *testing.T) {
+	db := openMySQLForTest(t)
 	// 获取当前的运行路径
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
-	tplDir := fmt.Sprintf("%s/tplExample/module", workDir)
-	rootDir := fmt.Sprintf("%s/example", workDir)
+	tplDir := fmt.Sprintf("%s/example/tplExample/module", workDir)
+	rootDir := t.TempDir()
 	layerParentDirMap := map[LayerName]string{
 		LayerNameModel:      "model",
 		LayerNameDao:        "dao",
@@ -78,7 +96,7 @@ func TestGenApiCode(t *testing.T) {
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
 	tplDir := fmt.Sprintf("%s/example/tplExample/api", workDir)
-	rootDir := fmt.Sprintf("%s/example", workDir)
+	rootDir := t.TempDir()
 	cfg := &ApiCfg{
 		CommonConfig: CommonConfig{
 			PackageName: "user",
@@ -113,14 +131,12 @@ func TestGenApiCode(t *testing.T) {
 }
 
 func TestGenModelCode(t *testing.T) {
-	dsn := "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True"
-	db, openErr := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	assert.Nil(t, openErr)
+	db := openMySQLForTest(t)
 	// 获取当前的运行路径
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
 	tplDir := fmt.Sprintf("%s/example/tplExample/model", workDir)
-	rootDir := fmt.Sprintf("%s/example", workDir)
+	rootDir := t.TempDir()
 	layerParentDirMap := map[LayerName]string{
 		LayerNameModel: "model",
 		LayerNameDao:   "dao",
@@ -195,14 +211,12 @@ func TestGenModelCode(t *testing.T) {
 }
 
 func TestGenModuleCodeWithPostgreSQL(t *testing.T) {
-	dsn := "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai"
-	db, openErr := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	assert.Nil(t, openErr)
+	db := openPostgresForTest(t)
 	// 获取当前的运行路径
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
 	tplDir := fmt.Sprintf("%s/example/tplExample/module", workDir)
-	rootDir := fmt.Sprintf("%s/example/postgresql", workDir)
+	rootDir := t.TempDir()
 	layerParentDirMap := map[LayerName]string{
 		LayerNameModel:      "model",
 		LayerNameDao:        "dao",
@@ -251,14 +265,12 @@ func TestGenModuleCodeWithPostgreSQL(t *testing.T) {
 }
 
 func TestGenModelCodeWithPostgreSQL(t *testing.T) {
-	dsn := "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai"
-	db, openErr := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	assert.Nil(t, openErr)
+	db := openPostgresForTest(t)
 	// 获取当前的运行路径
 	workDir, getErr := os.Getwd()
 	assert.Nil(t, getErr)
 	tplDir := fmt.Sprintf("%s/example/tplExample/model", workDir)
-	rootDir := fmt.Sprintf("%s/example/postgresql", workDir)
+	rootDir := t.TempDir()
 	layerParentDirMap := map[LayerName]string{
 		LayerNameModel: "model",
 		LayerNameDao:   "dao",
