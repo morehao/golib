@@ -49,3 +49,14 @@ func TestNewWriteWithOptions(t *testing.T) {
 		t.Fatalf("expected 0-based head row 1, got %d", w.headRow)
 	}
 }
+
+func TestWriterInitOptionFromWriteOptionsDoesNotSilentlyFixInvalidHeaderRow(t *testing.T) {
+	opt := WriterInitOptionFromWriteOptions(WithWriteHeaderRow(0))
+
+	if opt == nil {
+		t.Fatal("expected option not nil")
+	}
+	if opt.HeadRow != -1 {
+		t.Fatalf("expected invalid header row to remain invalid after 1-based to 0-based conversion, got %d", opt.HeadRow)
+	}
+}

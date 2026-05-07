@@ -43,10 +43,7 @@ func WriterInitOptionFromWriteOptions(options ...WriteOption) *WriterInitOption 
 		opt(&cfg)
 	}
 
-	headRow := 0
-	if cfg.headerRow > 0 {
-		headRow = cfg.headerRow - 1
-	}
+	headRow := cfg.headerRow - 1
 
 	return &WriterInitOption{
 		SheetName: cfg.sheet,

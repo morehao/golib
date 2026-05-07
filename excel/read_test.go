@@ -32,3 +32,25 @@ func TestRead(t *testing.T) {
 	errMap := string(errMapBytes)
 	fmt.Println(errMap)
 }
+
+func TestReadHeadRowOutOfRangeReturnsError(t *testing.T) {
+	f := excelize.NewFile()
+	defaultSheet := f.GetSheetName(0)
+	f.SetSheetRow(defaultSheet, "A1", &[]interface{}{"name"})
+	f.SetSheetRow(defaultSheet, "A2", &[]interface{}{"alice"})
+
+	type Dest struct {
+		Name string `ex:"head:name"`
+	}
+
+	reader := NewReader(f, &ReaderOption{
+		SheetNumber:  0,
+		HeadRow:      -1,
+		DataStartRow: 1,
+	})
+
+	var data []Dest
+	_, err := reader.Read(&data)
+	assert.Error(t, err)
+	assert.EqualError(t, err, "head row out of range")
+}

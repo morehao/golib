@@ -3,6 +3,8 @@ package excel
 const (
 	RowErrorCodeTypeMismatch   = "type_mismatch"
 	RowErrorCodeRequiredMissing = "required_missing"
+	// Deprecated: use RowErrorCodeRequiredMissing.
+	RowErrorCodeRequiredMiss   = RowErrorCodeRequiredMissing
 	RowErrorCodeColumnNotFound = "column_not_found"
 )
 

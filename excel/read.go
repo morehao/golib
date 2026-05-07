@@ -54,6 +54,9 @@ func (r *Reader) Read(dest interface{}) (map[int][]ValidationError, error) {
 	if len(rows) == 0 {
 		return nil, errors.New("empty sheet")
 	}
+	if r.headRow < 0 || r.headRow >= len(rows) {
+		return nil, errors.New("head row out of range")
+	}
 	if len(rows) <= r.dataStartRow {
 		return nil, errors.New("no data")
 	}
