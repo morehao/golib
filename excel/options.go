@@ -9,8 +9,8 @@ const (
 
 type readConfig struct {
 	sheet               string
-	headerRow           int
-	dataStartRow        int
+	headerRow           int // 1-based row number in Excel.
+	dataStartRow        int // 1-based row number in Excel.
 	strictHeader        bool
 	unknownColumnPolicy UnknownColumnPolicy
 	requiredColumns     []string
@@ -19,7 +19,7 @@ type readConfig struct {
 
 type writeConfig struct {
 	sheet     string
-	headerRow int
+	headerRow int // 1-based row number in Excel.
 	columns   []string
 }
 
@@ -56,18 +56,21 @@ func WithWriteSheet(sheet string) WriteOption {
 }
 
 func WithHeaderRow(row int) ReadOption {
+	// v2 options row indexes are 1-based.
 	return func(cfg *readConfig) {
 		cfg.headerRow = row
 	}
 }
 
 func WithWriteHeaderRow(row int) WriteOption {
+	// v2 options row indexes are 1-based.
 	return func(cfg *writeConfig) {
 		cfg.headerRow = row
 	}
 }
 
 func WithDataStartRow(row int) ReadOption {
+	// v2 options row indexes are 1-based.
 	return func(cfg *readConfig) {
 		cfg.dataStartRow = row
 	}

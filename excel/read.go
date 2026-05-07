@@ -25,8 +25,8 @@ type Reader struct {
 
 type ReaderOption struct {
 	SheetNumber  int // 0开始
-	HeadRow      int // 0开始
-	DataStartRow int // 0开始
+	HeadRow      int // 旧 API：0-based；v2 ReadOption 使用 1-based。
+	DataStartRow int // 旧 API：0-based；v2 ReadOption 使用 1-based。
 }
 
 func NewReader(file *excelize.File, option *ReaderOption) *Reader {

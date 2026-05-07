@@ -18,9 +18,10 @@ type Write struct {
 
 type WriterInitOption struct {
 	SheetName string // 表名
-	HeadRow   int    // 0开始
+	HeadRow   int    // 旧 API：0-based；v2 WriteOption 使用 1-based。
 }
 
+// NewWrite 使用旧初始化入口，HeadRow 按 0-based 解释。
 func NewWrite(option *WriterInitOption) *Write {
 	if option == nil {
 		return nil
@@ -31,6 +32,30 @@ func NewWrite(option *WriterInitOption) *Write {
 		headRow:   option.HeadRow,
 		file:      file,
 	}
+}
+
+func WriterInitOptionFromWriteOptions(options ...WriteOption) *WriterInitOption {
+	cfg := defaultWriteConfig()
+	for _, opt := range options {
+		if opt == nil {
+			continue
+		}
+		opt(&cfg)
+	}
+
+	headRow := 0
+	if cfg.headerRow > 0 {
+		headRow = cfg.headerRow - 1
+	}
+
+	return &WriterInitOption{
+		SheetName: cfg.sheet,
+		HeadRow:   headRow,
+	}
+}
+
+func NewWriteWithOptions(options ...WriteOption) *Write {
+	return NewWrite(WriterInitOptionFromWriteOptions(options...))
 }
 
 func (w *Write) SaveAs(data interface{}, filePath string) error {

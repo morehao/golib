@@ -2,7 +2,7 @@ package excel
 
 const (
 	RowErrorCodeTypeMismatch   = "type_mismatch"
-	RowErrorCodeRequiredMiss   = "required_missing"
+	RowErrorCodeRequiredMissing = "required_missing"
 	RowErrorCodeColumnNotFound = "column_not_found"
 )
 
