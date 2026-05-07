@@ -86,6 +86,10 @@ func readRows[T any](f *excelize.File, cfg readConfig) ([]T, []RowError, error) 
 		})
 	}
 
+	if len(bindings) == 0 {
+		return nil, nil, fmt.Errorf("excel: no matched columns in header")
+	}
+
 	result := make([]T, 0)
 	rowErrors := make([]RowError, 0)
 

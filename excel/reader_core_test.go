@@ -61,3 +61,40 @@ func TestReadRows_CollectRowErrors(t *testing.T) {
 		t.Fatalf("expected row error value abc, got %q", rowErrors[0].Value)
 	}
 }
+
+func TestReadRows_NoMatchedColumnsReturnsError(t *testing.T) {
+	type row struct {
+		Name string `excel:"col=姓名"`
+		Age  int    `excel:"col=年龄"`
+	}
+
+	f := excelize.NewFile()
+	sheet := f.GetSheetName(0)
+
+	if err := f.SetSheetRow(sheet, "A1", &[]interface{}{"城市", "国家"}); err != nil {
+		t.Fatalf("set header row failed: %v", err)
+	}
+	if err := f.SetSheetRow(sheet, "A2", &[]interface{}{"上海", "中国"}); err != nil {
+		t.Fatalf("set data row failed: %v", err)
+	}
+
+	cfg := defaultReadConfig()
+	cfg.sheet = sheet
+	cfg.headerRow = 1
+	cfg.dataStartRow = 2
+	cfg.strictHeader = false
+
+	rows, rowErrors, err := readRows[row](f, cfg)
+	if err == nil {
+		t.Fatalf("expected error when no columns matched, got nil")
+	}
+	if err.Error() != "excel: no matched columns in header" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected 0 rows, got %d", len(rows))
+	}
+	if len(rowErrors) != 0 {
+		t.Fatalf("expected 0 row errors, got %d", len(rowErrors))
+	}
+}
