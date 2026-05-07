@@ -1,99 +1,104 @@
-# go-excel
+# excel v2
 
 ## 简介
-`go-excel` 是基于 `excelize` 的简单封装，支持通过结构体便捷地读写 Excel 文件。
+`excel` 包基于 `excelize` 提供泛型读写能力。v2 使用统一的 API：
 
-无论是读取 Excel 还是写入 Excel，都需要定义一个结构体，结构体的字段通过 tag（即 `ex`）来指定 Excel 的相关信息。
+- `ReadFile[T]` / `ReadFromExcelize[T]`
+- `WriteFile[T]`
+- `WriteBytes[T]`
 
-## 特性
-- 通过结构体标签定义Excel列映射关系
-- 支持读取和写入Excel文件
-- 支持基于validator的数据验证
+结构体字段通过 `excel` 标签定义列映射，例如：`excel:"col=姓名"`。
 
-## 安装
+## 标签规则
 
-```bash
-go get github.com/morehao/go-excel
-```
-## 使用
-### 读取Excel
-读取Excel的简单示例：
-```go 
-package main
+- 基础列名：`excel:"col=姓名"`
+- 可选别名：`excel:"col=姓名,alias=名字|name"`
 
-import (
-	"fmt"
-	"github.com/morehao/go-excel"
-	"github.com/xuri/excelize/v2"
-)
+说明：
 
-type DataItem struct {
-	SerialNumber int64  `ex:"head:序号" validate:"min=10,max=100"`
-	UserName     string `ex:"head:姓名"`
-	Age          int64  `ex:"head:年龄"`
-}
+- 仅 `col` 为必填；`alias` 可选。
+- 旧标签 `ex:"..."` 不再作为映射来源。
 
-func main() {
-	f, openErr := excelize.OpenFile("test.xlsx")
-	if openErr != nil {
-		fmt.Println("open file error: ", openErr)
-		return
-	}
-	defer func() {
-		if err := f.Close(); err != nil {
-			fmt.Println(err)
-		}
-	}()
+## 读取示例
 
-	reader := excel.NewReader(f, &excel.ReaderOption{
-		SheetNumber:  0,
-		HeadRow:      0,
-		DataStartRow: 1,
-	})
-	var dataList []DataItem
-	validateErrMap, readerErr := reader.Read(&dataList)
-	if readerErr != nil {
-		fmt.Println("read error: ", readerErr)
-		return
-	}
-	if len(validateErrMap) > 0 {
-		fmt.Println("validate error: ", validateErrMap)
-		return
-	}
-	for _, item := range dataList {
-		fmt.Println(item)
-	}
-}
-```
-### 写入Excel
-生成Excel的简单示例：
 ```go
 package main
 
 import (
 	"fmt"
-	"github.com/morehao/go-excel"
+
+	"github.com/morehao/golib/excel"
 )
 
-type DataItem struct {
-	SerialNumber int64  `ex:"head:序号" validate:"min=10,max=100"`
-	UserName     string `ex:"head:姓名"`
-	Age          int64  `ex:"head:年龄"`
+type User struct {
+	Name string `excel:"col=姓名,alias=名字|name"`
+	Age  int    `excel:"col=年龄"`
 }
 
 func main() {
-	var dataList []DataItem
-	dataList = append(dataList, DataItem{
-		SerialNumber: 1,
-		UserName:     "张三",
-		Age:          18,
-	})
-	excelWriter := excel.NewWrite(&excel.WriteOption{
-		SheetName: "Sheet1",
-		HeadRow:   0,
-	})
-	if err := excelWriter.SaveAs(dataList, "write.xlsx"); err != nil {
-		fmt.Println("write error: ", err)
+	rows, rowErrs, err := excel.ReadFile[User](
+		"input.xlsx",
+		excel.WithReadSheet("Sheet1"),
+		excel.WithHeaderRow(1),
+		excel.WithDataStartRow(2),
+	)
+	if err != nil {
+		panic(err)
 	}
+	if len(rowErrs) > 0 {
+		fmt.Println("row errors:", rowErrs)
+	}
+
+	for _, row := range rows {
+		fmt.Println(row.Name, row.Age)
+	}
+}
+```
+
+## 写入示例（文件）
+
+```go
+package main
+
+import "github.com/morehao/golib/excel"
+
+type User struct {
+	Name string `excel:"col=姓名"`
+	Age  int    `excel:"col=年龄"`
+}
+
+func main() {
+	rows := []User{{Name: "张三", Age: 18}}
+	err := excel.WriteFile(
+		rows,
+		"output.xlsx",
+		excel.WithWriteSheet("Sheet1"),
+		excel.WithWriteHeaderRow(1),
+	)
+	if err != nil {
+		panic(err)
+	}
+}
+```
+
+## 写入示例（字节流）
+
+```go
+package main
+
+import "github.com/morehao/golib/excel"
+
+type User struct {
+	Name string `excel:"col=姓名"`
+	Age  int    `excel:"col=年龄"`
+}
+
+func main() {
+	rows := []User{{Name: "李四", Age: 20}}
+	b, err := excel.WriteBytes(rows, excel.WithWriteSheet("Sheet1"))
+	if err != nil {
+		panic(err)
+	}
+	_ = b
 }
 ```

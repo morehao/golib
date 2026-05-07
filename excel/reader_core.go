@@ -146,3 +146,12 @@ func readRows[T any](f *excelize.File, cfg readConfig) ([]T, []RowError, error) 
 
 	return result, rowErrors, nil
 }
+
+func isEmptyLine(data []string) bool {
+	for _, v := range data {
+		if strings.TrimSpace(v) != "" {
+			return false
+		}
+	}
+	return true
+}
