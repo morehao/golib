@@ -16,12 +16,12 @@ type Write struct {
 	lock      sync.Mutex
 }
 
-type WriteOption struct {
+type WriterInitOption struct {
 	SheetName string // 表名
 	HeadRow   int    // 0开始
 }
 
-func NewWrite(option *WriteOption) *Write {
+func NewWrite(option *WriterInitOption) *Write {
 	if option == nil {
 		return nil
 	}

@@ -18,7 +18,7 @@ func TestSaveAs(t *testing.T) {
 		UserName:     "张三",
 		Age:          18,
 	})
-	excelWriter := NewWrite(&WriteOption{
+	excelWriter := NewWrite(&WriterInitOption{
 		SheetName: "Sheet1",
 		HeadRow:   0,
 	})
