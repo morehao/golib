@@ -4,61 +4,52 @@ import (
 	"fmt"
 
 	"github.com/morehao/golib/excel"
-	"github.com/xuri/excelize/v2"
 )
 
 func main() {
-	read()
-	write()
+	path := "write.xlsx"
+	if err := write(path); err != nil {
+		fmt.Println("write error:", err)
+		return
+	}
+
+	if err := read(path); err != nil {
+		fmt.Println("read error:", err)
+	}
 }
 
 type DataItem struct {
-	SerialNumber int64  `ex:"head:序号" validate:"min=10,max=100"`
-	UserName     string `ex:"head:姓名"`
-	Age          int64  `ex:"head:年龄"`
+	SerialNumber int64  `excel:"col=序号"`
+	UserName     string `excel:"col=姓名"`
+	Age          int64  `excel:"col=年龄"`
 }
 
-func read() {
-	f, openErr := excelize.OpenFile("test.xlsx")
-	if openErr != nil {
-		fmt.Println("open file error: ", openErr)
+func read(path string) error {
+	dataList, rowErrs, err := excel.ReadFile[DataItem](path)
+	if err != nil {
+		return err
 	}
-	defer func() {
-		if err := f.Close(); err != nil {
-			fmt.Println(err)
-		}
-	}()
+	if len(rowErrs) > 0 {
+		fmt.Println("row errors:", rowErrs)
+	}
 
-	reader := excel.NewReader(f, &excel.ReaderOption{
-		SheetNumber:  0,
-		HeadRow:      0,
-		DataStartRow: 1,
-	})
-	var dataList []DataItem
-	validateErrMap, readerErr := reader.Read(&dataList)
-	if readerErr != nil {
-		fmt.Println("read error: ", readerErr)
-	}
-	if len(validateErrMap) > 0 {
-		fmt.Println("validate error: ", validateErrMap)
-	}
 	for _, item := range dataList {
 		fmt.Println(item)
 	}
+
+	return nil
 }
 
-func write() {
-	var dataList []DataItem
-	dataList = append(dataList, DataItem{
+func write(path string) error {
+	dataList := []DataItem{{
 		SerialNumber: 1,
 		UserName:     "张三",
 		Age:          18,
-	})
-	excelWriter := excel.NewWrite(&excel.WriteOption{
-		SheetName: "Sheet1",
-		HeadRow:   0,
-	})
-	if err := excelWriter.SaveAs(dataList, "write.xlsx"); err != nil {
-		fmt.Println("write error: ", err)
-	}
+	}, {
+		SerialNumber: 2,
+		UserName:     "李四",
+		Age:          22,
+	}}
+
+	return excel.WriteFile(dataList, path)
 }
