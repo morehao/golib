@@ -1,4 +1,4 @@
-package excel
+package gexcel
 
 type UnknownColumnPolicy string
 

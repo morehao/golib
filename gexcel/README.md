@@ -1,13 +1,13 @@
-# excel v2
+# gexcel v2
 
 ## 简介
-`excel` 包基于 `excelize` 提供泛型读写能力。v2 使用统一的 API：
+`gexcel` 包基于 `excelize` 提供泛型读写能力。v2 使用统一的 API：
 
 - `ReadFile[T]` / `ReadFromExcelize[T]`
 - `WriteFile[T]`
 - `WriteBytes[T]`
 
-结构体字段通过 `excel` 标签定义列映射，例如：`excel:"col=姓名"`。
+结构体字段通过 `excel` 标签（tag）定义列映射，例如：`excel:"col=姓名"`。
 
 ## 标签规则
 
@@ -27,7 +27,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/morehao/golib/excel"
+	"github.com/morehao/golib/gexcel"
 )
 
 type User struct {
@@ -36,11 +36,11 @@ type User struct {
 }
 
 func main() {
-	rows, rowErrs, err := excel.ReadFile[User](
+	rows, rowErrs, err := gexcel.ReadFile[User](
 		"input.xlsx",
-		excel.WithReadSheet("Sheet1"),
-		excel.WithHeaderRow(1),
-		excel.WithDataStartRow(2),
+		gexcel.WithReadSheet("Sheet1"),
+		gexcel.WithHeaderRow(1),
+		gexcel.WithDataStartRow(2),
 	)
 	if err != nil {
 		panic(err)
@@ -60,7 +60,7 @@ func main() {
 ```go
 package main
 
-import "github.com/morehao/golib/excel"
+import "github.com/morehao/golib/gexcel"
 
 type User struct {
 	Name string `excel:"col=姓名"`
@@ -69,11 +69,11 @@ type User struct {
 
 func main() {
 	rows := []User{{Name: "张三", Age: 18}}
-	err := excel.WriteFile(
+	err := gexcel.WriteFile(
 		rows,
 		"output.xlsx",
-		excel.WithWriteSheet("Sheet1"),
-		excel.WithWriteHeaderRow(1),
+		gexcel.WithWriteSheet("Sheet1"),
+		gexcel.WithWriteHeaderRow(1),
 	)
 	if err != nil {
 		panic(err)
@@ -86,7 +86,7 @@ func main() {
 ```go
 package main
 
-import "github.com/morehao/golib/excel"
+import "github.com/morehao/golib/gexcel"
 
 type User struct {
 	Name string `excel:"col=姓名"`
@@ -95,7 +95,7 @@ type User struct {
 
 func main() {
 	rows := []User{{Name: "李四", Age: 20}}
-	b, err := excel.WriteBytes(rows, excel.WithWriteSheet("Sheet1"))
+	b, err := gexcel.WriteBytes(rows, gexcel.WithWriteSheet("Sheet1"))
 	if err != nil {
 		panic(err)
 	}

@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/morehao/golib/excel"
+	"github.com/morehao/golib/gexcel"
 )
 
 func main() {
@@ -25,7 +25,7 @@ type DataItem struct {
 }
 
 func read(path string) error {
-	dataList, rowErrs, err := excel.ReadFile[DataItem](path)
+	dataList, rowErrs, err := gexcel.ReadFile[DataItem](path)
 	if err != nil {
 		return err
 	}
@@ -51,5 +51,5 @@ func write(path string) error {
 		Age:          22,
 	}}
 
-	return excel.WriteFile(dataList, path)
+	return gexcel.WriteFile(dataList, path)
 }

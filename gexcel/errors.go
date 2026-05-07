@@ -1,4 +1,4 @@
-package excel
+package gexcel
 
 const (
 	RowErrorCodeTypeMismatch   = "type_mismatch"
