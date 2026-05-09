@@ -35,7 +35,13 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 		client.Host = cfg.Host
 		client.Timeout = cfg.Timeout
 		client.Retry = cfg.MaxRetry
+		client.MaxIdleConns = cfg.MaxIdleConns
+		client.MaxConnsPerHost = cfg.MaxConnsPerHost
+	}
+	if client.MaxIdleConns <= 0 {
 		client.MaxIdleConns = 100
+	}
+	if client.MaxConnsPerHost <= 0 {
 		client.MaxConnsPerHost = 10
 	}
 	return client
@@ -398,12 +404,10 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 
 		resp, err = httpClient.Do(request)
 		if err == nil {
-			if resp.StatusCode < 500 {
+			if resp.StatusCode < 500 || i == retryCount-1 {
 				break
 			}
-			if resp.Body != nil {
-				resp.Body.Close()
-			}
+			resp.Body.Close()
 		}
 
 		if i < retryCount-1 {

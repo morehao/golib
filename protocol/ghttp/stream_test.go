@@ -379,3 +379,176 @@ func TestGetStreamInjectsOTelTraceAndRequestID(t *testing.T) {
 	assert.NotEmpty(t, gotTraceParent)
 	assert.Equal(t, requestID, gotRequestID)
 }
+
+func TestToResult(t *testing.T) {
+	content := `{"message":"hello world","code":200}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(content))
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:  "test",
+		Host:    srv.URL,
+		Timeout: 5 * time.Second,
+	}
+	client := NewClient(cfg)
+	ctx := context.Background()
+
+	stream, err := client.GetStream(ctx, "/", RequestOption{})
+	assert.Nil(t, err)
+	assert.NotNil(t, stream)
+
+	result, err := stream.ToResult()
+	assert.Nil(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, http.StatusOK, result.HttpCode)
+	assert.Equal(t, content, result.String())
+
+	// 验证 JSON 反序列化
+	var resp struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	}
+	err = result.JSON(&resp)
+	assert.Nil(t, err)
+	assert.Equal(t, "hello world", resp.Message)
+	assert.Equal(t, 200, resp.Code)
+}
+
+func TestToResult_NilReader(t *testing.T) {
+	stream := &StreamResult{}
+	result, err := stream.ToResult()
+	assert.Nil(t, result)
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "stream reader is nil")
+}
+
+func TestToResult_AfterToResult(t *testing.T) {
+	content := "test data"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(content))
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:  "test",
+		Host:    srv.URL,
+		Timeout: 5 * time.Second,
+	}
+	client := NewClient(cfg)
+	ctx := context.Background()
+
+	stream, err := client.GetStream(ctx, "/", RequestOption{})
+	assert.Nil(t, err)
+	assert.NotNil(t, stream)
+
+	// 第一次 ToResult 成功
+	result, err := stream.ToResult()
+	assert.Nil(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, content, result.String())
+
+	// 第二次 ToResult 应该失败，因为 reader 已被置空
+	result2, err2 := stream.ToResult()
+	assert.Nil(t, result2)
+	assert.NotNil(t, err2)
+	assert.Contains(t, err2.Error(), "stream reader is nil")
+
+	// Read 也应该失败
+	buf := make([]byte, 1024)
+	n, err := stream.Read(buf)
+	assert.Equal(t, 0, n)
+	assert.NotNil(t, err)
+}
+
+func TestToResult_LargeData(t *testing.T) {
+	content := strings.Repeat("hello world\n", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(content))
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:  "test",
+		Host:    srv.URL,
+		Timeout: 5 * time.Second,
+	}
+	client := NewClient(cfg)
+	ctx := context.Background()
+
+	stream, err := client.GetStream(ctx, "/", RequestOption{})
+	assert.Nil(t, err)
+	assert.NotNil(t, stream)
+
+	result, err := stream.ToResult()
+	assert.Nil(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, http.StatusOK, result.HttpCode)
+	assert.Equal(t, content, result.String())
+}
+
+func TestStreamErrorBodyNotEmpty(t *testing.T) {
+	errorBody := `{"error":"bad request","detail":"missing required field"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(errorBody))
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:  "test",
+		Host:    srv.URL,
+		Timeout: 5 * time.Second,
+	}
+	client := NewClient(cfg)
+	ctx := context.Background()
+
+	stream, err := client.GetStream(ctx, "/", RequestOption{})
+	assert.NotNil(t, err)
+	assert.NotNil(t, stream)
+	defer stream.Close()
+
+	httpErr, ok := err.(*HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.HttpCode)
+	assert.Equal(t, errorBody, string(httpErr.Body))
+	assert.Equal(t, "client error", httpErr.Message)
+
+	// 验证 StreamResult 仍可读取错误响应体
+	result, err := stream.ToResult()
+	assert.Nil(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, errorBody, result.String())
+}
+
+func TestStreamErrorServerErrorBodyNotEmpty(t *testing.T) {
+	errorBody := `{"error":"internal server error","trace":"abc123"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(errorBody))
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:  "test",
+		Host:    srv.URL,
+		Timeout: 5 * time.Second,
+	}
+	client := NewClient(cfg)
+	ctx := context.Background()
+
+	stream, err := client.GetStream(ctx, "/", RequestOption{})
+	assert.NotNil(t, err)
+	assert.NotNil(t, stream)
+	defer stream.Close()
+
+	httpErr, ok := err.(*HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusInternalServerError, httpErr.HttpCode)
+	assert.Equal(t, errorBody, string(httpErr.Body))
+	assert.Equal(t, "server error", httpErr.Message)
+}
