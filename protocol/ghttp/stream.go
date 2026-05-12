@@ -170,10 +170,7 @@ func (c *Client) doStream(ctx context.Context, request *http.Request, opt *Reque
 
 		resp, err = httpClient.Do(request)
 		if err == nil {
-			if resp.StatusCode < 500 || i == retryCount-1 {
-				break
-			}
-			resp.Body.Close()
+			break
 		}
 
 		if i < retryCount-1 {
