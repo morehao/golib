@@ -13,7 +13,7 @@ import (
 )
 
 func TestNewRejectsMissingEndpoint(t *testing.T) {
-	_, err := New(core.MinIOConfig{})
+	_, err := New(&core.MinIOConfig{})
 	require.ErrorIs(t, err, core.ErrInvalidConfig)
 }
 
@@ -22,7 +22,7 @@ func TestMinIOIntegrationObjectLifecycle(t *testing.T) {
 		t.Skip("set STORAGE_MINIO_TEST=1 to run minio integration test")
 	}
 
-	st, err := New(core.MinIOConfig{
+	st, err := New(&core.MinIOConfig{
 		Endpoint:  os.Getenv("MINIO_ENDPOINT"),
 		AccessKey: os.Getenv("MINIO_ACCESS_KEY"),
 		SecretKey: os.Getenv("MINIO_SECRET_KEY"),

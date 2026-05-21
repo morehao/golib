@@ -22,8 +22,8 @@ type client struct {
 	bucket string
 }
 
-func New(cfg core.S3Config) (core.Storage, error) {
-	if strings.TrimSpace(cfg.Region) == "" || strings.TrimSpace(cfg.AccessKey) == "" || strings.TrimSpace(cfg.SecretKey) == "" || strings.TrimSpace(cfg.Bucket) == "" {
+func New(cfg *core.S3Config) (core.Storage, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Region) == "" || strings.TrimSpace(cfg.AccessKey) == "" || strings.TrimSpace(cfg.SecretKey) == "" || strings.TrimSpace(cfg.Bucket) == "" {
 		return nil, fmt.Errorf("invalid s3 config: %w", core.ErrInvalidConfig)
 	}
 	awsCfg, err := config.LoadDefaultConfig(context.Background(),

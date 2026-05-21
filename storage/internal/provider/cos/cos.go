@@ -23,8 +23,8 @@ type client struct {
 	secretKey string
 }
 
-func New(cfg core.COSConfig) (core.Storage, error) {
-	if strings.TrimSpace(cfg.Endpoint) == "" ||
+func New(cfg *core.COSConfig) (core.Storage, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Endpoint) == "" ||
 		strings.TrimSpace(cfg.SecretID) == "" ||
 		strings.TrimSpace(cfg.SecretKey) == "" ||
 		strings.TrimSpace(cfg.Bucket) == "" {

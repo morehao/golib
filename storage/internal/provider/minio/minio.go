@@ -20,8 +20,8 @@ type client struct {
 	bucket string
 }
 
-func New(cfg core.MinIOConfig) (core.Storage, error) {
-	if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.AccessKey) == "" || strings.TrimSpace(cfg.SecretKey) == "" || strings.TrimSpace(cfg.Bucket) == "" {
+func New(cfg *core.MinIOConfig) (core.Storage, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.AccessKey) == "" || strings.TrimSpace(cfg.SecretKey) == "" || strings.TrimSpace(cfg.Bucket) == "" {
 		return nil, fmt.Errorf("invalid minio config: %w", core.ErrInvalidConfig)
 	}
 	sdk, err := minio.New(cfg.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""), Secure: cfg.UseSSL})

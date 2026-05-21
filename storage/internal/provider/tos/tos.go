@@ -19,8 +19,8 @@ type client struct {
 	bucket string
 }
 
-func New(cfg core.TOSConfig) (core.Storage, error) {
-	if strings.TrimSpace(cfg.Endpoint) == "" ||
+func New(cfg *core.TOSConfig) (core.Storage, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Endpoint) == "" ||
 		strings.TrimSpace(cfg.Region) == "" ||
 		strings.TrimSpace(cfg.AccessKey) == "" ||
 		strings.TrimSpace(cfg.SecretKey) == "" ||

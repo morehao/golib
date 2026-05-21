@@ -12,7 +12,7 @@ import (
 )
 
 func TestNewRejectsMissingRegion(t *testing.T) {
-	_, err := New(core.S3Config{})
+	_, err := New(&core.S3Config{})
 	require.ErrorIs(t, err, core.ErrInvalidConfig)
 }
 
@@ -21,7 +21,7 @@ func TestS3IntegrationPresignedURL(t *testing.T) {
 		t.Skip("set STORAGE_S3_TEST=1 to run s3 integration test")
 	}
 
-	st, err := New(core.S3Config{
+	st, err := New(&core.S3Config{
 		Endpoint:  os.Getenv("S3_ENDPOINT"),
 		Region:    os.Getenv("S3_REGION"),
 		AccessKey: os.Getenv("S3_ACCESS_KEY"),

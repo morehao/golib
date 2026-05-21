@@ -12,7 +12,7 @@ import (
 )
 
 func TestNewRejectsMissingAccessKey(t *testing.T) {
-	_, err := New(core.TOSConfig{})
+	_, err := New(&core.TOSConfig{})
 	require.ErrorIs(t, err, core.ErrInvalidConfig)
 }
 
@@ -21,7 +21,7 @@ func TestTOSIntegrationObjectLifecycle(t *testing.T) {
 		t.Skip("set STORAGE_TOS_TEST=1 to run tos integration test")
 	}
 
-	st, err := New(core.TOSConfig{
+	st, err := New(&core.TOSConfig{
 		Endpoint:  os.Getenv("TOS_ENDPOINT"),
 		Region:    os.Getenv("TOS_REGION"),
 		AccessKey: os.Getenv("TOS_ACCESS_KEY"),
