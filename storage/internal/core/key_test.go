@@ -15,9 +15,11 @@ func TestNormalizeObjectKey(t *testing.T) {
 	}{
 		{name: "trim and slash normalize", input: "  images\\2026\\a.png  ", want: "images/2026/a.png"},
 		{name: "collapse repeated slash", input: "images//2026///a.png", want: "images/2026/a.png"},
-		{name: "reject empty", input: "   ", wantErr: ErrInvalidConfig},
-		{name: "reject leading slash", input: "/images/a.png", wantErr: ErrInvalidConfig},
-		{name: "reject uri", input: "s3://bucket/a.png", wantErr: ErrInvalidConfig},
+		{name: "happy path clean input", input: "images/2026/a.png", want: "images/2026/a.png"},
+		{name: "reject empty", input: "   ", wantErr: ErrInvalidKey},
+		{name: "reject leading slash", input: "/images/a.png", wantErr: ErrInvalidKey},
+		{name: "reject trailing slash", input: "images/a.png/", wantErr: ErrInvalidKey},
+		{name: "reject uri", input: "s3://bucket/a.png", wantErr: ErrInvalidKey},
 	}
 
 	for _, tt := range tests {
@@ -31,4 +33,10 @@ func TestNormalizeObjectKey(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestValidateObjectKey(t *testing.T) {
+	require.NoError(t, ValidateObjectKey("valid/key.txt"))
+	require.Error(t, ValidateObjectKey("/invalid"))
+	require.Error(t, ValidateObjectKey(""))
 }
