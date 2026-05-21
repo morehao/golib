@@ -4,6 +4,11 @@ go 1.26.1
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.5.1
+	github.com/aws/aws-sdk-go-v2 v1.41.7
+	github.com/aws/aws-sdk-go-v2/config v1.32.17
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.16
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.101.0
 	github.com/elastic/go-elasticsearch/v8 v8.19.3
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-playground/locales v0.14.1
@@ -13,10 +18,13 @@ require (
 	github.com/go-redsync/redsync/v4 v4.16.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
+	github.com/minio/minio-go/v7 v7.1.0
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
+	github.com/tencentyun/cos-go-sdk-v5 v0.7.73
+	github.com/volcengine/ve-tos-golang-sdk/v2 v2.9.5
 	github.com/xuri/excelize/v2 v2.10.1
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
@@ -29,6 +37,37 @@ require (
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 	resty.dev/v3 v3.0.0-beta.6
+)
+
+require (
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.10 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.23 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.23 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.23 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.24 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.9 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.15 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.23 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.23 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.0.11 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.30.17 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
+	github.com/aws/smithy-go v1.25.1 // indirect
+	github.com/clbanning/mxj v1.8.4 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/go-ini/ini v1.67.0 // indirect
+	github.com/google/go-querystring v1.0.0 // indirect
+	github.com/klauspost/compress v1.18.2 // indirect
+	github.com/klauspost/crc32 v1.3.0 // indirect
+	github.com/minio/crc64nvme v1.1.1 // indirect
+	github.com/minio/md5-simd v1.1.2 // indirect
+	github.com/mitchellh/mapstructure v1.4.3 // indirect
+	github.com/mozillazg/go-httpheader v0.2.1 // indirect
+	github.com/philhofer/fwd v1.2.0 // indirect
+	github.com/rs/xid v1.6.0 // indirect
+	github.com/tinylib/msgp v1.6.1 // indirect
+	github.com/zeebo/xxh3 v1.1.0 // indirect
 )
 
 require (
