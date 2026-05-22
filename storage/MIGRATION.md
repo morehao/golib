@@ -95,3 +95,15 @@ storage.Config{
 | `COSConfig.SecretKey` | `Config.SecretAccessKey` | — |
 | `TOSConfig.AccessKey` | `Config.AccessKeyID` | — |
 | `TOSConfig.SecretKey` | `Config.SecretAccessKey` | — |
+
+## Contract Package Change
+
+公开契约已经从 `storage` 根包迁移到 `storage/spec`。
+
+- `storage.New` 仍然保留为统一入口
+- `storage.Config` 迁移为 `spec.Config`
+- `storage.ProviderS3` 这类 provider 常量迁移为 `spec.ProviderS3`
+- `storage.WithContentType` 这类 option helper 迁移为 `spec.WithContentType`
+- `storage.ErrInvalidConfig` 这类公开错误迁移为 `spec.ErrInvalidConfig`
+
+新的调用心智是：`storage` 表示入口，`storage/spec` 表示契约。
