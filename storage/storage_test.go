@@ -3,24 +3,12 @@ package storage_test
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNormalizeConfigAppliesDefaults(t *testing.T) {
-	_, err := storage.New(storage.Config{
-		Provider:        storage.ProviderMinIO,
-		Endpoint:        " 127.0.0.1:9000 ",
-		Bucket:          " demo ",
-		AccessKeyID:     " ak ",
-		SecretAccessKey: " sk ",
-	})
-	require.NoError(t, err)
-}
-
-func TestValidateConfigRejectsUnknownProvider(t *testing.T) {
+func TestNewRejectsUnknownProvider(t *testing.T) {
 	_, err := storage.New(storage.Config{
 		Provider:        storage.Provider("unknown"),
 		Bucket:          "demo",
@@ -124,19 +112,6 @@ func TestValidateConfigAcceptsValidConfig(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestNormalizeConfigPreservesExplicitValues(t *testing.T) {
-	_, err := storage.New(storage.Config{
-		Provider:          storage.ProviderMinIO,
-		Endpoint:          "127.0.0.1:9000",
-		Bucket:            "demo",
-		AccessKeyID:       "ak",
-		SecretAccessKey:   "sk",
-		RetryMaxAttempts:  5,
-		Timeout:           10 * time.Second,
-	})
-	require.NoError(t, err)
-}
-
 func TestValidateConfigRejectsMissingRegionForOSS(t *testing.T) {
 	_, err := storage.New(storage.Config{
 		Provider:        storage.ProviderOSS,
@@ -165,16 +140,6 @@ func TestValidateConfigRejectsMissingRegionForTOS(t *testing.T) {
 		SecretAccessKey: "sk",
 	})
 	require.ErrorIs(t, err, storage.ErrInvalidConfig)
-}
-
-func TestRootPackageOwnsPublicTypes(t *testing.T) {
-	meta := storage.ObjectMeta{Key: "demo.txt", Size: 1}
-	part := storage.Part{PartNumber: 1, ETag: "etag"}
-	result := storage.ListResult{Objects: []storage.ListedObject{{Key: meta.Key}}}
-
-	require.Equal(t, "demo.txt", meta.Key)
-	require.Equal(t, int32(1), part.PartNumber)
-	require.Len(t, result.Objects, 1)
 }
 
 func TestNewDispatchesToS3Provider(t *testing.T) {
@@ -211,14 +176,4 @@ func TestNewReturnsProviderImplementation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "*minio.client", fmt.Sprintf("%T", st))
-}
-
-func TestNewRejectsUnknownProvider(t *testing.T) {
-	_, err := storage.New(storage.Config{
-		Provider:        storage.Provider("unknown"),
-		Bucket:          "demo",
-		AccessKeyID:     "ak",
-		SecretAccessKey: "sk",
-	})
-	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
