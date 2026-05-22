@@ -55,11 +55,7 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 }
 
 func (u *uploader) Complete(ctx context.Context, parts []driver.Part) error {
-	cp := make([]core.Part, len(parts))
-	for i, p := range parts {
-		cp[i] = core.Part{PartNumber: p.PartNumber, ETag: p.ETag}
-	}
-	if err := core.ValidateParts(cp); err != nil {
+	if err := core.ValidateParts(parts); err != nil {
 		return err
 	}
 	completed := make([]minio.CompletePart, 0, len(parts))

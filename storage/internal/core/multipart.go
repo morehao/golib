@@ -1,6 +1,10 @@
 package core
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/morehao/golib/storage/internal/driver"
+)
 
 func ValidatePartNumber(partNum int32) error {
 	if partNum <= 0 {
@@ -9,7 +13,7 @@ func ValidatePartNumber(partNum int32) error {
 	return nil
 }
 
-func ValidateParts(parts []Part) error {
+func ValidateParts(parts []driver.Part) error {
 	if len(parts) == 0 {
 		return fmt.Errorf("storage: parts list must not be empty: %w", ErrInvalidKey)
 	}
