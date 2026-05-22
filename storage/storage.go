@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io"
+	"time"
 
 	cosprovider "github.com/morehao/golib/storage/internal/provider/cos"
 	minioprovider "github.com/morehao/golib/storage/internal/provider/minio"
@@ -14,40 +16,30 @@ import (
 )
 
 type Storage = core.Storage
+type MultipartUploader = core.MultipartUploader
+type Paginator = core.Paginator
 
 func New(cfg Config) (Storage, error) {
+	nc := core.NormalizeConfig(cfg)
+	if err := core.ValidateConfig(nc); err != nil {
+		return nil, err
+	}
+	return newProvider(nc)
+}
+
+func newProvider(cfg core.Config) (Storage, error) {
 	switch cfg.Provider {
-	case ProviderMinIO:
-		st, err := minioprovider.New(cfg.MinIO)
-		if err != nil {
-			return nil, err
-		}
-		return st, st.CheckConnectivity(context.Background())
-	case ProviderS3:
-		st, err := s3provider.New(cfg.S3)
-		if err != nil {
-			return nil, err
-		}
-		return st, st.CheckConnectivity(context.Background())
-	case ProviderOSS:
-		st, err := ossprovider.New(cfg.OSS)
-		if err != nil {
-			return nil, err
-		}
-		return st, st.CheckConnectivity(context.Background())
-	case ProviderCOS:
-		st, err := cosprovider.New(cfg.COS)
-		if err != nil {
-			return nil, err
-		}
-		return st, st.CheckConnectivity(context.Background())
-	case ProviderTOS:
-		st, err := tosprovider.New(cfg.TOS)
-		if err != nil {
-			return nil, err
-		}
-		return st, st.CheckConnectivity(context.Background())
+	case core.ProviderMinIO:
+		return minioprovider.New(cfg)
+	case core.ProviderS3:
+		return s3provider.New(cfg)
+	case core.ProviderOSS:
+		return ossprovider.New(cfg)
+	case core.ProviderCOS:
+		return cosprovider.New(cfg)
+	case core.ProviderTOS:
+		return tosprovider.New(cfg)
 	default:
-		return nil, fmt.Errorf("unknown provider %q: %w", cfg.Provider, core.ErrInvalidConfig)
+		return nil, fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, core.ErrInvalidConfig)
 	}
 }
