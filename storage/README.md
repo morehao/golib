@@ -2,7 +2,7 @@
 
 golib 的统一对象存储组件。支持多 provider，按配置创建实例。
 
-支持 provider：`minio`、`s3`、`oss`、`cos`、`tos`。
+支持 provider：`s3`、`minio`、`oss`、`cos`、`tos`。
 
 ## 安装
 
@@ -16,6 +16,7 @@ go get github.com/morehao/golib/storage
 package main
 
 import (
+    "bytes"
     "context"
     "fmt"
     "time"
@@ -25,14 +26,11 @@ import (
 
 func main() {
     st, err := storage.New(storage.Config{
-        Provider: storage.ProviderMinIO,
-        MinIO: &storage.MinIOConfig{
-            Endpoint:  "127.0.0.1:9000",
-            AccessKey: "minioadmin",
-            SecretKey: "minioadmin",
-            Bucket:    "demo",
-            UseSSL:    false,
-        },
+        Provider:        storage.ProviderMinIO,
+        Endpoint:        "127.0.0.1:9000",
+        Bucket:          "demo",
+        AccessKeyID:     "minioadmin",
+        SecretAccessKey: "minioadmin",
     })
     if err != nil {
         panic(err)
@@ -40,147 +38,140 @@ func main() {
 
     ctx := context.Background()
 
-    // Put
-    err = st.Put(ctx, "hello.txt", []byte("hello world"), storage.WithContentType("text/plain"))
+    // PutObject
+    err = st.PutObject(ctx, "hello.txt", bytes.NewReader([]byte("hello world")), 11, storage.WithContentType("text/plain"))
     if err != nil {
         panic(err)
     }
 
-    // Get
-    data, err := st.Get(ctx, "hello.txt")
+    // GetObject
+    rc, meta, err := st.GetObject(ctx, "hello.txt")
     if err != nil {
         panic(err)
     }
-    fmt.Println(string(data))
+    defer rc.Close()
+    fmt.Println(meta.Size)
 
-    // PresignedURL
-    url, err := st.PresignedURL(ctx, "hello.txt", storage.WithExpire(time.Hour))
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println(url)
-
-    // Stat
-    info, err := st.Stat(ctx, "hello.txt")
+    // HeadObject
+    info, err := st.HeadObject(ctx, "hello.txt")
     if err != nil {
         panic(err)
     }
     fmt.Printf("size=%d, etag=%s\n", info.Size, info.ETag)
 
-    // List
-    out, err := st.List(ctx, &storage.ListInput{Prefix: "", PageSize: 10})
+    // ListObjects
+    result, err := st.ListObjects(ctx, "hello", storage.WithPageSize(10))
     if err != nil {
         panic(err)
     }
-    for _, obj := range out.Objects {
+    for _, obj := range result.Objects {
         fmt.Println(obj.Key)
     }
 
-    // Delete
-    err = st.Delete(ctx, "hello.txt")
+    // PresignGetURL
+    url, err := st.PresignGetURL(ctx, "hello.txt", time.Hour)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(url)
+
+    // DeleteObject
+    err = st.DeleteObject(ctx, "hello.txt")
     if err != nil {
         panic(err)
     }
 }
-```
-
-## Key Builder
-
-```go
-key := storage.NewKeyBuilder().
-    WithPrefix("images").
-    WithDateLayout("2006/01/02").
-    WithRandomSuffix().
-    PreserveExt().
-    Build("avatar.png")
-// key ≈ "images/2026/05/21/avatar_ab12cd34.png"
-```
-
-## URI Helpers
-
-```go
-uri := storage.FormatURI(storage.ProviderS3, "demo", "images/a.png")
-// "s3://demo/images/a.png"
-
-parsed, err := storage.ParseURI("s3://demo/images/a.png")
-// parsed.Provider = ProviderS3, parsed.Bucket = "demo", parsed.Key = "images/a.png"
 ```
 
 ## Provider Configuration
 
-### MinIO
-
 ```go
+// S3
 storage.Config{
-    Provider: storage.ProviderMinIO,
-    MinIO: &storage.MinIOConfig{
-        Endpoint:  "127.0.0.1:9000",
-        AccessKey: "minioadmin",
-        SecretKey: "minioadmin",
-        Bucket:    "demo",
-        UseSSL:    false,
-    },
+    Provider:        storage.ProviderS3,
+    Region:          "us-east-1",
+    Bucket:          "my-bucket",
+    AccessKeyID:     "AKID...",
+    SecretAccessKey: "sk...",
+}
+
+// MinIO
+storage.Config{
+    Provider:        storage.ProviderMinIO,
+    Endpoint:        "127.0.0.1:9000",
+    Bucket:          "demo",
+    AccessKeyID:     "minioadmin",
+    SecretAccessKey: "minioadmin",
+    UseSSL:          false,
+}
+
+// OSS (阿里云)
+storage.Config{
+    Provider:        storage.ProviderOSS,
+    Region:          "cn-hangzhou",
+    Bucket:          "my-bucket",
+    AccessKeyID:     "ak...",
+    SecretAccessKey: "sk...",
+}
+
+// COS (腾讯云)
+storage.Config{
+    Provider:        storage.ProviderCOS,
+    Region:          "ap-guangzhou",
+    Bucket:          "my-bucket",
+    AccessKeyID:     "secret-id...",
+    SecretAccessKey: "secret-key...",
+}
+
+// TOS (火山引擎)
+storage.Config{
+    Provider:        storage.ProviderTOS,
+    Region:          "cn-beijing",
+    Bucket:          "my-bucket",
+    AccessKeyID:     "ak...",
+    SecretAccessKey: "sk...",
 }
 ```
 
-### S3
+## API
+
+| Method | Description |
+|--------|-------------|
+| `PutObject` | 上传对象（流式，必须指定大小） |
+| `GetObject` | 读取对象（返回流和元信息） |
+| `HeadObject` | 获取对象元信息 |
+| `DeleteObject` | 删除对象 |
+| `DeleteObjects` | 批量删除对象 |
+| `CopyObject` | 同实例内复制对象 |
+| `ListObjects` | 分页列举对象 |
+| `ListObjectsPaginator` | 分页器模式列举对象 |
+| `PresignGetURL` | 生成预签名下载链接 |
+| `PresignPutURL` | 生成预签名上传链接 |
+| `NewMultipartUpload` | 创建分片上传会话 |
+
+## Multipart Upload
 
 ```go
-storage.Config{
-    Provider: storage.ProviderS3,
-    S3: &storage.S3Config{
-        Endpoint:  "s3.amazonaws.com",
-        Region:    "us-east-1",
-        AccessKey: "AKID...",
-        SecretKey: "sk...",
-        Bucket:    "my-bucket",
-        UseSSL:    true,
-    },
+uploader, err := st.NewMultipartUpload(ctx, "large-file.zip", storage.WithMultipartContentType("application/zip"))
+if err != nil {
+    panic(err)
 }
-```
 
-### OSS (阿里云)
-
-```go
-storage.Config{
-    Provider: storage.ProviderOSS,
-    OSS: &storage.OSSConfig{
-        Endpoint:  "oss-cn-hangzhou.aliyuncs.com",
-        Region:    "cn-hangzhou",
-        AccessKey: "ak...",
-        SecretKey: "sk...",
-        Bucket:    "my-bucket",
-    },
+part1, err := uploader.UploadPart(ctx, 1, bytes.NewReader(part1Data), int64(len(part1Data)))
+if err != nil {
+    uploader.Abort(ctx)
+    panic(err)
 }
-```
 
-### COS (腾讯云)
-
-```go
-storage.Config{
-    Provider: storage.ProviderCOS,
-    COS: &storage.COSConfig{
-        Endpoint:  "https://my-bucket.cos.ap-guangzhou.myqcloud.com",
-        Region:    "ap-guangzhou",
-        SecretID:  "secret-id...",
-        SecretKey: "secret-key...",
-        Bucket:    "my-bucket",
-    },
+part2, err := uploader.UploadPart(ctx, 2, bytes.NewReader(part2Data), int64(len(part2Data)))
+if err != nil {
+    uploader.Abort(ctx)
+    panic(err)
 }
-```
 
-### TOS (火山引擎)
-
-```go
-storage.Config{
-    Provider: storage.ProviderTOS,
-    TOS: &storage.TOSConfig{
-        Endpoint:  "tos-cn-beijing.volcengine.com",
-        Region:    "cn-beijing",
-        AccessKey: "ak...",
-        SecretKey: "sk...",
-        Bucket:    "my-bucket",
-    },
+err = uploader.Complete(ctx, []storage.Part{part1, part2})
+if err != nil {
+    panic(err)
 }
 ```
 
@@ -198,16 +189,23 @@ if errors.Is(err, storage.ErrInvalidKey) {
 }
 ```
 
-## API
+## Key Builder
 
-| Method | Description |
-|--------|-------------|
-| `CheckConnectivity` | 验证存储后端可达 |
-| `Put` | 上传对象（bytes） |
-| `PutReader` | 流式上传对象 |
-| `Get` | 读取对象（bytes） |
-| `Open` | 流式读取对象 |
-| `Delete` | 删除对象 |
-| `PresignedURL` | 生成预签名下载链接 |
-| `Stat` | 获取对象元信息 |
-| `List` | 分页列举对象 |
+```go
+key := storage.NewKeyBuilder().
+    WithPrefix("images").
+    WithDateLayout("2006/01/02").
+    WithRandomSuffix().
+    PreserveExt().
+    Build("avatar.png")
+```
+
+## URI Helpers
+
+```go
+uri := storage.FormatURI(storage.ProviderS3, "demo", "images/a.png")
+// "s3://demo/images/a.png"
+
+parsed, err := storage.ParseURI("s3://demo/images/a.png")
+// parsed.Provider = ProviderS3, parsed.Bucket = "demo", parsed.Key = "images/a.png"
+```
