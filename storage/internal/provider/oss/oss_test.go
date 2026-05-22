@@ -1,8 +1,10 @@
 package oss
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -12,8 +14,8 @@ import (
 	"github.com/morehao/golib/storage/internal/core"
 )
 
-func TestNewRejectsMissingBucket(t *testing.T) {
-	_, err := New(&core.OSSConfig{})
+func TestNewRejectsInvalidConfig(t *testing.T) {
+	_, err := New(core.Config{Provider: core.ProviderOSS})
 	require.ErrorIs(t, err, core.ErrInvalidConfig)
 }
 
@@ -22,34 +24,47 @@ func TestOSSIntegrationObjectLifecycle(t *testing.T) {
 		t.Skip("set STORAGE_OSS_TEST=1 to run oss integration test")
 	}
 
-	st, err := New(&core.OSSConfig{
-		Endpoint:  os.Getenv("OSS_ENDPOINT"),
-		Region:    os.Getenv("OSS_REGION"),
-		AccessKey: os.Getenv("OSS_ACCESS_KEY"),
-		SecretKey: os.Getenv("OSS_SECRET_KEY"),
-		Bucket:    os.Getenv("OSS_BUCKET"),
+	st, err := New(core.Config{
+		Provider:        core.ProviderOSS,
+		Endpoint:        os.Getenv("OSS_ENDPOINT"),
+		Region:          os.Getenv("OSS_REGION"),
+		AccessKeyID:     os.Getenv("OSS_ACCESS_KEY"),
+		SecretAccessKey: os.Getenv("OSS_SECRET_KEY"),
+		Bucket:          os.Getenv("OSS_BUCKET"),
 	})
 	require.NoError(t, err)
 
 	ctx := context.Background()
 	key := "storage-test/oss.txt"
-	require.NoError(t, st.Put(ctx, key, []byte("hello"), core.WithContentType("text/plain")))
-	body, err := st.Get(ctx, key)
+	data := []byte("hello")
+	require.NoError(t, st.PutObject(ctx, key, bytes.NewReader(data), int64(len(data)), core.WithContentType("text/plain")))
+
+	rc, meta, err := st.GetObject(ctx, key)
+	require.NoError(t, err)
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(body))
+	require.Equal(t, key, meta.Key)
 
-	_, err = st.PresignedURL(ctx, key, core.WithExpire(5*time.Minute))
+	meta2, err := st.HeadObject(ctx, key)
 	require.NoError(t, err)
+	require.Equal(t, key, meta2.Key)
 
-	info, err := st.Stat(ctx, key)
+	url, err := st.PresignGetURL(ctx, key, 5*time.Minute)
 	require.NoError(t, err)
-	require.Equal(t, key, info.Key)
+	require.NotEmpty(t, url)
 
-	out, err := st.List(ctx, &core.ListInput{Prefix: "storage-test/", PageSize: 10})
+	url2, err := st.PresignPutURL(ctx, key, 5*time.Minute)
 	require.NoError(t, err)
-	require.NotEmpty(t, out.Objects)
+	require.NotEmpty(t, url2)
 
-	require.NoError(t, st.Delete(ctx, key))
-	_, err = st.Get(ctx, key)
-	require.True(t, errors.Is(err, core.ErrObjectNotFound))
+	result, err := st.ListObjects(ctx, "storage-test/")
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Objects)
+
+	require.NoError(t, st.DeleteObject(ctx, key))
+	rc, _, err = st.GetObject(ctx, key)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, core.ErrObjectNotFound), "expected ErrObjectNotFound, got %v", err)
 }
