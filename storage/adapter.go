@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -14,13 +16,13 @@ type storageAdapter struct {
 
 func (a *storageAdapter) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...PutOption) error {
 	do := driverPutOptions(opts...)
-	return a.inner.PutObject(ctx, key, reader, size, do)
+	return toPublicError(a.inner.PutObject(ctx, key, reader, size, do))
 }
 
 func (a *storageAdapter) GetObject(ctx context.Context, key string, opts ...GetOption) (io.ReadCloser, *ObjectMeta, error) {
 	rc, dm, err := a.inner.GetObject(ctx, key, driver.GetOptions{})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, toPublicError(err)
 	}
 	return rc, driverToObjectMeta(dm), nil
 }
@@ -28,28 +30,28 @@ func (a *storageAdapter) GetObject(ctx context.Context, key string, opts ...GetO
 func (a *storageAdapter) HeadObject(ctx context.Context, key string) (*ObjectMeta, error) {
 	dm, err := a.inner.HeadObject(ctx, key)
 	if err != nil {
-		return nil, err
+		return nil, toPublicError(err)
 	}
 	return driverToObjectMeta(dm), nil
 }
 
 func (a *storageAdapter) DeleteObject(ctx context.Context, key string) error {
-	return a.inner.DeleteObject(ctx, key)
+	return toPublicError(a.inner.DeleteObject(ctx, key))
 }
 
 func (a *storageAdapter) DeleteObjects(ctx context.Context, keys []string) error {
-	return a.inner.DeleteObjects(ctx, keys)
+	return toPublicError(a.inner.DeleteObjects(ctx, keys))
 }
 
 func (a *storageAdapter) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...CopyOption) error {
-	return a.inner.CopyObject(ctx, srcKey, dstKey, driver.CopyOptions{})
+	return toPublicError(a.inner.CopyObject(ctx, srcKey, dstKey, driver.CopyOptions{}))
 }
 
 func (a *storageAdapter) ListObjects(ctx context.Context, prefix string, opts ...ListOption) (*ListResult, error) {
 	lo := driverListOptions(opts...)
 	dr, err := a.inner.ListObjects(ctx, prefix, lo)
 	if err != nil {
-		return nil, err
+		return nil, toPublicError(err)
 	}
 	return driverToListResult(dr), nil
 }
@@ -59,18 +61,20 @@ func (a *storageAdapter) ListObjectsPaginator(ctx context.Context, prefix string
 }
 
 func (a *storageAdapter) PresignGetURL(ctx context.Context, key string, expires time.Duration) (string, error) {
-	return a.inner.PresignGetURL(ctx, key, expires)
+	url, err := a.inner.PresignGetURL(ctx, key, expires)
+	return url, toPublicError(err)
 }
 
 func (a *storageAdapter) PresignPutURL(ctx context.Context, key string, expires time.Duration) (string, error) {
-	return a.inner.PresignPutURL(ctx, key, expires)
+	url, err := a.inner.PresignPutURL(ctx, key, expires)
+	return url, toPublicError(err)
 }
 
 func (a *storageAdapter) NewMultipartUpload(ctx context.Context, key string, opts ...MultipartOption) (MultipartUploader, error) {
 	mo := driverMultipartOptions(opts...)
 	mu, err := a.inner.NewMultipartUpload(ctx, key, mo)
 	if err != nil {
-		return nil, err
+		return nil, toPublicError(err)
 	}
 	return &dmultipart{inner: mu}, nil
 }
@@ -84,7 +88,7 @@ func (p *dpaginator) HasMorePages() bool { return p.inner.HasMorePages() }
 func (p *dpaginator) NextPage(ctx context.Context) (*ListResult, error) {
 	dr, err := p.inner.NextPage(ctx)
 	if err != nil {
-		return nil, err
+		return nil, toPublicError(err)
 	}
 	return driverToListResult(dr), nil
 }
@@ -96,7 +100,7 @@ type dmultipart struct {
 func (m *dmultipart) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (Part, error) {
 	dp, err := m.inner.UploadPart(ctx, partNum, reader, size)
 	if err != nil {
-		return Part{}, err
+		return Part{}, toPublicError(err)
 	}
 	return Part{PartNumber: dp.PartNumber, ETag: dp.ETag}, nil
 }
@@ -106,11 +110,11 @@ func (m *dmultipart) Complete(ctx context.Context, parts []Part) error {
 	for _, p := range parts {
 		dps = append(dps, driver.Part{PartNumber: p.PartNumber, ETag: p.ETag})
 	}
-	return m.inner.Complete(ctx, dps)
+	return toPublicError(m.inner.Complete(ctx, dps))
 }
 
 func (m *dmultipart) Abort(ctx context.Context) error {
-	return m.inner.Abort(ctx)
+	return toPublicError(m.inner.Abort(ctx))
 }
 
 func driverPutOptions(opts ...PutOption) driver.PutOptions {
@@ -171,4 +175,22 @@ func driverToListResult(dr *driver.ListResult) *ListResult {
 		})
 	}
 	return out
+}
+
+func toPublicError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, driver.ErrInvalidConfig):
+		return fmt.Errorf("%w", ErrInvalidConfig)
+	case errors.Is(err, driver.ErrInvalidKey):
+		return fmt.Errorf("%w", ErrInvalidKey)
+	case errors.Is(err, driver.ErrObjectNotFound):
+		return fmt.Errorf("%w", ErrObjectNotFound)
+	case errors.Is(err, driver.ErrNotSupported):
+		return fmt.Errorf("%w", ErrNotSupported)
+	default:
+		return err
+	}
 }

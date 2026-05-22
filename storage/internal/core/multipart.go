@@ -8,21 +8,21 @@ import (
 
 func ValidatePartNumber(partNum int32) error {
 	if partNum <= 0 {
-		return fmt.Errorf("storage: part number must be positive, got %d: %w", partNum, ErrInvalidKey)
+		return fmt.Errorf("storage: part number must be positive, got %d: %w", partNum, driver.ErrInvalidKey)
 	}
 	return nil
 }
 
 func ValidateParts(parts []driver.Part) error {
 	if len(parts) == 0 {
-		return fmt.Errorf("storage: parts list must not be empty: %w", ErrInvalidKey)
+		return fmt.Errorf("storage: parts list must not be empty: %w", driver.ErrInvalidKey)
 	}
 	for i, p := range parts {
 		if p.PartNumber <= 0 {
-			return fmt.Errorf("storage: part %d has invalid number %d: %w", i, p.PartNumber, ErrInvalidKey)
+			return fmt.Errorf("storage: part %d has invalid number %d: %w", i, p.PartNumber, driver.ErrInvalidKey)
 		}
 		if p.ETag == "" {
-			return fmt.Errorf("storage: part %d has empty etag: %w", i, ErrInvalidKey)
+			return fmt.Errorf("storage: part %d has empty etag: %w", i, driver.ErrInvalidKey)
 		}
 	}
 	return nil
