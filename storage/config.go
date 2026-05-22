@@ -2,23 +2,39 @@ package storage
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
-
-	"github.com/morehao/golib/storage/internal/core"
 )
 
-type Provider = core.Provider
+type Provider string
 
 const (
-	ProviderS3    Provider = core.ProviderS3
-	ProviderMinIO Provider = core.ProviderMinIO
-	ProviderOSS   Provider = core.ProviderOSS
-	ProviderCOS   Provider = core.ProviderCOS
-	ProviderTOS   Provider = core.ProviderTOS
+	ProviderS3    Provider = "s3"
+	ProviderMinIO Provider = "minio"
+	ProviderOSS   Provider = "oss"
+	ProviderCOS   Provider = "cos"
+	ProviderTOS   Provider = "tos"
 )
 
-type Config = core.Config
+type Config struct {
+	Provider Provider
+
+	Endpoint string
+	Region   string
+	Bucket   string
+
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+
+	UseSSL       bool
+	UsePathStyle bool
+
+	RetryMaxAttempts int
+	Timeout          time.Duration
+	HTTPClient       *http.Client
+}
 
 func normalizeConfig(cfg Config) Config {
 	if cfg.RetryMaxAttempts == 0 {

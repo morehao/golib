@@ -1,10 +1,10 @@
 package storage
 
-import "github.com/morehao/golib/storage/internal/core"
+import "errors"
 
 var (
-	ErrInvalidConfig  = core.ErrInvalidConfig
-	ErrInvalidKey     = core.ErrInvalidKey
-	ErrObjectNotFound = core.ErrObjectNotFound
-	ErrNotSupported   = core.ErrNotSupported
+	ErrInvalidConfig  = errors.New("storage: invalid config")
+	ErrInvalidKey     = errors.New("storage: invalid key")
+	ErrObjectNotFound = errors.New("storage: object not found")
+	ErrNotSupported   = errors.New("storage: operation not supported")
 )

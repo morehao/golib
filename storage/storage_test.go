@@ -173,6 +173,16 @@ func TestValidateConfigRejectsMissingRegionForTOS(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidConfig)
 }
 
+func TestRootPackageOwnsPublicTypes(t *testing.T) {
+	meta := ObjectMeta{Key: "demo.txt", Size: 1}
+	part := Part{PartNumber: 1, ETag: "etag"}
+	result := ListResult{Objects: []ListedObject{{Key: meta.Key}}}
+
+	require.Equal(t, "demo.txt", meta.Key)
+	require.Equal(t, int32(1), part.PartNumber)
+	require.Len(t, result.Objects, 1)
+}
+
 func TestNewDispatchesToS3Provider(t *testing.T) {
 	st, err := New(Config{
 		Provider:        ProviderS3,
