@@ -7,6 +7,7 @@ import (
 
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 
+	"github.com/morehao/golib/storage"
 	"github.com/morehao/golib/storage/spec"
 )
 
@@ -28,6 +29,10 @@ func New(cfg spec.Config) (spec.Storage, error) {
 		return nil, fmt.Errorf("storage: init tos client: %w", err)
 	}
 	return &client{sdk: sdk, bucket: cfg.Bucket}, nil
+}
+
+func init() {
+	storage.RegisterProvider(spec.ProviderTOS, New)
 }
 
 func (c *client) CheckConnectivity(ctx context.Context) error {

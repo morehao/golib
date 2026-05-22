@@ -2,39 +2,22 @@ package storage
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
+
+	"github.com/morehao/golib/storage/spec"
 )
 
-type Provider string
+type Provider = spec.Provider
+type Config = spec.Config
 
 const (
-	ProviderS3    Provider = "s3"
-	ProviderMinIO Provider = "minio"
-	ProviderOSS   Provider = "oss"
-	ProviderCOS   Provider = "cos"
-	ProviderTOS   Provider = "tos"
+	ProviderS3    = spec.ProviderS3
+	ProviderMinIO = spec.ProviderMinIO
+	ProviderOSS   = spec.ProviderOSS
+	ProviderCOS   = spec.ProviderCOS
+	ProviderTOS   = spec.ProviderTOS
 )
-
-type Config struct {
-	Provider Provider
-
-	Endpoint string
-	Region   string
-	Bucket   string
-
-	AccessKeyID     string
-	SecretAccessKey string
-	SessionToken    string
-
-	UseSSL       bool
-	UsePathStyle bool
-
-	RetryMaxAttempts int
-	Timeout          time.Duration
-	HTTPClient       *http.Client
-}
 
 func normalizeConfig(cfg Config) Config {
 	if cfg.RetryMaxAttempts == 0 {

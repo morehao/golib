@@ -3,18 +3,20 @@ package storage
 import (
 	"fmt"
 	"strings"
+
+	"github.com/morehao/golib/storage/spec"
 )
 
 func ParseURI(raw string) (*URI, error) {
 	parts := strings.SplitN(raw, "://", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, fmt.Errorf("invalid storage uri: %w", ErrInvalidConfig)
+		return nil, fmt.Errorf("invalid storage uri: %w", spec.ErrInvalidConfig)
 	}
 	tail := strings.SplitN(parts[1], "/", 2)
 	if len(tail) != 2 || tail[0] == "" || tail[1] == "" {
-		return nil, fmt.Errorf("invalid storage uri: %w", ErrInvalidConfig)
+		return nil, fmt.Errorf("invalid storage uri: %w", spec.ErrInvalidConfig)
 	}
-	return &URI{Provider: Provider(parts[0]), Bucket: tail[0], Key: tail[1]}, nil
+	return &URI{Provider: spec.Provider(parts[0]), Bucket: tail[0], Key: tail[1]}, nil
 }
 
 func FormatURI(provider Provider, bucket, key string) string {

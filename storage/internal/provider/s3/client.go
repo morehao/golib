@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/morehao/golib/storage"
 	"github.com/morehao/golib/storage/spec"
 )
 
@@ -33,4 +34,8 @@ func New(cfg spec.Config) (spec.Storage, error) {
 		}
 	})
 	return &client{sdk: sdk, bucket: cfg.Bucket}, nil
+}
+
+func init() {
+	storage.RegisterProvider(spec.ProviderS3, New)
 }
