@@ -1,23 +1,29 @@
 package core
 
-import "time"
-
-const (
-	DefaultListPageSize  = 100
-	DefaultPresignExpire = time.Hour
-)
-
 type PutOptions struct {
 	ContentType string
-	ExpiresAt   *time.Time
+	Metadata    map[string]string
 	Tags        map[string]string
-	ObjectSize  int64
 }
 
 type PutOption func(*PutOptions)
 
-func WithContentType(v string) PutOption { return func(o *PutOptions) { o.ContentType = v } }
-func WithExpiresAt(v time.Time) PutOption { return func(o *PutOptions) { o.ExpiresAt = &v } }
+func WithContentType(v string) PutOption {
+	return func(o *PutOptions) { o.ContentType = v }
+}
+
+func WithMetadata(v map[string]string) PutOption {
+	return func(o *PutOptions) {
+		if len(v) == 0 {
+			return
+		}
+		o.Metadata = make(map[string]string, len(v))
+		for k, val := range v {
+			o.Metadata[k] = val
+		}
+	}
+}
+
 func WithTags(v map[string]string) PutOption {
 	return func(o *PutOptions) {
 		if len(v) == 0 {
@@ -29,7 +35,6 @@ func WithTags(v map[string]string) PutOption {
 		}
 	}
 }
-func WithObjectSize(v int64) PutOption { return func(o *PutOptions) { o.ObjectSize = v } }
 
 func ApplyPutOptions(opts ...PutOption) PutOptions {
 	out := PutOptions{}
@@ -41,27 +46,95 @@ func ApplyPutOptions(opts ...PutOption) PutOptions {
 	return out
 }
 
-type GetOptions struct {
-	Expire      time.Duration
-	WithURL     bool
-	WithTagging bool
-}
+type GetOptions struct{}
 
 type GetOption func(*GetOptions)
 
-func WithExpire(v time.Duration) GetOption { return func(o *GetOptions) { o.Expire = v } }
-func WithURL(v bool) GetOption              { return func(o *GetOptions) { o.WithURL = v } }
-func WithTagging(v bool) GetOption          { return func(o *GetOptions) { o.WithTagging = v } }
-
 func ApplyGetOptions(opts ...GetOption) GetOptions {
-	out := GetOptions{Expire: DefaultPresignExpire}
+	out := GetOptions{}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&out)
 		}
 	}
-	if out.Expire <= 0 {
-		out.Expire = DefaultPresignExpire
+	return out
+}
+
+type CopyOptions struct{}
+
+type CopyOption func(*CopyOptions)
+
+func ApplyCopyOptions(opts ...CopyOption) CopyOptions {
+	return CopyOptions{}
+}
+
+type ListOptions struct {
+	PageSize          int
+	ContinuationToken string
+}
+
+type ListOption func(*ListOptions)
+
+func WithPageSize(v int) ListOption {
+	return func(o *ListOptions) { o.PageSize = v }
+}
+
+func WithContinuationToken(v string) ListOption {
+	return func(o *ListOptions) { o.ContinuationToken = v }
+}
+
+func ApplyListOptions(opts ...ListOption) ListOptions {
+	out := ListOptions{PageSize: 100}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
+	}
+	return out
+}
+
+type MultipartOptions struct {
+	ContentType string
+	Metadata    map[string]string
+	Tags        map[string]string
+}
+
+type MultipartOption func(*MultipartOptions)
+
+func WithMultipartContentType(v string) MultipartOption {
+	return func(o *MultipartOptions) { o.ContentType = v }
+}
+
+func WithMultipartMetadata(v map[string]string) MultipartOption {
+	return func(o *MultipartOptions) {
+		if len(v) == 0 {
+			return
+		}
+		o.Metadata = make(map[string]string, len(v))
+		for k, val := range v {
+			o.Metadata[k] = val
+		}
+	}
+}
+
+func WithMultipartTags(v map[string]string) MultipartOption {
+	return func(o *MultipartOptions) {
+		if len(v) == 0 {
+			return
+		}
+		o.Tags = make(map[string]string, len(v))
+		for k, val := range v {
+			o.Tags[k] = val
+		}
+	}
+}
+
+func ApplyMultipartOptions(opts ...MultipartOption) MultipartOptions {
+	out := MultipartOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
 	}
 	return out
 }
