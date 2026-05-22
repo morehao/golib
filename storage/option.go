@@ -1,5 +1,7 @@
 package storage
 
+import "github.com/morehao/golib/storage/internal/core"
+
 type PutOption = core.PutOption
 type PutOptions = core.PutOptions
 type GetOption = core.GetOption

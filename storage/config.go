@@ -1,5 +1,7 @@
 package storage
 
+import "github.com/morehao/golib/storage/internal/core"
+
 type Provider = core.Provider
 
 const (
