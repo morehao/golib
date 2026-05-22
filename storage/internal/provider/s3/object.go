@@ -12,15 +12,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/morehao/golib/storage/internal/core"
-	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
 
-func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...storage.PutOption) error {
+func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...spec.PutOption) error {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return err
 	}
-	po := storage.ApplyPutOptions(opts...)
+	po := spec.ApplyPutOptions(opts...)
 	input := &awss3.PutObjectInput{
 		Bucket:        aws.String(c.bucket),
 		Key:           aws.String(k),
@@ -38,7 +38,7 @@ func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, si
 	return nil
 }
 
-func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, *storage.ObjectMeta, error) {
+func (c *client) GetObject(ctx context.Context, key string, opts ...spec.GetOption) (io.ReadCloser, *spec.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, nil, err
@@ -50,7 +50,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetO
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage: get object %q: %w", k, mapNotFound(err))
 	}
-	meta := &storage.ObjectMeta{
+	meta := &spec.ObjectMeta{
 		Key:          k,
 		Size:         aws.ToInt64(resp.ContentLength),
 		ETag:         strings.Trim(aws.ToString(resp.ETag), `"`),
@@ -61,7 +61,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetO
 	return resp.Body, meta, nil
 }
 
-func (c *client) HeadObject(ctx context.Context, key string) (*storage.ObjectMeta, error) {
+func (c *client) HeadObject(ctx context.Context, key string) (*spec.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (*storage.ObjectMet
 	if err != nil {
 		return nil, fmt.Errorf("storage: head object %q: %w", k, mapNotFound(err))
 	}
-	return &storage.ObjectMeta{
+	return &spec.ObjectMeta{
 		Key:          k,
 		Size:         aws.ToInt64(resp.ContentLength),
 		ETag:         strings.Trim(aws.ToString(resp.ETag), `"`),
@@ -123,12 +123,12 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 		for _, e := range resp.Errors {
 			failed = append(failed, aws.ToString(e.Key))
 		}
-		return fmt.Errorf("storage: delete objects failed for keys %v: %w", failed, storage.ErrObjectNotFound)
+		return fmt.Errorf("storage: delete objects failed for keys %v: %w", failed, spec.ErrObjectNotFound)
 	}
 	return nil
 }
 
-func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...storage.CopyOption) error {
+func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...spec.CopyOption) error {
 	src, err := core.NormalizeObjectKey(srcKey)
 	if err != nil {
 		return err

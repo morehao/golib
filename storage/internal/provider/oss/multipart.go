@@ -9,15 +9,15 @@ import (
 	aliyun "github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 
 	"github.com/morehao/golib/storage/internal/core"
-	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
 
-func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...storage.MultipartOption) (storage.MultipartUploader, error) {
+func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spec.MultipartOption) (spec.MultipartUploader, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
 	}
-	mo := storage.ApplyMultipartOptions(opts...)
+	mo := spec.ApplyMultipartOptions(opts...)
 	req := &aliyun.InitiateMultipartUploadRequest{
 		Bucket: aliyun.Ptr(c.bucket),
 		Key:    aliyun.Ptr(k),
@@ -47,9 +47,9 @@ type uploader struct {
 	uploadID string
 }
 
-func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (storage.Part, error) {
+func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (spec.Part, error) {
 	if partNum <= 0 {
-		return storage.Part{}, fmt.Errorf("storage: part number must be positive, got %d", partNum)
+		return spec.Part{}, fmt.Errorf("storage: part number must be positive, got %d", partNum)
 	}
 	resp, err := u.sdk.UploadPart(ctx, &aliyun.UploadPartRequest{
 		Bucket:        aliyun.Ptr(u.bucket),
@@ -60,15 +60,15 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 		ContentLength: aliyun.Ptr(size),
 	})
 	if err != nil {
-		return storage.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
+		return spec.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
 	}
-	return storage.Part{
+	return spec.Part{
 		PartNumber: partNum,
 		ETag:       strings.Trim(aliyun.ToString(resp.ETag), `"`),
 	}, nil
 }
 
-func (u *uploader) Complete(ctx context.Context, parts []storage.Part) error {
+func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
 	if len(parts) == 0 {
 		return fmt.Errorf("storage: parts list must not be empty")
 	}

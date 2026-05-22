@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,10 +17,10 @@ func TestNormalizeObjectKey(t *testing.T) {
 		{name: "trim and slash normalize", input: "  images\\2026\\a.png  ", want: "images/2026/a.png"},
 		{name: "collapse repeated slash", input: "images//2026///a.png", want: "images/2026/a.png"},
 		{name: "happy path clean input", input: "images/2026/a.png", want: "images/2026/a.png"},
-		{name: "reject empty", input: "   ", wantErr: storage.ErrInvalidKey},
-		{name: "reject leading slash", input: "/images/a.png", wantErr: storage.ErrInvalidKey},
-		{name: "reject trailing slash", input: "images/a.png/", wantErr: storage.ErrInvalidKey},
-		{name: "reject uri", input: "s3://bucket/a.png", wantErr: storage.ErrInvalidKey},
+		{name: "reject empty", input: "   ", wantErr: spec.ErrInvalidKey},
+		{name: "reject leading slash", input: "/images/a.png", wantErr: spec.ErrInvalidKey},
+		{name: "reject trailing slash", input: "images/a.png/", wantErr: spec.ErrInvalidKey},
+		{name: "reject uri", input: "s3://bucket/a.png", wantErr: spec.ErrInvalidKey},
 	}
 
 	for _, tt := range tests {

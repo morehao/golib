@@ -8,6 +8,7 @@ import (
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
 	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
 
 type client struct {
@@ -18,10 +19,10 @@ type client struct {
 }
 
 func init() {
-	storage.RegisterProvider(storage.ProviderCOS, New)
+	storage.RegisterProvider(spec.ProviderCOS, New)
 }
 
-func New(cfg storage.Config) (storage.Storage, error) {
+func New(cfg spec.Config) (spec.Storage, error) {
 	u, err := neturl.Parse(cfg.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("storage: parse cos endpoint: %w", err)

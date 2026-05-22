@@ -1,36 +1,13 @@
 package storage
 
-import "time"
+import "github.com/morehao/golib/storage/spec"
 
-type ObjectMeta struct {
-	Key          string
-	Size         int64
-	ETag         string
-	ContentType  string
-	LastModified time.Time
-	Metadata     map[string]string
-}
+type ObjectMeta = spec.ObjectMeta
 
-type ListedObject struct {
-	Key          string
-	Size         int64
-	ETag         string
-	LastModified time.Time
-}
+type ListedObject = spec.ListedObject
 
-type ListResult struct {
-	Objects   []ListedObject
-	NextToken string
-	HasMore   bool
-}
+type ListResult = spec.ListResult
 
-type Part struct {
-	PartNumber int32
-	ETag       string
-}
+type Part = spec.Part
 
-type URI struct {
-	Provider Provider
-	Bucket   string
-	Key      string
-}
+type URI = spec.URI

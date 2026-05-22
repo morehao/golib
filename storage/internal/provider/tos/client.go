@@ -8,6 +8,7 @@ import (
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 
 	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
 
 type client struct {
@@ -16,12 +17,12 @@ type client struct {
 }
 
 func init() {
-	storage.RegisterProvider(storage.ProviderTOS, New)
+	storage.RegisterProvider(spec.ProviderTOS, New)
 }
 
-func New(cfg storage.Config) (storage.Storage, error) {
+func New(cfg spec.Config) (spec.Storage, error) {
 	if strings.TrimSpace(cfg.Endpoint) == "" {
-		return nil, fmt.Errorf("storage: endpoint is required for tos: %w", storage.ErrInvalidConfig)
+		return nil, fmt.Errorf("storage: endpoint is required for tos: %w", spec.ErrInvalidConfig)
 	}
 	cred := tos.NewStaticCredentials(cfg.AccessKeyID, cfg.SecretAccessKey)
 	sdk, err := tos.NewClientV2(cfg.Endpoint,
@@ -37,7 +38,7 @@ func New(cfg storage.Config) (storage.Storage, error) {
 func (c *client) CheckConnectivity(ctx context.Context) error {
 	_, err := c.sdk.HeadBucket(ctx, &tos.HeadBucketInput{Bucket: c.bucket})
 	if err != nil {
-		return fmt.Errorf("storage: check tos bucket %q: %w", c.bucket, storage.ErrInvalidConfig)
+		return fmt.Errorf("storage: check tos bucket %q: %w", c.bucket, spec.ErrInvalidConfig)
 	}
 	return nil
 }
