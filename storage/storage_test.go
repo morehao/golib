@@ -172,3 +172,27 @@ func TestValidateConfigRejectsMissingRegionForTOS(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrInvalidConfig)
 }
+
+func TestNewDispatchesToS3Provider(t *testing.T) {
+	st, err := New(Config{
+		Provider:        ProviderS3,
+		Region:          "us-east-1",
+		Bucket:          "test",
+		AccessKeyID:     "ak",
+		SecretAccessKey: "sk",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, st)
+}
+
+func TestNewDispatchesToMinioProvider(t *testing.T) {
+	st, err := New(Config{
+		Provider:        ProviderMinIO,
+		Endpoint:        "127.0.0.1:9000",
+		Bucket:          "test",
+		AccessKeyID:     "minioadmin",
+		SecretAccessKey: "minioadmin",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, st)
+}
