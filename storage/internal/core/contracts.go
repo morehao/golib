@@ -7,34 +7,29 @@ import (
 )
 
 type Storage interface {
-	CheckConnectivity(ctx context.Context) error
-	Put(ctx context.Context, objectKey string, data []byte, opts ...PutOption) error
-	PutReader(ctx context.Context, objectKey string, r io.Reader, opts ...PutOption) error
-	Get(ctx context.Context, objectKey string) ([]byte, error)
-	Open(ctx context.Context, objectKey string) (io.ReadCloser, error)
-	Delete(ctx context.Context, objectKey string) error
-	PresignedURL(ctx context.Context, objectKey string, opts ...GetOption) (string, error)
-	Stat(ctx context.Context, objectKey string, opts ...GetOption) (*ObjectInfo, error)
-	List(ctx context.Context, input *ListInput, opts ...GetOption) (*ListOutput, error)
+	PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...PutOption) error
+	GetObject(ctx context.Context, key string, opts ...GetOption) (io.ReadCloser, *ObjectMeta, error)
+	HeadObject(ctx context.Context, key string) (*ObjectMeta, error)
+	DeleteObject(ctx context.Context, key string) error
+	DeleteObjects(ctx context.Context, keys []string) error
+	CopyObject(ctx context.Context, srcKey, dstKey string, opts ...CopyOption) error
+
+	ListObjects(ctx context.Context, prefix string, opts ...ListOption) (*ListResult, error)
+	ListObjectsPaginator(ctx context.Context, prefix string, opts ...ListOption) Paginator
+
+	PresignGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
+	PresignPutURL(ctx context.Context, key string, expires time.Duration) (string, error)
+
+	NewMultipartUpload(ctx context.Context, key string, opts ...MultipartOption) (MultipartUploader, error)
 }
 
-type ObjectInfo struct {
-	Key          string
-	Size         int64
-	ETag         string
-	LastModified time.Time
-	URL          string
-	Tags         map[string]string
+type MultipartUploader interface {
+	UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (Part, error)
+	Complete(ctx context.Context, parts []Part) error
+	Abort(ctx context.Context) error
 }
 
-type ListInput struct {
-	Prefix   string
-	Cursor   string
-	PageSize int
-}
-
-type ListOutput struct {
-	Objects []*ObjectInfo
-	Cursor  string
-	HasMore bool
+type Paginator interface {
+	HasMorePages() bool
+	NextPage(ctx context.Context) (*ListResult, error)
 }
