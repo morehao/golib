@@ -10,14 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/morehao/golib/storage"
-	"github.com/morehao/golib/storage/spec"
+"github.com/morehao/golib/storage/spec"
 )
-
-func init() {
-	storage.RegisterProvider(spec.ProviderS3, New)
-}
-
 type client struct {
 	sdk    *awss3.Client
 	bucket string

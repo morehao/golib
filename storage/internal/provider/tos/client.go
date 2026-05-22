@@ -7,8 +7,7 @@ import (
 
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 
-	"github.com/morehao/golib/storage"
-	"github.com/morehao/golib/storage/spec"
+"github.com/morehao/golib/storage/spec"
 )
 
 type client struct {
@@ -16,19 +15,7 @@ type client struct {
 	bucket string
 }
 
-func init() {
-	storage.RegisterProvider(spec.ProviderTOS, New)
-}
-
-func New(cfg spec.Config) (spec.Storage, error) {
-	if strings.TrimSpace(cfg.Endpoint) == "" {
-		return nil, fmt.Errorf("storage: endpoint is required for tos: %w", spec.ErrInvalidConfig)
-	}
-	cred := tos.NewStaticCredentials(cfg.AccessKeyID, cfg.SecretAccessKey)
-	sdk, err := tos.NewClientV2(cfg.Endpoint,
-		tos.WithRegion(cfg.Region),
-		tos.WithCredentials(cred),
-	)
+)
 	if err != nil {
 		return nil, fmt.Errorf("storage: init tos client: %w", err)
 	}

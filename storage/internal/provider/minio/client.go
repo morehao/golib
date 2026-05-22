@@ -6,19 +6,8 @@ import (
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
-	"github.com/morehao/golib/storage"
 	"github.com/morehao/golib/storage/spec"
 )
-
-type client struct {
-	sdk    *minio.Client
-	core   *minio.Core
-	bucket string
-}
-
-func init() {
-	storage.RegisterProvider(spec.ProviderMinIO, New)
-}
 
 func New(cfg spec.Config) (spec.Storage, error) {
 	sdk, err := minio.New(cfg.Endpoint, &minio.Options{

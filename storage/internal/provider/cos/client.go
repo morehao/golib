@@ -7,20 +7,8 @@ import (
 
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
-	"github.com/morehao/golib/storage"
 	"github.com/morehao/golib/storage/spec"
 )
-
-type client struct {
-	sdk       *cossdk.Client
-	bucket    string
-	secretID  string
-	secretKey string
-}
-
-func init() {
-	storage.RegisterProvider(spec.ProviderCOS, New)
-}
 
 func New(cfg spec.Config) (spec.Storage, error) {
 	u, err := neturl.Parse(cfg.Endpoint)

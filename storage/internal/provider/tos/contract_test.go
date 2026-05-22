@@ -1,7 +1,13 @@
 package tos
 
-import "github.com/morehao/golib/storage"
+import (
+	"testing"
 
-var _ storage.Storage = (*client)(nil)
-var _ storage.Paginator = (*paginator)(nil)
-var _ storage.MultipartUploader = (*uploader)(nil)
+	"github.com/morehao/golib/storage/spec"
+)
+
+func TestClientImplementsSpecContracts(t *testing.T) {
+	var _ spec.Storage = (*client)(nil)
+	var _ spec.Paginator = (*paginator)(nil)
+	var _ spec.MultipartUploader = (*uploader)(nil)
+}
