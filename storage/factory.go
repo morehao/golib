@@ -5,13 +5,12 @@ import (
 
 	"github.com/morehao/golib/storage/internal/driver"
 	cosprovider "github.com/morehao/golib/storage/internal/provider/cos"
-	minioprovider "github.com/morehao/golib/storage/internal/provider/minio"
 	ossprovider "github.com/morehao/golib/storage/internal/provider/oss"
 	s3provider "github.com/morehao/golib/storage/internal/provider/s3"
 	tosprovider "github.com/morehao/golib/storage/internal/provider/tos"
 )
 
-func newProvider(cfg Config) (Storage, error) {
+func newProviderFallback(cfg Config) (Storage, error) {
 	cc := driver.Config{
 		Provider:          driver.Provider(cfg.Provider),
 		Endpoint:          cfg.Endpoint,
@@ -29,8 +28,6 @@ func newProvider(cfg Config) (Storage, error) {
 	var cs driver.Storage
 	var err error
 	switch cfg.Provider {
-	case ProviderMinIO:
-		cs, err = minioprovider.New(cc)
 	case ProviderS3:
 		cs, err = s3provider.New(cc)
 	case ProviderOSS:

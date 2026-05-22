@@ -11,18 +11,19 @@ import (
 	minio "github.com/minio/minio-go/v7"
 
 	"github.com/morehao/golib/storage/internal/core"
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
-func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts driver.PutOptions) error {
+func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...storage.PutOption) error {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return err
 	}
+	po := storage.ApplyPutOptions(opts...)
 	_, err = c.sdk.PutObject(ctx, c.bucket, k, reader, size, minio.PutObjectOptions{
-		ContentType:  opts.ContentType,
-		UserMetadata: opts.Metadata,
-		UserTags:     opts.Tags,
+		ContentType:  po.ContentType,
+		UserMetadata: po.Metadata,
+		UserTags:     po.Tags,
 	})
 	if err != nil {
 		return fmt.Errorf("storage: put object %q: %w", k, err)
@@ -30,7 +31,7 @@ func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, si
 	return nil
 }
 
-func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptions) (io.ReadCloser, *driver.ObjectMeta, error) {
+func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, *storage.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, nil, err
@@ -44,7 +45,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptio
 		obj.Close()
 		return nil, nil, fmt.Errorf("storage: stat object %q: %w", k, toNotFound(err))
 	}
-	meta := &driver.ObjectMeta{
+	meta := &storage.ObjectMeta{
 		Key:          k,
 		Size:         stat.Size,
 		ETag:         strings.Trim(stat.ETag, `"`),
@@ -55,7 +56,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptio
 	return obj, meta, nil
 }
 
-func (c *client) HeadObject(ctx context.Context, key string) (*driver.ObjectMeta, error) {
+func (c *client) HeadObject(ctx context.Context, key string) (*storage.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
@@ -64,7 +65,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (*driver.ObjectMeta
 	if err != nil {
 		return nil, fmt.Errorf("storage: head object %q: %w", k, toNotFound(err))
 	}
-	return &driver.ObjectMeta{
+	return &storage.ObjectMeta{
 		Key:          k,
 		Size:         stat.Size,
 		ETag:         strings.Trim(stat.ETag, `"`),
@@ -102,7 +103,7 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 	return nil
 }
 
-func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts driver.CopyOptions) error {
+func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...storage.CopyOption) error {
 	src, err := core.NormalizeObjectKey(srcKey)
 	if err != nil {
 		return err
