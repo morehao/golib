@@ -22,11 +22,12 @@ import (
     "time"
 
     "github.com/morehao/golib/storage"
+    "github.com/morehao/golib/storage/spec"
 )
 
 func main() {
-    st, err := storage.New(storage.Config{
-        Provider:        storage.ProviderMinIO,
+    st, err := storage.New(spec.Config{
+        Provider:        spec.ProviderMinIO,
         Endpoint:        "127.0.0.1:9000",
         Bucket:          "demo",
         AccessKeyID:     "minioadmin",
@@ -39,7 +40,7 @@ func main() {
     ctx := context.Background()
 
     // PutObject
-    err = st.PutObject(ctx, "hello.txt", bytes.NewReader([]byte("hello world")), 11, storage.WithContentType("text/plain"))
+    err = st.PutObject(ctx, "hello.txt", bytes.NewReader([]byte("hello world")), 11, spec.WithContentType("text/plain"))
     if err != nil {
         panic(err)
     }
@@ -60,7 +61,7 @@ func main() {
     fmt.Printf("size=%d, etag=%s\n", info.Size, info.ETag)
 
     // ListObjects
-    result, err := st.ListObjects(ctx, "hello", storage.WithPageSize(10))
+    result, err := st.ListObjects(ctx, "hello", spec.WithPageSize(10))
     if err != nil {
         panic(err)
     }
@@ -87,8 +88,8 @@ func main() {
 
 ```go
 // S3
-storage.Config{
-    Provider:        storage.ProviderS3,
+spec.Config{
+    Provider:        spec.ProviderS3,
     Region:          "us-east-1",
     Bucket:          "my-bucket",
     AccessKeyID:     "AKID...",
@@ -96,8 +97,8 @@ storage.Config{
 }
 
 // MinIO
-storage.Config{
-    Provider:        storage.ProviderMinIO,
+spec.Config{
+    Provider:        spec.ProviderMinIO,
     Endpoint:        "127.0.0.1:9000",
     Bucket:          "demo",
     AccessKeyID:     "minioadmin",
@@ -106,8 +107,8 @@ storage.Config{
 }
 
 // OSS (阿里云)
-storage.Config{
-    Provider:        storage.ProviderOSS,
+spec.Config{
+    Provider:        spec.ProviderOSS,
     Region:          "cn-hangzhou",
     Bucket:          "my-bucket",
     AccessKeyID:     "ak...",
@@ -115,8 +116,8 @@ storage.Config{
 }
 
 // COS (腾讯云)
-storage.Config{
-    Provider:        storage.ProviderCOS,
+spec.Config{
+    Provider:        spec.ProviderCOS,
     Region:          "ap-guangzhou",
     Bucket:          "my-bucket",
     AccessKeyID:     "secret-id...",
@@ -124,8 +125,8 @@ storage.Config{
 }
 
 // TOS (火山引擎)
-storage.Config{
-    Provider:        storage.ProviderTOS,
+spec.Config{
+    Provider:        spec.ProviderTOS,
     Region:          "cn-beijing",
     Bucket:          "my-bucket",
     AccessKeyID:     "ak...",
@@ -152,7 +153,7 @@ storage.Config{
 ## Multipart Upload
 
 ```go
-uploader, err := st.NewMultipartUpload(ctx, "large-file.zip", storage.WithMultipartContentType("application/zip"))
+uploader, err := st.NewMultipartUpload(ctx, "large-file.zip", spec.WithMultipartContentType("application/zip"))
 if err != nil {
     panic(err)
 }
@@ -169,7 +170,7 @@ if err != nil {
     panic(err)
 }
 
-err = uploader.Complete(ctx, []storage.Part{part1, part2})
+err = uploader.Complete(ctx, []spec.Part{part1, part2})
 if err != nil {
     panic(err)
 }
@@ -178,13 +179,13 @@ if err != nil {
 ## Errors
 
 ```go
-if errors.Is(err, storage.ErrObjectNotFound) {
+if errors.Is(err, spec.ErrObjectNotFound) {
     // handle missing object
 }
-if errors.Is(err, storage.ErrInvalidConfig) {
+if errors.Is(err, spec.ErrInvalidConfig) {
     // handle invalid configuration
 }
-if errors.Is(err, storage.ErrInvalidKey) {
+if errors.Is(err, spec.ErrInvalidKey) {
     // handle invalid object key
 }
 ```
@@ -202,17 +203,17 @@ key := storage.NewKeyBuilder().
 
 ## Package Layout
 
-- `storage` 拥有全部公开契约，包括 `Config`、`Storage`、元数据类型、option helper 和错误
-- `storage.New` 负责校验配置并通过 factory 选择具体 provider
-- `storage/internal/provider/*` 直接实现根包契约
-- `storage/internal/core` 仅保留 key、multipart 等纯 helper
+- `storage` 负责实例入口、provider registry、URI helper 和 key builder
+- `storage/spec` 拥有全部公开稳定契约，包括 `Config`、`Storage`、元数据类型、option 和公开错误
+- `storage/internal/provider/*` 实现具体 provider，并依赖 `storage/spec`
+- `storage/internal/core` 仅保留 key、multipart 等内部 helper
 
 ## URI Helpers
 
 ```go
-uri := storage.FormatURI(storage.ProviderS3, "demo", "images/a.png")
+uri := storage.FormatURI(spec.ProviderS3, "demo", "images/a.png")
 // "s3://demo/images/a.png"
 
 parsed, err := storage.ParseURI("s3://demo/images/a.png")
-// parsed.Provider = ProviderS3, parsed.Bucket = "demo", parsed.Key = "images/a.png"
+// parsed.Provider = spec.ProviderS3, parsed.Bucket = "demo", parsed.Key = "images/a.png"
 ```
