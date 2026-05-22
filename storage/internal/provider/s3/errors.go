@@ -6,17 +6,17 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
 func mapNotFound(err error) error {
 	var noSuchKey *types.NoSuchKey
 	if errors.As(err, &noSuchKey) {
-		return fmt.Errorf("storage: object not found: %w", driver.ErrObjectNotFound)
+		return fmt.Errorf("storage: object not found: %w", storage.ErrObjectNotFound)
 	}
 	var notFound *types.NotFound
 	if errors.As(err, &notFound) {
-		return fmt.Errorf("storage: object not found: %w", driver.ErrObjectNotFound)
+		return fmt.Errorf("storage: object not found: %w", storage.ErrObjectNotFound)
 	}
 	return err
 }

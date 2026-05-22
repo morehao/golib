@@ -8,25 +8,26 @@ import (
 	aws "github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
-func (c *client) ListObjects(ctx context.Context, prefix string, opts driver.ListOptions) (*driver.ListResult, error) {
+func (c *client) ListObjects(ctx context.Context, prefix string, opts ...storage.ListOption) (*storage.ListResult, error) {
+	lo := storage.ApplyListOptions(opts...)
 	input := &awss3.ListObjectsV2Input{
 		Bucket:  aws.String(c.bucket),
 		Prefix:  aws.String(prefix),
-		MaxKeys: aws.Int32(int32(opts.PageSize)),
+		MaxKeys: aws.Int32(int32(lo.PageSize)),
 	}
-	if opts.ContinuationToken != "" {
-		input.ContinuationToken = aws.String(opts.ContinuationToken)
+	if lo.ContinuationToken != "" {
+		input.ContinuationToken = aws.String(lo.ContinuationToken)
 	}
 	out, err := c.sdk.ListObjectsV2(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list objects %q: %w", prefix, err)
 	}
-	objects := make([]driver.ListedObject, 0, len(out.Contents))
+	objects := make([]storage.ListedObject, 0, len(out.Contents))
 	for _, item := range out.Contents {
-		objects = append(objects, driver.ListedObject{
+		objects = append(objects, storage.ListedObject{
 			Key:          aws.ToString(item.Key),
 			Size:         aws.ToInt64(item.Size),
 			ETag:         strings.Trim(aws.ToString(item.ETag), `"`),
@@ -37,25 +38,26 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts driver.Lis
 	if aws.ToString(out.NextContinuationToken) != "" {
 		nextToken = aws.ToString(out.NextContinuationToken)
 	}
-	return &driver.ListResult{
+	return &storage.ListResult{
 		Objects:   objects,
 		NextToken: nextToken,
 		HasMore:   aws.ToBool(out.IsTruncated),
 	}, nil
 }
 
-func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts driver.ListOptions) driver.Paginator {
+func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...storage.ListOption) storage.Paginator {
+	lo := storage.ApplyListOptions(opts...)
 	return &paginator{
 		client:  c,
 		prefix:  prefix,
-		options: opts,
+		options: lo,
 	}
 }
 
 type paginator struct {
 	client  *client
 	prefix  string
-	options driver.ListOptions
+	options storage.ListOptions
 	hasMore bool
 	started bool
 }
@@ -67,12 +69,9 @@ func (p *paginator) HasMorePages() bool {
 	return p.hasMore
 }
 
-func (p *paginator) NextPage(ctx context.Context) (*driver.ListResult, error) {
+func (p *paginator) NextPage(ctx context.Context) (*storage.ListResult, error) {
 	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix, driver.ListOptions{
-		PageSize:          p.options.PageSize,
-		ContinuationToken: p.options.ContinuationToken,
-	})
+	result, err := p.client.ListObjects(ctx, p.prefix, storage.WithPageSize(p.options.PageSize), storage.WithContinuationToken(p.options.ContinuationToken))
 	if err != nil {
 		return nil, err
 	}

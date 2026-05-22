@@ -11,21 +11,22 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/morehao/golib/storage/internal/core"
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
-func (c *client) NewMultipartUpload(ctx context.Context, key string, opts driver.MultipartOptions) (driver.MultipartUploader, error) {
+func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...storage.MultipartOption) (storage.MultipartUploader, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
 	}
+	mo := storage.ApplyMultipartOptions(opts...)
 	input := &awss3.CreateMultipartUploadInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(k),
-		ContentType: aws.String(opts.ContentType),
+		ContentType: aws.String(mo.ContentType),
 	}
-	if len(opts.Metadata) > 0 {
-		input.Metadata = opts.Metadata
+	if len(mo.Metadata) > 0 {
+		input.Metadata = mo.Metadata
 	}
 	resp, err := c.sdk.CreateMultipartUpload(ctx, input)
 	if err != nil {
@@ -46,9 +47,9 @@ type uploader struct {
 	uploadID string
 }
 
-func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (driver.Part, error) {
-	if err := core.ValidatePartNumber(partNum); err != nil {
-		return driver.Part{}, err
+func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (storage.Part, error) {
+	if partNum <= 0 {
+		return storage.Part{}, fmt.Errorf("storage: part number must be positive, got %d", partNum)
 	}
 	resp, err := u.client.UploadPart(ctx, &awss3.UploadPartInput{
 		Bucket:        aws.String(u.bucket),
@@ -59,17 +60,25 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 		ContentLength: aws.Int64(size),
 	})
 	if err != nil {
-		return driver.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
+		return storage.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
 	}
-	return driver.Part{
+	return storage.Part{
 		PartNumber: partNum,
 		ETag:       strings.Trim(aws.ToString(resp.ETag), `"`),
 	}, nil
 }
 
-func (u *uploader) Complete(ctx context.Context, parts []driver.Part) error {
-	if err := core.ValidateParts(parts); err != nil {
-		return err
+func (u *uploader) Complete(ctx context.Context, parts []storage.Part) error {
+	if len(parts) == 0 {
+		return fmt.Errorf("storage: parts list must not be empty")
+	}
+	for i, p := range parts {
+		if p.PartNumber <= 0 {
+			return fmt.Errorf("storage: part %d has invalid number %d", i, p.PartNumber)
+		}
+		if p.ETag == "" {
+			return fmt.Errorf("storage: part %d has empty etag", i)
+		}
 	}
 	completedParts := make([]types.CompletedPart, 0, len(parts))
 	for _, p := range parts {
