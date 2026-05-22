@@ -51,7 +51,13 @@ type GetOptions struct{}
 type GetOption func(*GetOptions)
 
 func ApplyGetOptions(opts ...GetOption) GetOptions {
-	return GetOptions{}
+	out := GetOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
+	}
+	return out
 }
 
 type CopyOptions struct{}
@@ -59,7 +65,13 @@ type CopyOptions struct{}
 type CopyOption func(*CopyOptions)
 
 func ApplyCopyOptions(opts ...CopyOption) CopyOptions {
-	return CopyOptions{}
+	out := CopyOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
+	}
+	return out
 }
 
 type ListOptions struct {
