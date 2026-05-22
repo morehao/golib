@@ -1,7 +1,11 @@
 package storage
 
-import "fmt"
+import (
+	"fmt"
 
-func newProviderFallback(cfg Config) (Storage, error) {
-	return nil, fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, ErrInvalidConfig)
+	"github.com/morehao/golib/storage/spec"
+)
+
+func newProviderFallback(cfg spec.Config) (spec.Storage, error) {
+	return nil, fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, spec.ErrInvalidConfig)
 }

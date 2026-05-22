@@ -1,14 +1,16 @@
 package storage
 
-type providerFactory func(Config) (Storage, error)
+import "github.com/morehao/golib/storage/spec"
 
-var providerFactories = map[Provider]providerFactory{}
+type providerFactory func(spec.Config) (spec.Storage, error)
 
-func RegisterProvider(p Provider, fn providerFactory) {
+var providerFactories = map[spec.Provider]providerFactory{}
+
+func RegisterProvider(p spec.Provider, fn providerFactory) {
 	providerFactories[p] = fn
 }
 
-func newProvider(cfg Config) (Storage, error) {
+func newProvider(cfg spec.Config) (spec.Storage, error) {
 	if fn, ok := providerFactories[cfg.Provider]; ok {
 		return fn(cfg)
 	}

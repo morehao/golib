@@ -9,6 +9,7 @@ import (
 )
 
 type Provider = spec.Provider
+type Config = spec.Config
 
 const (
 	ProviderS3    = spec.ProviderS3
@@ -17,8 +18,6 @@ const (
 	ProviderCOS   = spec.ProviderCOS
 	ProviderTOS   = spec.ProviderTOS
 )
-
-type Config = spec.Config
 
 func normalizeConfig(cfg Config) Config {
 	if cfg.RetryMaxAttempts == 0 {

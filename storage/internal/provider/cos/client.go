@@ -7,6 +7,7 @@ import (
 
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
+	"github.com/morehao/golib/storage"
 	"github.com/morehao/golib/storage/spec"
 )
 
@@ -28,4 +29,8 @@ func New(cfg spec.Config) (spec.Storage, error) {
 		secretID:  cfg.AccessKeyID,
 		secretKey: cfg.SecretAccessKey,
 	}, nil
+}
+
+func init() {
+	storage.RegisterProvider(spec.ProviderCOS, New)
 }
