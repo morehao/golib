@@ -1,42 +1,37 @@
 package storage
 
 import (
-	"fmt"
-
-	cosprovider "github.com/morehao/golib/storage/internal/provider/cos"
-	minioprovider "github.com/morehao/golib/storage/internal/provider/minio"
-	ossprovider "github.com/morehao/golib/storage/internal/provider/oss"
-	s3provider "github.com/morehao/golib/storage/internal/provider/s3"
-	tosprovider "github.com/morehao/golib/storage/internal/provider/tos"
-
-	"github.com/morehao/golib/storage/internal/core"
+	"context"
+	"io"
+	"time"
 )
 
-type Storage = core.Storage
-type MultipartUploader = core.MultipartUploader
-type Paginator = core.Paginator
+type Storage interface {
+	PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...PutOption) error
+	GetObject(ctx context.Context, key string, opts ...GetOption) (io.ReadCloser, *ObjectMeta, error)
+	HeadObject(ctx context.Context, key string) (*ObjectMeta, error)
+	DeleteObject(ctx context.Context, key string) error
+	DeleteObjects(ctx context.Context, keys []string) error
+	CopyObject(ctx context.Context, srcKey, dstKey string, opts ...CopyOption) error
 
-func New(cfg Config) (Storage, error) {
-	nc := core.NormalizeConfig(cfg)
-	if err := core.ValidateConfig(nc); err != nil {
-		return nil, err
-	}
-	return newProvider(nc)
+	ListObjects(ctx context.Context, prefix string, opts ...ListOption) (*ListResult, error)
+	ListObjectsPaginator(ctx context.Context, prefix string, opts ...ListOption) Paginator
+
+	PresignGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
+	PresignPutURL(ctx context.Context, key string, expires time.Duration) (string, error)
+
+	NewMultipartUpload(ctx context.Context, key string, opts ...MultipartOption) (MultipartUploader, error)
 }
 
-func newProvider(cfg core.Config) (Storage, error) {
-	switch cfg.Provider {
-	case core.ProviderMinIO:
-		return minioprovider.New(cfg)
-	case core.ProviderS3:
-		return s3provider.New(cfg)
-	case core.ProviderOSS:
-		return ossprovider.New(cfg)
-	case core.ProviderCOS:
-		return cosprovider.New(cfg)
-	case core.ProviderTOS:
-		return tosprovider.New(cfg)
-	default:
-		return nil, fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, core.ErrInvalidConfig)
-	}
+type MultipartUploader interface {
+	UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (Part, error)
+	Complete(ctx context.Context, parts []Part) error
+	Abort(ctx context.Context) error
 }
+
+type Paginator interface {
+	HasMorePages() bool
+	NextPage(ctx context.Context) (*ListResult, error)
+}
+
+// New is defined in factory.go (Task 2) after newProvider is available.
