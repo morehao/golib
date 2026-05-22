@@ -37,10 +37,10 @@ type Config struct {
 }
 
 func NormalizeConfig(cfg Config) Config {
-	if cfg.RetryMaxAttempts <= 0 {
+	if cfg.RetryMaxAttempts == 0 {
 		cfg.RetryMaxAttempts = 3
 	}
-	if cfg.Timeout <= 0 {
+	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
 	}
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
