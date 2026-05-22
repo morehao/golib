@@ -203,10 +203,9 @@ key := storage.NewKeyBuilder().
 ## Package Layout
 
 - `storage` 拥有全部公开契约，包括 `Config`、`Storage`、元数据类型、option helper 和错误
-- `storage.New` 负责校验配置、完成内部转换，并通过 factory 选择具体 provider
-- `storage/internal/driver` 是仅面向 provider 的最小内部 bridge，用于规避 Go import cycle
-- `storage/internal/provider/*` 存放具体 provider 实现
-- `storage/internal/core` 仅保留纯 helper，不再承载公开契约
+- `storage.New` 负责校验配置并通过 factory 选择具体 provider
+- `storage/internal/provider/*` 直接实现根包契约
+- `storage/internal/core` 仅保留 key、multipart 等纯 helper
 
 ## URI Helpers
 

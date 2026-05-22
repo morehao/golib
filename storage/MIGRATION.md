@@ -77,9 +77,9 @@ storage.Config{
 
 ## Contract Ownership Change
 
-`storage` 的公开类型现在由根包直接定义，而不是再 alias 到 `storage/internal/core`。
+`storage` 的公开类型由根包直接定义，provider 也直接实现根包契约。
 
-由于 Go import cycle 限制，provider 实现通过 `storage/internal/driver` 接收内部契约，但这不会改变根包作为公开 API owner 的事实。
+此前用于规避 import cycle 的 `storage/internal/driver` bridge 已移除，`storage/adapter.go` 也不再负责 root/driver 之间的转换。
 
 `storage/internal/core` 只保留 key、multipart 等内部 helper，不再承担公开 contract source 的角色。
 
