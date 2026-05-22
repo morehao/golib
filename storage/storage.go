@@ -1,10 +1,7 @@
 package storage
 
 import (
-	"context"
 	"fmt"
-	"io"
-	"time"
 
 	cosprovider "github.com/morehao/golib/storage/internal/provider/cos"
 	minioprovider "github.com/morehao/golib/storage/internal/provider/minio"
