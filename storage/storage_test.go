@@ -11,6 +11,7 @@ import (
 	_ "github.com/morehao/golib/storage/internal/provider/oss"
 	_ "github.com/morehao/golib/storage/internal/provider/s3"
 	_ "github.com/morehao/golib/storage/internal/provider/tos"
+	"github.com/morehao/golib/storage/spec"
 	"github.com/stretchr/testify/require"
 )
 
