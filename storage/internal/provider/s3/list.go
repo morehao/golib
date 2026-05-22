@@ -8,11 +8,11 @@ import (
 	aws "github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
 
-func (c *client) ListObjects(ctx context.Context, prefix string, opts ...storage.ListOption) (*storage.ListResult, error) {
-	lo := storage.ApplyListOptions(opts...)
+func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.ListOption) (*spec.ListResult, error) {
+	lo := spec.ApplyListOptions(opts...)
 	input := &awss3.ListObjectsV2Input{
 		Bucket:  aws.String(c.bucket),
 		Prefix:  aws.String(prefix),
@@ -25,9 +25,9 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...storage
 	if err != nil {
 		return nil, fmt.Errorf("storage: list objects %q: %w", prefix, err)
 	}
-	objects := make([]storage.ListedObject, 0, len(out.Contents))
+	objects := make([]spec.ListedObject, 0, len(out.Contents))
 	for _, item := range out.Contents {
-		objects = append(objects, storage.ListedObject{
+		objects = append(objects, spec.ListedObject{
 			Key:          aws.ToString(item.Key),
 			Size:         aws.ToInt64(item.Size),
 			ETag:         strings.Trim(aws.ToString(item.ETag), `"`),
@@ -38,15 +38,15 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...storage
 	if aws.ToString(out.NextContinuationToken) != "" {
 		nextToken = aws.ToString(out.NextContinuationToken)
 	}
-	return &storage.ListResult{
+	return &spec.ListResult{
 		Objects:   objects,
 		NextToken: nextToken,
 		HasMore:   aws.ToBool(out.IsTruncated),
 	}, nil
 }
 
-func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...storage.ListOption) storage.Paginator {
-	lo := storage.ApplyListOptions(opts...)
+func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
+	lo := spec.ApplyListOptions(opts...)
 	return &paginator{
 		client:  c,
 		prefix:  prefix,
@@ -57,7 +57,7 @@ func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts .
 type paginator struct {
 	client  *client
 	prefix  string
-	options storage.ListOptions
+	options spec.ListOptions
 	hasMore bool
 	started bool
 }
@@ -69,9 +69,9 @@ func (p *paginator) HasMorePages() bool {
 	return p.hasMore
 }
 
-func (p *paginator) NextPage(ctx context.Context) (*storage.ListResult, error) {
+func (p *paginator) NextPage(ctx context.Context) (*spec.ListResult, error) {
 	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix, storage.WithPageSize(p.options.PageSize), storage.WithContinuationToken(p.options.ContinuationToken))
+	result, err := p.client.ListObjects(ctx, p.prefix, spec.WithPageSize(p.options.PageSize), spec.WithContinuationToken(p.options.ContinuationToken))
 	if err != nil {
 		return nil, err
 	}

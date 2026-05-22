@@ -7,11 +7,11 @@ import (
 
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 
-	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
 
-func (c *client) ListObjects(ctx context.Context, prefix string, opts ...storage.ListOption) (*storage.ListResult, error) {
-	lo := storage.ApplyListOptions(opts...)
+func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.ListOption) (*spec.ListResult, error) {
+	lo := spec.ApplyListOptions(opts...)
 	input := &tos.ListObjectsType2Input{
 		Bucket:  c.bucket,
 		Prefix:  prefix,
@@ -24,9 +24,9 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...storage
 	if err != nil {
 		return nil, fmt.Errorf("storage: list objects %q: %w", prefix, err)
 	}
-	objects := make([]storage.ListedObject, 0, len(out.Contents))
+	objects := make([]spec.ListedObject, 0, len(out.Contents))
 	for _, item := range out.Contents {
-		objects = append(objects, storage.ListedObject{
+		objects = append(objects, spec.ListedObject{
 			Key:          item.Key,
 			Size:         item.Size,
 			ETag:         strings.Trim(item.ETag, `"`),
@@ -37,15 +37,15 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...storage
 	if out.NextContinuationToken != "" {
 		nextToken = out.NextContinuationToken
 	}
-	return &storage.ListResult{
+	return &spec.ListResult{
 		Objects:   objects,
 		NextToken: nextToken,
 		HasMore:   out.IsTruncated,
 	}, nil
 }
 
-func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...storage.ListOption) storage.Paginator {
-	lo := storage.ApplyListOptions(opts...)
+func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
+	lo := spec.ApplyListOptions(opts...)
 	return &paginator{
 		client:  c,
 		prefix:  prefix,
@@ -56,7 +56,7 @@ func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts .
 type paginator struct {
 	client  *client
 	prefix  string
-	options storage.ListOptions
+	options spec.ListOptions
 	hasMore bool
 	started bool
 }
@@ -68,9 +68,9 @@ func (p *paginator) HasMorePages() bool {
 	return p.hasMore
 }
 
-func (p *paginator) NextPage(ctx context.Context) (*storage.ListResult, error) {
+func (p *paginator) NextPage(ctx context.Context) (*spec.ListResult, error) {
 	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix, storage.WithPageSize(p.options.PageSize), storage.WithContinuationToken(p.options.ContinuationToken))
+	result, err := p.client.ListObjects(ctx, p.prefix, spec.WithPageSize(p.options.PageSize), spec.WithContinuationToken(p.options.ContinuationToken))
 	if err != nil {
 		return nil, err
 	}

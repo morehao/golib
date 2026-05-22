@@ -10,19 +10,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
-
-func init() {
-	storage.RegisterProvider(storage.ProviderS3, New)
-}
 
 type client struct {
 	sdk    *awss3.Client
 	bucket string
 }
 
-func New(cfg storage.Config) (storage.Storage, error) {
+func New(cfg spec.Config) (spec.Storage, error) {
 	awsCfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(cfg.Region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)),

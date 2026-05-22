@@ -6,7 +6,7 @@ import (
 
 	minio "github.com/minio/minio-go/v7"
 
-	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
 
 func toNotFound(err error) error {
@@ -15,7 +15,7 @@ func toNotFound(err error) error {
 	}
 	resp := minio.ToErrorResponse(err)
 	if resp.StatusCode == http.StatusNotFound || resp.Code == "NoSuchKey" || resp.Code == "NoSuchBucket" {
-		return fmt.Errorf("storage: object not found: %w", storage.ErrObjectNotFound)
+		return fmt.Errorf("storage: object not found: %w", spec.ErrObjectNotFound)
 	}
 	return err
 }

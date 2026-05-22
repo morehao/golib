@@ -11,15 +11,15 @@ import (
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
 	"github.com/morehao/golib/storage/internal/core"
-	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/spec"
 )
 
-func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...storage.PutOption) error {
+func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...spec.PutOption) error {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return err
 	}
-	po := storage.ApplyPutOptions(opts...)
+	po := spec.ApplyPutOptions(opts...)
 	putOpt := &cossdk.ObjectPutOptions{
 		ObjectPutHeaderOptions: &cossdk.ObjectPutHeaderOptions{
 			ContentLength: size,
@@ -42,7 +42,7 @@ func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, si
 	return nil
 }
 
-func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, *storage.ObjectMeta, error) {
+func (c *client) GetObject(ctx context.Context, key string, opts ...spec.GetOption) (io.ReadCloser, *spec.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, nil, err
@@ -51,7 +51,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetO
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage: get object %q: %w", k, toNotFound(err))
 	}
-	meta := &storage.ObjectMeta{
+	meta := &spec.ObjectMeta{
 		Key:          k,
 		Size:         resp.ContentLength,
 		ETag:         strings.Trim(resp.Header.Get("ETag"), `"`),
@@ -61,7 +61,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetO
 	return resp.Body, meta, nil
 }
 
-func (c *client) HeadObject(ctx context.Context, key string) (*storage.ObjectMeta, error) {
+func (c *client) HeadObject(ctx context.Context, key string) (*spec.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
@@ -70,7 +70,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (*storage.ObjectMet
 	if err != nil {
 		return nil, fmt.Errorf("storage: head object %q: %w", k, toNotFound(err))
 	}
-	return &storage.ObjectMeta{
+	return &spec.ObjectMeta{
 		Key:          k,
 		Size:         resp.ContentLength,
 		ETag:         strings.Trim(resp.Header.Get("ETag"), `"`),
@@ -111,12 +111,12 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 		return fmt.Errorf("storage: delete objects: %w", err)
 	}
 	if len(resp.DeletedObjects) != len(objects) {
-		return fmt.Errorf("storage: delete objects: some objects not deleted: %w", storage.ErrObjectNotFound)
+		return fmt.Errorf("storage: delete objects: some objects not deleted: %w", spec.ErrObjectNotFound)
 	}
 	return nil
 }
 
-func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...storage.CopyOption) error {
+func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...spec.CopyOption) error {
 	src, err := core.NormalizeObjectKey(srcKey)
 	if err != nil {
 		return err
