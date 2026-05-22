@@ -7,7 +7,7 @@ import (
 
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
 func toNotFound(err error) error {
@@ -17,7 +17,7 @@ func toNotFound(err error) error {
 	var errResp *cossdk.ErrorResponse
 	if errors.As(err, &errResp) {
 		if errResp.Response != nil && errResp.Response.StatusCode == http.StatusNotFound {
-			return fmt.Errorf("storage: object not found: %w", driver.ErrObjectNotFound)
+			return fmt.Errorf("storage: object not found: %w", storage.ErrObjectNotFound)
 		}
 	}
 	return err

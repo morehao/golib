@@ -11,25 +11,26 @@ import (
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
 	"github.com/morehao/golib/storage/internal/core"
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
-func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts driver.PutOptions) error {
+func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...storage.PutOption) error {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return err
 	}
+	po := storage.ApplyPutOptions(opts...)
 	putOpt := &cossdk.ObjectPutOptions{
 		ObjectPutHeaderOptions: &cossdk.ObjectPutHeaderOptions{
 			ContentLength: size,
 		},
 	}
-	if opts.ContentType != "" {
-		putOpt.ObjectPutHeaderOptions.ContentType = opts.ContentType
+	if po.ContentType != "" {
+		putOpt.ObjectPutHeaderOptions.ContentType = po.ContentType
 	}
-	if len(opts.Metadata) > 0 {
+	if len(po.Metadata) > 0 {
 		meta := make(http.Header)
-		for mk, mv := range opts.Metadata {
+		for mk, mv := range po.Metadata {
 			meta.Set(mk, mv)
 		}
 		putOpt.ObjectPutHeaderOptions.XCosMetaXXX = &meta
@@ -41,7 +42,7 @@ func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, si
 	return nil
 }
 
-func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptions) (io.ReadCloser, *driver.ObjectMeta, error) {
+func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, *storage.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, nil, err
@@ -50,7 +51,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptio
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage: get object %q: %w", k, toNotFound(err))
 	}
-	meta := &driver.ObjectMeta{
+	meta := &storage.ObjectMeta{
 		Key:          k,
 		Size:         resp.ContentLength,
 		ETag:         strings.Trim(resp.Header.Get("ETag"), `"`),
@@ -60,7 +61,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptio
 	return resp.Body, meta, nil
 }
 
-func (c *client) HeadObject(ctx context.Context, key string) (*driver.ObjectMeta, error) {
+func (c *client) HeadObject(ctx context.Context, key string) (*storage.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
@@ -69,7 +70,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (*driver.ObjectMeta
 	if err != nil {
 		return nil, fmt.Errorf("storage: head object %q: %w", k, toNotFound(err))
 	}
-	return &driver.ObjectMeta{
+	return &storage.ObjectMeta{
 		Key:          k,
 		Size:         resp.ContentLength,
 		ETag:         strings.Trim(resp.Header.Get("ETag"), `"`),
@@ -110,12 +111,12 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 		return fmt.Errorf("storage: delete objects: %w", err)
 	}
 	if len(resp.DeletedObjects) != len(objects) {
-		return fmt.Errorf("storage: delete objects: some objects not deleted: %w", driver.ErrObjectNotFound)
+		return fmt.Errorf("storage: delete objects: some objects not deleted: %w", storage.ErrObjectNotFound)
 	}
 	return nil
 }
 
-func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts driver.CopyOptions) error {
+func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...storage.CopyOption) error {
 	src, err := core.NormalizeObjectKey(srcKey)
 	if err != nil {
 		return err

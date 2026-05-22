@@ -4,7 +4,7 @@ import (
 	aliyun "github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/credentials"
 
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
 type client struct {
@@ -12,7 +12,11 @@ type client struct {
 	bucket string
 }
 
-func New(cfg driver.Config) (driver.Storage, error) {
+func init() {
+	storage.RegisterProvider(storage.ProviderOSS, New)
+}
+
+func New(cfg storage.Config) (storage.Storage, error) {
 	cred := credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)
 	c := aliyun.NewClient(
 		aliyun.NewConfig().

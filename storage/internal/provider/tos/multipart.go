@@ -9,21 +9,22 @@ import (
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 
 	"github.com/morehao/golib/storage/internal/core"
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
-func (c *client) NewMultipartUpload(ctx context.Context, key string, opts driver.MultipartOptions) (driver.MultipartUploader, error) {
+func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...storage.MultipartOption) (storage.MultipartUploader, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
 	}
+	mo := storage.ApplyMultipartOptions(opts...)
 	input := &tos.CreateMultipartUploadV2Input{
 		Bucket:      c.bucket,
 		Key:         k,
-		ContentType: opts.ContentType,
+		ContentType: mo.ContentType,
 	}
-	if len(opts.Metadata) > 0 {
-		input.Meta = opts.Metadata
+	if len(mo.Metadata) > 0 {
+		input.Meta = mo.Metadata
 	}
 	resp, err := c.sdk.CreateMultipartUploadV2(ctx, input)
 	if err != nil {
@@ -44,9 +45,9 @@ type uploader struct {
 	uploadID string
 }
 
-func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (driver.Part, error) {
-	if err := core.ValidatePartNumber(partNum); err != nil {
-		return driver.Part{}, err
+func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (storage.Part, error) {
+	if partNum <= 0 {
+		return storage.Part{}, fmt.Errorf("storage: part number must be positive, got %d", partNum)
 	}
 	resp, err := u.client.UploadPartV2(ctx, &tos.UploadPartV2Input{
 		UploadPartBasicInput: tos.UploadPartBasicInput{
@@ -59,17 +60,25 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 		ContentLength: size,
 	})
 	if err != nil {
-		return driver.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
+		return storage.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
 	}
-	return driver.Part{
+	return storage.Part{
 		PartNumber: partNum,
 		ETag:       strings.Trim(resp.ETag, `"`),
 	}, nil
 }
 
-func (u *uploader) Complete(ctx context.Context, parts []driver.Part) error {
-	if err := core.ValidateParts(parts); err != nil {
-		return err
+func (u *uploader) Complete(ctx context.Context, parts []storage.Part) error {
+	if len(parts) == 0 {
+		return fmt.Errorf("storage: parts list must not be empty")
+	}
+	for i, p := range parts {
+		if p.PartNumber <= 0 {
+			return fmt.Errorf("storage: part %d has invalid number %d", i, p.PartNumber)
+		}
+		if p.ETag == "" {
+			return fmt.Errorf("storage: part %d has empty etag", i)
+		}
 	}
 	tosParts := make([]tos.UploadedPartV2, 0, len(parts))
 	for _, p := range parts {

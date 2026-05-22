@@ -5,6 +5,11 @@ import (
 	"testing"
 
 	"github.com/morehao/golib/storage"
+	_ "github.com/morehao/golib/storage/internal/provider/cos"
+	_ "github.com/morehao/golib/storage/internal/provider/minio"
+	_ "github.com/morehao/golib/storage/internal/provider/oss"
+	_ "github.com/morehao/golib/storage/internal/provider/s3"
+	_ "github.com/morehao/golib/storage/internal/provider/tos"
 	"github.com/stretchr/testify/require"
 )
 

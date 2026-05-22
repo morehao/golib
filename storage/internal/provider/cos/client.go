@@ -7,7 +7,7 @@ import (
 
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
 type client struct {
@@ -17,7 +17,11 @@ type client struct {
 	secretKey string
 }
 
-func New(cfg driver.Config) (driver.Storage, error) {
+func init() {
+	storage.RegisterProvider(storage.ProviderCOS, New)
+}
+
+func New(cfg storage.Config) (storage.Storage, error) {
 	u, err := neturl.Parse(cfg.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("storage: parse cos endpoint: %w", err)
@@ -25,9 +29,6 @@ func New(cfg driver.Config) (driver.Storage, error) {
 	b := &cossdk.BaseURL{BucketURL: u}
 	sdk := cossdk.NewClient(b, &http.Client{
 		Transport: &cossdk.AuthorizationTransport{
-			// COS SDK uses SecretID/SecretKey terminology.
-			// The flattened Config.AccessKeyID maps to COS SecretID,
-			// and Config.SecretAccessKey maps to COS SecretKey.
 			SecretID:  cfg.AccessKeyID,
 			SecretKey: cfg.SecretAccessKey,
 		},

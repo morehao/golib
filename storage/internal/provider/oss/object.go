@@ -10,25 +10,26 @@ import (
 	aliyun "github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 
 	"github.com/morehao/golib/storage/internal/core"
-	"github.com/morehao/golib/storage/internal/driver"
+	"github.com/morehao/golib/storage"
 )
 
-func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts driver.PutOptions) error {
+func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...storage.PutOption) error {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return err
 	}
+	po := storage.ApplyPutOptions(opts...)
 	req := &aliyun.PutObjectRequest{
 		Bucket:        aliyun.Ptr(c.bucket),
 		Key:           aliyun.Ptr(k),
 		Body:          reader,
 		ContentLength: aliyun.Ptr(size),
 	}
-	if opts.ContentType != "" {
-		req.ContentType = aliyun.Ptr(opts.ContentType)
+	if po.ContentType != "" {
+		req.ContentType = aliyun.Ptr(po.ContentType)
 	}
-	if len(opts.Metadata) > 0 {
-		req.Metadata = opts.Metadata
+	if len(po.Metadata) > 0 {
+		req.Metadata = po.Metadata
 	}
 	_, err = c.sdk.PutObject(ctx, req)
 	if err != nil {
@@ -37,7 +38,7 @@ func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, si
 	return nil
 }
 
-func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptions) (io.ReadCloser, *driver.ObjectMeta, error) {
+func (c *client) GetObject(ctx context.Context, key string, opts ...storage.GetOption) (io.ReadCloser, *storage.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, nil, err
@@ -49,7 +50,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptio
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage: get object %q: %w", k, toNotFound(err))
 	}
-	meta := &driver.ObjectMeta{
+	meta := &storage.ObjectMeta{
 		Key:          k,
 		Size:         output.ContentLength,
 		ETag:         strings.Trim(aliyun.ToString(output.ETag), `"`),
@@ -60,7 +61,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptio
 	return output.Body, meta, nil
 }
 
-func (c *client) HeadObject(ctx context.Context, key string) (*driver.ObjectMeta, error) {
+func (c *client) HeadObject(ctx context.Context, key string) (*storage.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
@@ -72,7 +73,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (*driver.ObjectMeta
 	if err != nil {
 		return nil, fmt.Errorf("storage: head object %q: %w", k, toNotFound(err))
 	}
-	return &driver.ObjectMeta{
+	return &storage.ObjectMeta{
 		Key:          k,
 		Size:         output.ContentLength,
 		ETag:         strings.Trim(aliyun.ToString(output.ETag), `"`),
@@ -117,12 +118,12 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 		return fmt.Errorf("storage: delete objects: %w", err)
 	}
 	if len(result.DeletedObjects) != len(objKeys) {
-		return fmt.Errorf("storage: delete objects: some objects not deleted: %w", driver.ErrObjectNotFound)
+		return fmt.Errorf("storage: delete objects: some objects not deleted: %w", storage.ErrObjectNotFound)
 	}
 	return nil
 }
 
-func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts driver.CopyOptions) error {
+func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...storage.CopyOption) error {
 	src, err := core.NormalizeObjectKey(srcKey)
 	if err != nil {
 		return err

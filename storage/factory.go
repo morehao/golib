@@ -1,43 +1,7 @@
 package storage
 
-import (
-	"fmt"
-
-	"github.com/morehao/golib/storage/internal/driver"
-	cosprovider "github.com/morehao/golib/storage/internal/provider/cos"
-	ossprovider "github.com/morehao/golib/storage/internal/provider/oss"
-	tosprovider "github.com/morehao/golib/storage/internal/provider/tos"
-)
+import "fmt"
 
 func newProviderFallback(cfg Config) (Storage, error) {
-	cc := driver.Config{
-		Provider:          driver.Provider(cfg.Provider),
-		Endpoint:          cfg.Endpoint,
-		Region:            cfg.Region,
-		Bucket:            cfg.Bucket,
-		AccessKeyID:       cfg.AccessKeyID,
-		SecretAccessKey:   cfg.SecretAccessKey,
-		SessionToken:      cfg.SessionToken,
-		UseSSL:            cfg.UseSSL,
-		UsePathStyle:      cfg.UsePathStyle,
-		RetryMaxAttempts:  cfg.RetryMaxAttempts,
-		Timeout:           cfg.Timeout,
-		HTTPClient:        cfg.HTTPClient,
-	}
-	var cs driver.Storage
-	var err error
-	switch cfg.Provider {
-	case ProviderOSS:
-		cs, err = ossprovider.New(cc)
-	case ProviderCOS:
-		cs, err = cosprovider.New(cc)
-	case ProviderTOS:
-		cs, err = tosprovider.New(cc)
-	default:
-		return nil, fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, ErrInvalidConfig)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &storageAdapter{inner: cs}, nil
+	return nil, fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, ErrInvalidConfig)
 }
