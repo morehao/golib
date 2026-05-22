@@ -12,23 +12,23 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 )
 
-func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...core.PutOption) error {
+func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts driver.PutOptions) error {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return err
 	}
-	option := core.ApplyPutOptions(opts...)
 	input := &awss3.PutObjectInput{
 		Bucket:        aws.String(c.bucket),
 		Key:           aws.String(k),
 		Body:          reader,
-		ContentType:   aws.String(option.ContentType),
+		ContentType:   aws.String(opts.ContentType),
 		ContentLength: aws.Int64(size),
 	}
-	if len(option.Metadata) > 0 {
-		input.Metadata = option.Metadata
+	if len(opts.Metadata) > 0 {
+		input.Metadata = opts.Metadata
 	}
 	_, err = c.sdk.PutObject(ctx, input)
 	if err != nil {
@@ -37,7 +37,7 @@ func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, si
 	return nil
 }
 
-func (c *client) GetObject(ctx context.Context, key string, opts ...core.GetOption) (io.ReadCloser, *core.ObjectMeta, error) {
+func (c *client) GetObject(ctx context.Context, key string, opts driver.GetOptions) (io.ReadCloser, *driver.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, nil, err
@@ -49,7 +49,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts ...core.GetOpti
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage: get object %q: %w", k, mapNotFound(err))
 	}
-	meta := &core.ObjectMeta{
+	meta := &driver.ObjectMeta{
 		Key:          k,
 		Size:         aws.ToInt64(resp.ContentLength),
 		ETag:         strings.Trim(aws.ToString(resp.ETag), `"`),
@@ -60,7 +60,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts ...core.GetOpti
 	return resp.Body, meta, nil
 }
 
-func (c *client) HeadObject(ctx context.Context, key string) (*core.ObjectMeta, error) {
+func (c *client) HeadObject(ctx context.Context, key string) (*driver.ObjectMeta, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
@@ -72,7 +72,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (*core.ObjectMeta, 
 	if err != nil {
 		return nil, fmt.Errorf("storage: head object %q: %w", k, mapNotFound(err))
 	}
-	return &core.ObjectMeta{
+	return &driver.ObjectMeta{
 		Key:          k,
 		Size:         aws.ToInt64(resp.ContentLength),
 		ETag:         strings.Trim(aws.ToString(resp.ETag), `"`),
@@ -122,12 +122,12 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 		for _, e := range resp.Errors {
 			failed = append(failed, aws.ToString(e.Key))
 		}
-		return fmt.Errorf("storage: delete objects failed for keys %v: %w", failed, core.ErrObjectNotFound)
+		return fmt.Errorf("storage: delete objects failed for keys %v: %w", failed, driver.ErrObjectNotFound)
 	}
 	return nil
 }
 
-func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...core.CopyOption) error {
+func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts driver.CopyOptions) error {
 	src, err := core.NormalizeObjectKey(srcKey)
 	if err != nil {
 		return err

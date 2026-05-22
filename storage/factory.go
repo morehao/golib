@@ -3,7 +3,7 @@ package storage
 import (
 	"fmt"
 
-	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 	cosprovider "github.com/morehao/golib/storage/internal/provider/cos"
 	minioprovider "github.com/morehao/golib/storage/internal/provider/minio"
 	ossprovider "github.com/morehao/golib/storage/internal/provider/oss"
@@ -12,8 +12,8 @@ import (
 )
 
 func newProvider(cfg Config) (Storage, error) {
-	cc := core.Config{
-		Provider:          core.Provider(cfg.Provider),
+	cc := driver.Config{
+		Provider:          driver.Provider(cfg.Provider),
 		Endpoint:          cfg.Endpoint,
 		Region:            cfg.Region,
 		Bucket:            cfg.Bucket,
@@ -26,7 +26,7 @@ func newProvider(cfg Config) (Storage, error) {
 		Timeout:           cfg.Timeout,
 		HTTPClient:        cfg.HTTPClient,
 	}
-	var cs core.Storage
+	var cs driver.Storage
 	var err error
 	switch cfg.Provider {
 	case ProviderMinIO:
@@ -45,5 +45,5 @@ func newProvider(cfg Config) (Storage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &storageBridge{inner: cs}, nil
+	return &storageAdapter{inner: cs}, nil
 }

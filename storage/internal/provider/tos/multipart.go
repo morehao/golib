@@ -9,21 +9,21 @@ import (
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 
 	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 )
 
-func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...core.MultipartOption) (core.MultipartUploader, error) {
+func (c *client) NewMultipartUpload(ctx context.Context, key string, opts driver.MultipartOptions) (driver.MultipartUploader, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
 	}
-	option := core.ApplyMultipartOptions(opts...)
 	input := &tos.CreateMultipartUploadV2Input{
 		Bucket:      c.bucket,
 		Key:         k,
-		ContentType: option.ContentType,
+		ContentType: opts.ContentType,
 	}
-	if len(option.Metadata) > 0 {
-		input.Meta = option.Metadata
+	if len(opts.Metadata) > 0 {
+		input.Meta = opts.Metadata
 	}
 	resp, err := c.sdk.CreateMultipartUploadV2(ctx, input)
 	if err != nil {
@@ -44,9 +44,9 @@ type uploader struct {
 	uploadID string
 }
 
-func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (core.Part, error) {
+func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (driver.Part, error) {
 	if err := core.ValidatePartNumber(partNum); err != nil {
-		return core.Part{}, err
+		return driver.Part{}, err
 	}
 	resp, err := u.client.UploadPartV2(ctx, &tos.UploadPartV2Input{
 		UploadPartBasicInput: tos.UploadPartBasicInput{
@@ -59,16 +59,20 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 		ContentLength: size,
 	})
 	if err != nil {
-		return core.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
+		return driver.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
 	}
-	return core.Part{
+	return driver.Part{
 		PartNumber: partNum,
 		ETag:       strings.Trim(resp.ETag, `"`),
 	}, nil
 }
 
-func (u *uploader) Complete(ctx context.Context, parts []core.Part) error {
-	if err := core.ValidateParts(parts); err != nil {
+func (u *uploader) Complete(ctx context.Context, parts []driver.Part) error {
+	cp := make([]core.Part, len(parts))
+	for i, p := range parts {
+		cp[i] = core.Part{PartNumber: p.PartNumber, ETag: p.ETag}
+	}
+	if err := core.ValidateParts(cp); err != nil {
 		return err
 	}
 	tosParts := make([]tos.UploadedPartV2, 0, len(parts))

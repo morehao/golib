@@ -11,21 +11,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 )
 
-func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...core.MultipartOption) (core.MultipartUploader, error) {
+func (c *client) NewMultipartUpload(ctx context.Context, key string, opts driver.MultipartOptions) (driver.MultipartUploader, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
 	}
-	option := core.ApplyMultipartOptions(opts...)
 	input := &awss3.CreateMultipartUploadInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(k),
-		ContentType: aws.String(option.ContentType),
+		ContentType: aws.String(opts.ContentType),
 	}
-	if len(option.Metadata) > 0 {
-		input.Metadata = option.Metadata
+	if len(opts.Metadata) > 0 {
+		input.Metadata = opts.Metadata
 	}
 	resp, err := c.sdk.CreateMultipartUpload(ctx, input)
 	if err != nil {
@@ -46,9 +46,9 @@ type uploader struct {
 	uploadID string
 }
 
-func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (core.Part, error) {
+func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (driver.Part, error) {
 	if err := core.ValidatePartNumber(partNum); err != nil {
-		return core.Part{}, err
+		return driver.Part{}, err
 	}
 	resp, err := u.client.UploadPart(ctx, &awss3.UploadPartInput{
 		Bucket:        aws.String(u.bucket),
@@ -59,16 +59,20 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 		ContentLength: aws.Int64(size),
 	})
 	if err != nil {
-		return core.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
+		return driver.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
 	}
-	return core.Part{
+	return driver.Part{
 		PartNumber: partNum,
 		ETag:       strings.Trim(aws.ToString(resp.ETag), `"`),
 	}, nil
 }
 
-func (u *uploader) Complete(ctx context.Context, parts []core.Part) error {
-	if err := core.ValidateParts(parts); err != nil {
+func (u *uploader) Complete(ctx context.Context, parts []driver.Part) error {
+	cp := make([]core.Part, len(parts))
+	for i, p := range parts {
+		cp[i] = core.Part{PartNumber: p.PartNumber, ETag: p.ETag}
+	}
+	if err := core.ValidateParts(cp); err != nil {
 		return err
 	}
 	completedParts := make([]types.CompletedPart, 0, len(parts))

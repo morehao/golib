@@ -7,7 +7,7 @@ import (
 
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
-	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 )
 
 type client struct {
@@ -17,7 +17,7 @@ type client struct {
 	secretKey string
 }
 
-func New(cfg core.Config) (core.Storage, error) {
+func New(cfg driver.Config) (driver.Storage, error) {
 	u, err := neturl.Parse(cfg.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("storage: parse cos endpoint: %w", err)

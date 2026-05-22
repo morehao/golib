@@ -7,26 +7,25 @@ import (
 
 	aliyun "github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 
-	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 )
 
-func (c *client) ListObjects(ctx context.Context, prefix string, opts ...core.ListOption) (*core.ListResult, error) {
-	option := core.ApplyListOptions(opts...)
+func (c *client) ListObjects(ctx context.Context, prefix string, opts driver.ListOptions) (*driver.ListResult, error) {
 	req := &aliyun.ListObjectsV2Request{
 		Bucket:  aliyun.Ptr(c.bucket),
 		Prefix:  aliyun.Ptr(prefix),
-		MaxKeys: int32(option.PageSize),
+		MaxKeys: int32(opts.PageSize),
 	}
-	if option.ContinuationToken != "" {
-		req.ContinuationToken = aliyun.Ptr(option.ContinuationToken)
+	if opts.ContinuationToken != "" {
+		req.ContinuationToken = aliyun.Ptr(opts.ContinuationToken)
 	}
 	output, err := c.sdk.ListObjectsV2(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list objects %q: %w", prefix, err)
 	}
-	objects := make([]core.ListedObject, 0, len(output.Contents))
+	objects := make([]driver.ListedObject, 0, len(output.Contents))
 	for _, item := range output.Contents {
-		objects = append(objects, core.ListedObject{
+		objects = append(objects, driver.ListedObject{
 			Key:          aliyun.ToString(item.Key),
 			Size:         item.Size,
 			ETag:         strings.Trim(aliyun.ToString(item.ETag), `"`),
@@ -37,26 +36,25 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...core.Li
 	if output.NextContinuationToken != nil {
 		nextToken = aliyun.ToString(output.NextContinuationToken)
 	}
-	return &core.ListResult{
+	return &driver.ListResult{
 		Objects:   objects,
 		NextToken: nextToken,
 		HasMore:   output.IsTruncated,
 	}, nil
 }
 
-func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...core.ListOption) core.Paginator {
-	option := core.ApplyListOptions(opts...)
+func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts driver.ListOptions) driver.Paginator {
 	return &paginator{
 		client:  c,
 		prefix:  prefix,
-		options: option,
+		options: opts,
 	}
 }
 
 type paginator struct {
 	client  *client
 	prefix  string
-	options core.ListOptions
+	options driver.ListOptions
 	hasMore bool
 	started bool
 }
@@ -68,12 +66,12 @@ func (p *paginator) HasMorePages() bool {
 	return p.hasMore
 }
 
-func (p *paginator) NextPage(ctx context.Context) (*core.ListResult, error) {
+func (p *paginator) NextPage(ctx context.Context) (*driver.ListResult, error) {
 	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix,
-		core.WithPageSize(p.options.PageSize),
-		core.WithContinuationToken(p.options.ContinuationToken),
-	)
+	result, err := p.client.ListObjects(ctx, p.prefix, driver.ListOptions{
+		PageSize:          p.options.PageSize,
+		ContinuationToken: p.options.ContinuationToken,
+	})
 	if err != nil {
 		return nil, err
 	}

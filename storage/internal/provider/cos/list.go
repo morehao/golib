@@ -7,25 +7,24 @@ import (
 
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
-	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 )
 
-func (c *client) ListObjects(ctx context.Context, prefix string, opts ...core.ListOption) (*core.ListResult, error) {
-	option := core.ApplyListOptions(opts...)
+func (c *client) ListObjects(ctx context.Context, prefix string, opts driver.ListOptions) (*driver.ListResult, error) {
 	getOpt := &cossdk.BucketGetOptions{
 		Prefix:  prefix,
-		MaxKeys: option.PageSize,
+		MaxKeys: opts.PageSize,
 	}
-	if option.ContinuationToken != "" {
-		getOpt.Marker = option.ContinuationToken
+	if opts.ContinuationToken != "" {
+		getOpt.Marker = opts.ContinuationToken
 	}
 	result, _, err := c.sdk.Bucket.Get(ctx, getOpt)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list objects %q: %w", prefix, err)
 	}
-	objects := make([]core.ListedObject, 0, len(result.Contents))
+	objects := make([]driver.ListedObject, 0, len(result.Contents))
 	for _, obj := range result.Contents {
-		objects = append(objects, core.ListedObject{
+		objects = append(objects, driver.ListedObject{
 			Key:          obj.Key,
 			Size:         obj.Size,
 			ETag:         strings.Trim(obj.ETag, `"`),
@@ -36,26 +35,25 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...core.Li
 	if result.NextMarker != "" {
 		nextToken = result.NextMarker
 	}
-	return &core.ListResult{
+	return &driver.ListResult{
 		Objects:   objects,
 		NextToken: nextToken,
 		HasMore:   result.IsTruncated,
 	}, nil
 }
 
-func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...core.ListOption) core.Paginator {
-	option := core.ApplyListOptions(opts...)
+func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts driver.ListOptions) driver.Paginator {
 	return &paginator{
 		client:  c,
 		prefix:  prefix,
-		options: option,
+		options: opts,
 	}
 }
 
 type paginator struct {
 	client  *client
 	prefix  string
-	options core.ListOptions
+	options driver.ListOptions
 	hasMore bool
 	started bool
 }
@@ -67,12 +65,12 @@ func (p *paginator) HasMorePages() bool {
 	return p.hasMore
 }
 
-func (p *paginator) NextPage(ctx context.Context) (*core.ListResult, error) {
+func (p *paginator) NextPage(ctx context.Context) (*driver.ListResult, error) {
 	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix,
-		core.WithPageSize(p.options.PageSize),
-		core.WithContinuationToken(p.options.ContinuationToken),
-	)
+	result, err := p.client.ListObjects(ctx, p.prefix, driver.ListOptions{
+		PageSize:          p.options.PageSize,
+		ContinuationToken: p.options.ContinuationToken,
+	})
 	if err != nil {
 		return nil, err
 	}

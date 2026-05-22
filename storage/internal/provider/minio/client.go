@@ -6,7 +6,7 @@ import (
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
-	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 )
 
 type client struct {
@@ -15,7 +15,7 @@ type client struct {
 	bucket string
 }
 
-func New(cfg core.Config) (core.Storage, error) {
+func New(cfg driver.Config) (driver.Storage, error) {
 	sdk, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken),
 		Secure: cfg.UseSSL,

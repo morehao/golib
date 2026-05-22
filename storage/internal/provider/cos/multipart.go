@@ -10,23 +10,23 @@ import (
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 
 	"github.com/morehao/golib/storage/internal/core"
+	"github.com/morehao/golib/storage/internal/driver"
 )
 
-func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...core.MultipartOption) (core.MultipartUploader, error) {
+func (c *client) NewMultipartUpload(ctx context.Context, key string, opts driver.MultipartOptions) (driver.MultipartUploader, error) {
 	k, err := core.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
 	}
-	option := core.ApplyMultipartOptions(opts...)
 	initOpt := &cossdk.InitiateMultipartUploadOptions{
 		ObjectPutHeaderOptions: &cossdk.ObjectPutHeaderOptions{},
 	}
-	if option.ContentType != "" {
-		initOpt.ObjectPutHeaderOptions.ContentType = option.ContentType
+	if opts.ContentType != "" {
+		initOpt.ObjectPutHeaderOptions.ContentType = opts.ContentType
 	}
-	if len(option.Metadata) > 0 {
+	if len(opts.Metadata) > 0 {
 		meta := make(http.Header)
-		for mk, mv := range option.Metadata {
+		for mk, mv := range opts.Metadata {
 			meta.Set(mk, mv)
 		}
 		initOpt.ObjectPutHeaderOptions.XCosMetaXXX = &meta
@@ -48,22 +48,26 @@ type uploader struct {
 	uploadID string
 }
 
-func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (core.Part, error) {
+func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (driver.Part, error) {
 	if err := core.ValidatePartNumber(partNum); err != nil {
-		return core.Part{}, err
+		return driver.Part{}, err
 	}
 	resp, err := u.sdk.Object.UploadPart(ctx, u.key, u.uploadID, int(partNum), reader, nil)
 	if err != nil {
-		return core.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
+		return driver.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
 	}
-	return core.Part{
+	return driver.Part{
 		PartNumber: partNum,
 		ETag:       strings.Trim(resp.Header.Get("ETag"), `"`),
 	}, nil
 }
 
-func (u *uploader) Complete(ctx context.Context, parts []core.Part) error {
-	if err := core.ValidateParts(parts); err != nil {
+func (u *uploader) Complete(ctx context.Context, parts []driver.Part) error {
+	cp := make([]core.Part, len(parts))
+	for i, p := range parts {
+		cp[i] = core.Part{PartNumber: p.PartNumber, ETag: p.ETag}
+	}
+	if err := core.ValidateParts(cp); err != nil {
 		return err
 	}
 	completedParts := make([]cossdk.Object, 0, len(parts))
