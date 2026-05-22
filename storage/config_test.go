@@ -4,12 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/storage/spec"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeConfigAppliesDefaults(t *testing.T) {
-	cfg := normalizeConfig(Config{
-		Provider:        ProviderMinIO,
+	cfg := normalizeConfig(spec.Config{
+		Provider:        spec.ProviderMinIO,
 		Endpoint:        " 127.0.0.1:9000 ",
 		Bucket:          " demo ",
 		AccessKeyID:     " ak ",
@@ -26,8 +27,8 @@ func TestNormalizeConfigAppliesDefaults(t *testing.T) {
 }
 
 func TestNormalizeConfigPreservesExplicitValues(t *testing.T) {
-	cfg := normalizeConfig(Config{
-		Provider:          ProviderMinIO,
+	cfg := normalizeConfig(spec.Config{
+		Provider:          spec.ProviderMinIO,
 		Endpoint:          "127.0.0.1:9000",
 		Bucket:            "demo",
 		AccessKeyID:       "ak",

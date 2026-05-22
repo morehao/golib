@@ -8,18 +8,7 @@ import (
 	"github.com/morehao/golib/storage/spec"
 )
 
-type Provider = spec.Provider
-type Config = spec.Config
-
-const (
-	ProviderS3    = spec.ProviderS3
-	ProviderMinIO = spec.ProviderMinIO
-	ProviderOSS   = spec.ProviderOSS
-	ProviderCOS   = spec.ProviderCOS
-	ProviderTOS   = spec.ProviderTOS
-)
-
-func normalizeConfig(cfg Config) Config {
+func normalizeConfig(cfg spec.Config) spec.Config {
 	if cfg.RetryMaxAttempts == 0 {
 		cfg.RetryMaxAttempts = 3
 	}
@@ -33,44 +22,44 @@ func normalizeConfig(cfg Config) Config {
 	cfg.SecretAccessKey = strings.TrimSpace(cfg.SecretAccessKey)
 	cfg.SessionToken = strings.TrimSpace(cfg.SessionToken)
 
-	if cfg.Provider == ProviderMinIO && !cfg.UsePathStyle {
+	if cfg.Provider == spec.ProviderMinIO && !cfg.UsePathStyle {
 		cfg.UsePathStyle = true
 	}
 
 	return cfg
 }
 
-func validateConfig(cfg Config) error {
+func validateConfig(cfg spec.Config) error {
 	if cfg.Provider == "" {
-		return fmt.Errorf("storage: provider is required: %w", ErrInvalidConfig)
+		return fmt.Errorf("storage: provider is required: %w", spec.ErrInvalidConfig)
 	}
 	if cfg.Bucket == "" {
-		return fmt.Errorf("storage: bucket is required: %w", ErrInvalidConfig)
+		return fmt.Errorf("storage: bucket is required: %w", spec.ErrInvalidConfig)
 	}
 	if cfg.AccessKeyID == "" {
-		return fmt.Errorf("storage: access key id is required: %w", ErrInvalidConfig)
+		return fmt.Errorf("storage: access key id is required: %w", spec.ErrInvalidConfig)
 	}
 	if cfg.SecretAccessKey == "" {
-		return fmt.Errorf("storage: secret access key is required: %w", ErrInvalidConfig)
+		return fmt.Errorf("storage: secret access key is required: %w", spec.ErrInvalidConfig)
 	}
 	if cfg.RetryMaxAttempts < 0 {
-		return fmt.Errorf("storage: retry max attempts must be non-negative: %w", ErrInvalidConfig)
+		return fmt.Errorf("storage: retry max attempts must be non-negative: %w", spec.ErrInvalidConfig)
 	}
 	if cfg.Timeout < 0 {
-		return fmt.Errorf("storage: timeout must be non-negative: %w", ErrInvalidConfig)
+		return fmt.Errorf("storage: timeout must be non-negative: %w", spec.ErrInvalidConfig)
 	}
 
 	switch cfg.Provider {
-	case ProviderMinIO:
+	case spec.ProviderMinIO:
 		if cfg.Endpoint == "" {
-			return fmt.Errorf("storage: endpoint is required for minio: %w", ErrInvalidConfig)
+			return fmt.Errorf("storage: endpoint is required for minio: %w", spec.ErrInvalidConfig)
 		}
-	case ProviderS3, ProviderOSS, ProviderCOS, ProviderTOS:
+	case spec.ProviderS3, spec.ProviderOSS, spec.ProviderCOS, spec.ProviderTOS:
 		if cfg.Region == "" {
-			return fmt.Errorf("storage: region is required for %s: %w", cfg.Provider, ErrInvalidConfig)
+			return fmt.Errorf("storage: region is required for %s: %w", cfg.Provider, spec.ErrInvalidConfig)
 		}
 	default:
-		return fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, ErrInvalidConfig)
+		return fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, spec.ErrInvalidConfig)
 	}
 
 	return nil
