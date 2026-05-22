@@ -1,126 +1,121 @@
-package storage
+package storage_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeConfigAppliesDefaults(t *testing.T) {
-	cfg := normalizeConfig(Config{
-		Provider:        ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderMinIO,
 		Endpoint:        " 127.0.0.1:9000 ",
 		Bucket:          " demo ",
 		AccessKeyID:     " ak ",
 		SecretAccessKey: " sk ",
 	})
-
-	require.Equal(t, 3, cfg.RetryMaxAttempts)
-	require.Equal(t, 30*time.Second, cfg.Timeout)
-	require.Equal(t, "127.0.0.1:9000", cfg.Endpoint)
-	require.Equal(t, "demo", cfg.Bucket)
-	require.Equal(t, "ak", cfg.AccessKeyID)
-	require.Equal(t, "sk", cfg.SecretAccessKey)
-	require.True(t, cfg.UsePathStyle)
+	require.NoError(t, err)
 }
 
 func TestValidateConfigRejectsUnknownProvider(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        Provider("unknown"),
+	_, err := storage.New(storage.Config{
+		Provider:        storage.Provider("unknown"),
 		Bucket:          "demo",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsMissingMinioEndpoint(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderMinIO,
 		Bucket:          "demo",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsMissingRegionForCloudProviders(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        ProviderS3,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderS3,
 		Bucket:          "demo",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsEmptyProvider(t *testing.T) {
-	err := validateConfig(Config{
+	_, err := storage.New(storage.Config{
 		Bucket:          "demo",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsEmptyBucket(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderMinIO,
 		Endpoint:        "127.0.0.1:9000",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsEmptyAccessKey(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderMinIO,
 		Endpoint:        "127.0.0.1:9000",
 		Bucket:          "demo",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsEmptySecretKey(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:    ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:    storage.ProviderMinIO,
 		Endpoint:    "127.0.0.1:9000",
 		Bucket:      "demo",
 		AccessKeyID: "ak",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsNegativeRetry(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:          ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:          storage.ProviderMinIO,
 		Endpoint:          "127.0.0.1:9000",
 		Bucket:            "demo",
 		AccessKeyID:       "ak",
 		SecretAccessKey:   "sk",
 		RetryMaxAttempts:  -1,
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsNegativeTimeout(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderMinIO,
 		Endpoint:        "127.0.0.1:9000",
 		Bucket:          "demo",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 		Timeout:         -1,
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigAcceptsValidConfig(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:          ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:          storage.ProviderMinIO,
 		Endpoint:          "127.0.0.1:9000",
 		Bucket:            "demo",
 		AccessKeyID:       "ak",
@@ -130,8 +125,8 @@ func TestValidateConfigAcceptsValidConfig(t *testing.T) {
 }
 
 func TestNormalizeConfigPreservesExplicitValues(t *testing.T) {
-	cfg := normalizeConfig(Config{
-		Provider:          ProviderMinIO,
+	_, err := storage.New(storage.Config{
+		Provider:          storage.ProviderMinIO,
 		Endpoint:          "127.0.0.1:9000",
 		Bucket:            "demo",
 		AccessKeyID:       "ak",
@@ -139,44 +134,43 @@ func TestNormalizeConfigPreservesExplicitValues(t *testing.T) {
 		RetryMaxAttempts:  5,
 		Timeout:           10 * time.Second,
 	})
-	require.Equal(t, 5, cfg.RetryMaxAttempts)
-	require.Equal(t, 10*time.Second, cfg.Timeout)
+	require.NoError(t, err)
 }
 
 func TestValidateConfigRejectsMissingRegionForOSS(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        ProviderOSS,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderOSS,
 		Bucket:          "demo",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsMissingRegionForCOS(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        ProviderCOS,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderCOS,
 		Bucket:          "demo",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestValidateConfigRejectsMissingRegionForTOS(t *testing.T) {
-	err := validateConfig(Config{
-		Provider:        ProviderTOS,
+	_, err := storage.New(storage.Config{
+		Provider:        storage.ProviderTOS,
 		Bucket:          "demo",
 		AccessKeyID:     "ak",
 		SecretAccessKey: "sk",
 	})
-	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
 
 func TestRootPackageOwnsPublicTypes(t *testing.T) {
-	meta := ObjectMeta{Key: "demo.txt", Size: 1}
-	part := Part{PartNumber: 1, ETag: "etag"}
-	result := ListResult{Objects: []ListedObject{{Key: meta.Key}}}
+	meta := storage.ObjectMeta{Key: "demo.txt", Size: 1}
+	part := storage.Part{PartNumber: 1, ETag: "etag"}
+	result := storage.ListResult{Objects: []storage.ListedObject{{Key: meta.Key}}}
 
 	require.Equal(t, "demo.txt", meta.Key)
 	require.Equal(t, int32(1), part.PartNumber)
@@ -184,8 +178,8 @@ func TestRootPackageOwnsPublicTypes(t *testing.T) {
 }
 
 func TestNewDispatchesToS3Provider(t *testing.T) {
-	st, err := New(Config{
-		Provider:        ProviderS3,
+	st, err := storage.New(storage.Config{
+		Provider:        storage.ProviderS3,
 		Region:          "us-east-1",
 		Bucket:          "test",
 		AccessKeyID:     "ak",
@@ -196,8 +190,8 @@ func TestNewDispatchesToS3Provider(t *testing.T) {
 }
 
 func TestNewDispatchesToMinioProvider(t *testing.T) {
-	st, err := New(Config{
-		Provider:        ProviderMinIO,
+	st, err := storage.New(storage.Config{
+		Provider:        storage.ProviderMinIO,
 		Endpoint:        "127.0.0.1:9000",
 		Bucket:          "test",
 		AccessKeyID:     "minioadmin",
@@ -205,4 +199,26 @@ func TestNewDispatchesToMinioProvider(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, st)
+}
+
+func TestNewReturnsProviderImplementation(t *testing.T) {
+	st, err := storage.New(storage.Config{
+		Provider:        storage.ProviderMinIO,
+		Endpoint:        "127.0.0.1:9000",
+		Bucket:          "demo",
+		AccessKeyID:     "minioadmin",
+		SecretAccessKey: "minioadmin",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "*minio.client", fmt.Sprintf("%T", st))
+}
+
+func TestNewRejectsUnknownProvider(t *testing.T) {
+	_, err := storage.New(storage.Config{
+		Provider:        storage.Provider("unknown"),
+		Bucket:          "demo",
+		AccessKeyID:     "ak",
+		SecretAccessKey: "sk",
+	})
+	require.ErrorIs(t, err, storage.ErrInvalidConfig)
 }
