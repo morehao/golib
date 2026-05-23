@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	cossdk "github.com/tencentyun/cos-go-sdk-v5"
-
 	"github.com/morehao/golib/storage/spec"
+	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 )
 
 func toNotFound(err error) error {

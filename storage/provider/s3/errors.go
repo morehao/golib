@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-
 	"github.com/morehao/golib/storage/spec"
 )
 

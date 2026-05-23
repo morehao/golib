@@ -5,9 +5,8 @@ import (
 	"net/http"
 	neturl "net/url"
 
-	cossdk "github.com/tencentyun/cos-go-sdk-v5"
-
 	"github.com/morehao/golib/storage/spec"
+	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 )
 
 type client struct {
@@ -36,4 +35,3 @@ func New(cfg spec.Config) (spec.Storage, error) {
 		secretKey: cfg.SecretAccessKey,
 	}, nil
 }
-

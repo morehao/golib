@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	cossdk "github.com/tencentyun/cos-go-sdk-v5"
-
 	"github.com/morehao/golib/storage/spec"
+	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 )
 
 func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.ListOption) (*spec.ListResult, error) {

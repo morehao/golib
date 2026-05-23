@@ -9,7 +9,6 @@ import (
 	"time"
 
 	minio "github.com/minio/minio-go/v7"
-
 	"github.com/morehao/golib/storage/spec"
 )
 

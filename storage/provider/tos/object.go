@@ -7,10 +7,9 @@ import (
 	"strings"
 	"time"
 
-	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
-	"github.com/volcengine/ve-tos-golang-sdk/v2/tos/enum"
-
 	"github.com/morehao/golib/storage/spec"
+	tossdk "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
+	"github.com/volcengine/ve-tos-golang-sdk/v2/tos/enum"
 )
 
 func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...spec.PutOption) error {
@@ -19,8 +18,8 @@ func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, si
 		return err
 	}
 	po := spec.ApplyPutOptions(opts...)
-	input := &tos.PutObjectV2Input{
-		PutObjectBasicInput: tos.PutObjectBasicInput{
+	input := &tossdk.PutObjectV2Input{
+		PutObjectBasicInput: tossdk.PutObjectBasicInput{
 			Bucket:        c.bucket,
 			Key:           k,
 			ContentLength: size,
@@ -38,7 +37,7 @@ func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, si
 	return nil
 }
 
-func metadataToMap(meta tos.Metadata) map[string]string {
+func metadataToMap(meta tossdk.Metadata) map[string]string {
 	if meta == nil {
 		return nil
 	}
@@ -55,7 +54,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts ...spec.GetOpti
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := c.sdk.GetObjectV2(ctx, &tos.GetObjectV2Input{
+	resp, err := c.sdk.GetObjectV2(ctx, &tossdk.GetObjectV2Input{
 		Bucket: c.bucket,
 		Key:    k,
 	})
@@ -78,7 +77,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (*spec.ObjectMeta, 
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.sdk.HeadObjectV2(ctx, &tos.HeadObjectV2Input{
+	resp, err := c.sdk.HeadObjectV2(ctx, &tossdk.HeadObjectV2Input{
 		Bucket: c.bucket,
 		Key:    k,
 	})
@@ -100,7 +99,7 @@ func (c *client) DeleteObject(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.sdk.DeleteObjectV2(ctx, &tos.DeleteObjectV2Input{
+	_, err = c.sdk.DeleteObjectV2(ctx, &tossdk.DeleteObjectV2Input{
 		Bucket: c.bucket,
 		Key:    k,
 	})
@@ -114,15 +113,15 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	objects := make([]tos.ObjectTobeDeleted, 0, len(keys))
+	objects := make([]tossdk.ObjectTobeDeleted, 0, len(keys))
 	for _, key := range keys {
 		k, err := spec.NormalizeObjectKey(key)
 		if err != nil {
 			return err
 		}
-		objects = append(objects, tos.ObjectTobeDeleted{Key: k})
+		objects = append(objects, tossdk.ObjectTobeDeleted{Key: k})
 	}
-	resp, err := c.sdk.DeleteMultiObjects(ctx, &tos.DeleteMultiObjectsInput{
+	resp, err := c.sdk.DeleteMultiObjects(ctx, &tossdk.DeleteMultiObjectsInput{
 		Bucket:  c.bucket,
 		Objects: objects,
 		Quiet:   true,
@@ -149,7 +148,7 @@ func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...
 	if err != nil {
 		return err
 	}
-	_, err = c.sdk.CopyObject(ctx, &tos.CopyObjectInput{
+	_, err = c.sdk.CopyObject(ctx, &tossdk.CopyObjectInput{
 		Bucket:    c.bucket,
 		Key:       dst,
 		SrcBucket: c.bucket,
@@ -166,7 +165,7 @@ func (c *client) PresignGetURL(ctx context.Context, key string, expires time.Dur
 	if err != nil {
 		return "", err
 	}
-	out, err := c.sdk.PreSignedURL(&tos.PreSignedURLInput{
+	out, err := c.sdk.PreSignedURL(&tossdk.PreSignedURLInput{
 		HTTPMethod: enum.HttpMethodGet,
 		Bucket:     c.bucket,
 		Key:        k,
@@ -183,7 +182,7 @@ func (c *client) PresignPutURL(ctx context.Context, key string, expires time.Dur
 	if err != nil {
 		return "", err
 	}
-	out, err := c.sdk.PreSignedURL(&tos.PreSignedURLInput{
+	out, err := c.sdk.PreSignedURL(&tossdk.PreSignedURLInput{
 		HTTPMethod: enum.HttpMethodPut,
 		Bucket:     c.bucket,
 		Key:        k,

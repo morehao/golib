@@ -6,9 +6,8 @@ import (
 	"io"
 	"strings"
 
-	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
-
 	"github.com/morehao/golib/storage/spec"
+	tossdk "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 )
 
 func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spec.MultipartOption) (spec.MultipartUploader, error) {
@@ -17,7 +16,7 @@ func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spe
 		return nil, err
 	}
 	mo := spec.ApplyMultipartOptions(opts...)
-	input := &tos.CreateMultipartUploadV2Input{
+	input := &tossdk.CreateMultipartUploadV2Input{
 		Bucket:      c.bucket,
 		Key:         k,
 		ContentType: mo.ContentType,
@@ -38,7 +37,7 @@ func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spe
 }
 
 type uploader struct {
-	client   *tos.ClientV2
+	client   *tossdk.ClientV2
 	bucket   string
 	key      string
 	uploadID string
@@ -48,8 +47,8 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 	if partNum <= 0 {
 		return spec.Part{}, fmt.Errorf("storage: part number must be positive, got %d", partNum)
 	}
-	resp, err := u.client.UploadPartV2(ctx, &tos.UploadPartV2Input{
-		UploadPartBasicInput: tos.UploadPartBasicInput{
+	resp, err := u.client.UploadPartV2(ctx, &tossdk.UploadPartV2Input{
+		UploadPartBasicInput: tossdk.UploadPartBasicInput{
 			Bucket:     u.bucket,
 			Key:        u.key,
 			PartNumber: int(partNum),
@@ -79,14 +78,14 @@ func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
 			return fmt.Errorf("storage: part %d has empty etag", i)
 		}
 	}
-	tosParts := make([]tos.UploadedPartV2, 0, len(parts))
+	tosParts := make([]tossdk.UploadedPartV2, 0, len(parts))
 	for _, p := range parts {
-		tosParts = append(tosParts, tos.UploadedPartV2{
+		tosParts = append(tosParts, tossdk.UploadedPartV2{
 			PartNumber: int(p.PartNumber),
 			ETag:       p.ETag,
 		})
 	}
-	_, err := u.client.CompleteMultipartUploadV2(ctx, &tos.CompleteMultipartUploadV2Input{
+	_, err := u.client.CompleteMultipartUploadV2(ctx, &tossdk.CompleteMultipartUploadV2Input{
 		Bucket:   u.bucket,
 		Key:      u.key,
 		UploadID: u.uploadID,
@@ -99,7 +98,7 @@ func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
 }
 
 func (u *uploader) Abort(ctx context.Context) error {
-	_, err := u.client.AbortMultipartUpload(ctx, &tos.AbortMultipartUploadInput{
+	_, err := u.client.AbortMultipartUpload(ctx, &tossdk.AbortMultipartUploadInput{
 		Bucket:   u.bucket,
 		Key:      u.key,
 		UploadID: u.uploadID,

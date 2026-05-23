@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	minio "github.com/minio/minio-go/v7"
-
 	"github.com/morehao/golib/storage/spec"
 )
 

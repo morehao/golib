@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"strings"
 
-	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
-
 	"github.com/morehao/golib/storage/spec"
+	tossdk "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 )
 
 func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.ListOption) (*spec.ListResult, error) {
 	lo := spec.ApplyListOptions(opts...)
-	input := &tos.ListObjectsType2Input{
+	input := &tossdk.ListObjectsType2Input{
 		Bucket:  c.bucket,
 		Prefix:  prefix,
 		MaxKeys: lo.PageSize,

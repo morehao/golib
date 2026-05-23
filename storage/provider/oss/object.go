@@ -8,7 +8,6 @@ import (
 	"time"
 
 	aliyun "github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
-
 	"github.com/morehao/golib/storage/spec"
 )
 

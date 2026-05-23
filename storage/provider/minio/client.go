@@ -5,7 +5,6 @@ import (
 
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-
 	"github.com/morehao/golib/storage/spec"
 )
 
@@ -30,4 +29,3 @@ func New(cfg spec.Config) (spec.Storage, error) {
 		bucket: cfg.Bucket,
 	}, nil
 }
-

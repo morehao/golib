@@ -7,9 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	cossdk "github.com/tencentyun/cos-go-sdk-v5"
-
 	"github.com/morehao/golib/storage/spec"
+	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 )
 
 func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spec.MultipartOption) (spec.MultipartUploader, error) {

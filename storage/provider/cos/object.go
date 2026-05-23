@@ -8,9 +8,8 @@ import (
 	"strings"
 	"time"
 
-	cossdk "github.com/tencentyun/cos-go-sdk-v5"
-
 	"github.com/morehao/golib/storage/spec"
+	cossdk "github.com/tencentyun/cos-go-sdk-v5"
 )
 
 func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...spec.PutOption) error {
