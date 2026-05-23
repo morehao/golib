@@ -6,7 +6,6 @@ import (
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
-	"github.com/morehao/golib/storage"
 	"github.com/morehao/golib/storage/spec"
 )
 
@@ -32,6 +31,3 @@ func New(cfg spec.Config) (spec.Storage, error) {
 	}, nil
 }
 
-func init() {
-	storage.RegisterProvider(spec.ProviderMinIO, New)
-}

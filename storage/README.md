@@ -204,9 +204,8 @@ key := storage.NewKeyBuilder().
 ## Package Layout
 
 - `storage` 负责实例入口、provider registry、URI helper 和 key builder
-- `storage/spec` 拥有全部公开稳定契约，包括 `Config`、`Storage`、元数据类型、option 和公开错误
-- `storage/internal/provider/*` 实现具体 provider，并依赖 `storage/spec`
-- `storage/internal/core` 仅保留 key、multipart 等内部 helper
+- `storage/spec` 拥有全部公开稳定契约，包括 `Config`、`Storage`、接口类型、option 和公开错误
+- `storage/provider/*` 实现具体 provider，并依赖 `storage/spec`
 
 ## URI Helpers
 

@@ -7,7 +7,6 @@ import (
 
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 
-	"github.com/morehao/golib/storage"
 	"github.com/morehao/golib/storage/spec"
 )
 
@@ -31,9 +30,6 @@ func New(cfg spec.Config) (spec.Storage, error) {
 	return &client{sdk: sdk, bucket: cfg.Bucket}, nil
 }
 
-func init() {
-	storage.RegisterProvider(spec.ProviderTOS, New)
-}
 
 func (c *client) CheckConnectivity(ctx context.Context) error {
 	_, err := c.sdk.HeadBucket(ctx, &tos.HeadBucketInput{Bucket: c.bucket})
