@@ -11,6 +11,13 @@ import (
 	"github.com/morehao/golib/storage/spec"
 )
 
+type client struct {
+	sdk       *cossdk.Client
+	bucket    string
+	secretID  string
+	secretKey string
+}
+
 func New(cfg spec.Config) (spec.Storage, error) {
 	u, err := neturl.Parse(cfg.Endpoint)
 	if err != nil {

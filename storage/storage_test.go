@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/morehao/golib/storage"
-	"github.com/morehao/golib/storage/spec"
 	_ "github.com/morehao/golib/storage/internal/provider/cos"
 	_ "github.com/morehao/golib/storage/internal/provider/minio"
 	_ "github.com/morehao/golib/storage/internal/provider/oss"
@@ -86,12 +85,12 @@ func TestValidateConfigRejectsEmptySecretKey(t *testing.T) {
 
 func TestValidateConfigRejectsNegativeRetry(t *testing.T) {
 	_, err := storage.New(spec.Config{
-		Provider:          spec.ProviderMinIO,
-		Endpoint:          "127.0.0.1:9000",
-		Bucket:            "demo",
-		AccessKeyID:       "ak",
-		SecretAccessKey:   "sk",
-		RetryMaxAttempts:  -1,
+		Provider:         spec.ProviderMinIO,
+		Endpoint:         "127.0.0.1:9000",
+		Bucket:           "demo",
+		AccessKeyID:      "ak",
+		SecretAccessKey:  "sk",
+		RetryMaxAttempts: -1,
 	})
 	require.ErrorIs(t, err, spec.ErrInvalidConfig)
 }
@@ -110,11 +109,11 @@ func TestValidateConfigRejectsNegativeTimeout(t *testing.T) {
 
 func TestValidateConfigAcceptsValidConfig(t *testing.T) {
 	_, err := storage.New(spec.Config{
-		Provider:          spec.ProviderMinIO,
-		Endpoint:          "127.0.0.1:9000",
-		Bucket:            "demo",
-		AccessKeyID:       "ak",
-		SecretAccessKey:   "sk",
+		Provider:        spec.ProviderMinIO,
+		Endpoint:        "127.0.0.1:9000",
+		Bucket:          "demo",
+		AccessKeyID:     "ak",
+		SecretAccessKey: "sk",
 	})
 	require.NoError(t, err)
 }

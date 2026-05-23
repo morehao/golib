@@ -10,6 +10,12 @@ import (
 	"github.com/morehao/golib/storage/spec"
 )
 
+type client struct {
+	sdk    *minio.Client
+	core   *minio.Core
+	bucket string
+}
+
 func New(cfg spec.Config) (spec.Storage, error) {
 	sdk, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken),
