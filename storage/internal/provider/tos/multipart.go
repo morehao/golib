@@ -8,12 +8,11 @@ import (
 
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 
-	"github.com/morehao/golib/storage/internal/core"
 	"github.com/morehao/golib/storage/spec"
 )
 
 func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spec.MultipartOption) (spec.MultipartUploader, error) {
-	k, err := core.NormalizeObjectKey(key)
+	k, err := spec.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
 	}

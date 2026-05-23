@@ -1,6 +1,10 @@
 package storage
 
-import "github.com/morehao/golib/storage/spec"
+import (
+	"fmt"
+
+	"github.com/morehao/golib/storage/spec"
+)
 
 type providerFactory func(spec.Config) (spec.Storage, error)
 
@@ -14,5 +18,5 @@ func newProvider(cfg spec.Config) (spec.Storage, error) {
 	if fn, ok := providerFactories[cfg.Provider]; ok {
 		return fn(cfg)
 	}
-	return newProviderFallback(cfg)
+	return nil, fmt.Errorf("storage: unknown provider %q: %w", cfg.Provider, spec.ErrInvalidConfig)
 }

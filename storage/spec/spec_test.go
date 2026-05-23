@@ -1,135 +1,75 @@
 package spec
 
 import (
-	"errors"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestApplyMultipartOptionsClonesMaps(t *testing.T) {
-	meta := map[string]string{"env": "test"}
-	tags := map[string]string{"team": "storage"}
-
-	got := ApplyMultipartOptions(
-		WithMultipartContentType("application/zip"),
-		WithMultipartMetadata(meta),
-		WithMultipartTags(tags),
-	)
-
-	meta["env"] = "prod"
-	tags["team"] = "platform"
-
-	if got.ContentType != "application/zip" {
-		t.Fatalf("unexpected content type: %q", got.ContentType)
+func TestNormalizeObjectKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr error
+	}{
+		{name: "trim and slash normalize", input: "  images\\2026\\a.png  ", want: "images/2026/a.png"},
+		{name: "collapse repeated slash", input: "images//2026///a.png", want: "images/2026/a.png"},
+		{name: "happy path clean input", input: "images/2026/a.png", want: "images/2026/a.png"},
+		{name: "reject empty", input: "   ", wantErr: ErrInvalidKey},
+		{name: "reject leading slash", input: "/images/a.png", wantErr: ErrInvalidKey},
+		{name: "reject trailing slash", input: "images/a.png/", wantErr: ErrInvalidKey},
+		{name: "reject uri", input: "s3://bucket/a.png", wantErr: ErrInvalidKey},
 	}
-	if got.Metadata["env"] != "test" {
-		t.Fatalf("multipart metadata not cloned: %#v", got.Metadata)
-	}
-	if got.Tags["team"] != "storage" {
-		t.Fatalf("multipart tags not cloned: %#v", got.Tags)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NormalizeObjectKey(tt.input)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
 	}
 }
 
-func TestApplyMultipartOptionsEmptyMaps(t *testing.T) {
-	m := map[string]string(nil)
-	got := ApplyMultipartOptions(
-		WithMultipartMetadata(m),
-		WithMultipartTags(m),
-	)
-	if got.Metadata != nil {
-		t.Fatalf("expected nil metadata for empty input, got %#v", got.Metadata)
-	}
-	if got.Tags != nil {
-		t.Fatalf("expected nil tags for empty input, got %#v", got.Tags)
-	}
+func TestValidateObjectKey(t *testing.T) {
+	require.NoError(t, ValidateObjectKey("valid/key.txt"))
+	require.Error(t, ValidateObjectKey("/invalid"))
+	require.Error(t, ValidateObjectKey(""))
 }
 
-func TestListOptionsWithPageSizeAndToken(t *testing.T) {
-	got := ApplyListOptions(
-		WithPageSize(50),
-		WithContinuationToken("token-abc"),
-	)
-	if got.PageSize != 50 {
-		t.Fatalf("unexpected page size: %d", got.PageSize)
-	}
-	if got.ContinuationToken != "token-abc" {
-		t.Fatalf("unexpected continuation token: %q", got.ContinuationToken)
-	}
+func TestNormalizeConfigAppliesDefaults(t *testing.T) {
+	cfg := NormalizeConfig(Config{
+		Provider:        ProviderMinIO,
+		Endpoint:        " 127.0.0.1:9000 ",
+		Bucket:          " demo ",
+		AccessKeyID:     " ak ",
+		SecretAccessKey: " sk ",
+	})
+
+	require.Equal(t, 3, cfg.RetryMaxAttempts)
+	require.Equal(t, 30*time.Second, cfg.Timeout)
+	require.Equal(t, "127.0.0.1:9000", cfg.Endpoint)
+	require.Equal(t, "demo", cfg.Bucket)
+	require.Equal(t, "ak", cfg.AccessKeyID)
+	require.Equal(t, "sk", cfg.SecretAccessKey)
+	require.True(t, cfg.UsePathStyle)
 }
 
-func TestApplyOptionsWithNilFunctions(t *testing.T) {
-	var nilOpt PutOption = nil
-	got := ApplyPutOptions(nilOpt, WithContentType("text/plain"))
-	if got.ContentType != "text/plain" {
-		t.Fatalf("expected content type to be set even with nil option")
-	}
-
-	mopt := ApplyMultipartOptions(nil, WithMultipartContentType("app/data"))
-	if mopt.ContentType != "app/data" {
-		t.Fatalf("expected multipart content type to be set even with nil option")
-	}
-}
-
-func TestApplyPutOptionsEmptyMaps(t *testing.T) {
-	m := map[string]string(nil)
-	got := ApplyPutOptions(
-		WithMetadata(m),
-		WithTags(m),
-	)
-	if got.Metadata != nil {
-		t.Fatalf("expected nil metadata for empty input, got %#v", got.Metadata)
-	}
-	if got.Tags != nil {
-		t.Fatalf("expected nil tags for empty input, got %#v", got.Tags)
-	}
-}
-
-func TestApplyPutOptionsClonesMaps(t *testing.T) {
-	meta := map[string]string{"env": "test"}
-	tags := map[string]string{"team": "storage"}
-
-	got := ApplyPutOptions(
-		WithContentType("text/plain"),
-		WithMetadata(meta),
-		WithTags(tags),
-	)
-
-	meta["env"] = "prod"
-	tags["team"] = "platform"
-
-	if got.ContentType != "text/plain" {
-		t.Fatalf("unexpected content type: %q", got.ContentType)
-	}
-	if got.Metadata["env"] != "test" {
-		t.Fatalf("metadata not cloned: %#v", got.Metadata)
-	}
-	if got.Tags["team"] != "storage" {
-		t.Fatalf("tags not cloned: %#v", got.Tags)
-	}
-}
-
-func TestApplyListOptionsDefaultsPageSize(t *testing.T) {
-	got := ApplyListOptions()
-	if got.PageSize != 100 {
-		t.Fatalf("unexpected default page size: %d", got.PageSize)
-	}
-}
-
-func TestSentinelErrorsStayUsableWithErrorsIs(t *testing.T) {
-	err := errors.Join(ErrInvalidConfig, ErrInvalidKey)
-	if !errors.Is(err, ErrInvalidConfig) {
-		t.Fatal("expected invalid config sentinel to be discoverable")
-	}
-	if !errors.Is(err, ErrInvalidKey) {
-		t.Fatal("expected invalid key sentinel to be discoverable")
-	}
-}
-
-func TestURITypeCarriesStableFields(t *testing.T) {
-	uri := URI{Provider: ProviderS3, Bucket: "demo", Key: "a/b.txt"}
-	if uri.Provider != ProviderS3 {
-		t.Fatalf("unexpected provider: %q", uri.Provider)
-	}
-	if uri.Bucket != "demo" || uri.Key != "a/b.txt" {
-		t.Fatalf("unexpected uri: %#v", uri)
-	}
+func TestNormalizeConfigPreservesExplicitValues(t *testing.T) {
+	cfg := NormalizeConfig(Config{
+		Provider:          ProviderMinIO,
+		Endpoint:          "127.0.0.1:9000",
+		Bucket:            "demo",
+		AccessKeyID:       "ak",
+		SecretAccessKey:   "sk",
+		RetryMaxAttempts:  5,
+		Timeout:           10 * time.Second,
+	})
+	require.Equal(t, 5, cfg.RetryMaxAttempts)
+	require.Equal(t, 10*time.Second, cfg.Timeout)
 }

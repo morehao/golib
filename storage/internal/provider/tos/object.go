@@ -10,12 +10,11 @@ import (
 	tos "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
 	"github.com/volcengine/ve-tos-golang-sdk/v2/tos/enum"
 
-	"github.com/morehao/golib/storage/internal/core"
 	"github.com/morehao/golib/storage/spec"
 )
 
 func (c *client) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...spec.PutOption) error {
-	k, err := core.NormalizeObjectKey(key)
+	k, err := spec.NormalizeObjectKey(key)
 	if err != nil {
 		return err
 	}
@@ -52,7 +51,7 @@ func metadataToMap(meta tos.Metadata) map[string]string {
 }
 
 func (c *client) GetObject(ctx context.Context, key string, opts ...spec.GetOption) (io.ReadCloser, *spec.ObjectMeta, error) {
-	k, err := core.NormalizeObjectKey(key)
+	k, err := spec.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -75,7 +74,7 @@ func (c *client) GetObject(ctx context.Context, key string, opts ...spec.GetOpti
 }
 
 func (c *client) HeadObject(ctx context.Context, key string) (*spec.ObjectMeta, error) {
-	k, err := core.NormalizeObjectKey(key)
+	k, err := spec.NormalizeObjectKey(key)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +96,7 @@ func (c *client) HeadObject(ctx context.Context, key string) (*spec.ObjectMeta, 
 }
 
 func (c *client) DeleteObject(ctx context.Context, key string) error {
-	k, err := core.NormalizeObjectKey(key)
+	k, err := spec.NormalizeObjectKey(key)
 	if err != nil {
 		return err
 	}
@@ -117,7 +116,7 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 	}
 	objects := make([]tos.ObjectTobeDeleted, 0, len(keys))
 	for _, key := range keys {
-		k, err := core.NormalizeObjectKey(key)
+		k, err := spec.NormalizeObjectKey(key)
 		if err != nil {
 			return err
 		}
@@ -142,11 +141,11 @@ func (c *client) DeleteObjects(ctx context.Context, keys []string) error {
 }
 
 func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...spec.CopyOption) error {
-	src, err := core.NormalizeObjectKey(srcKey)
+	src, err := spec.NormalizeObjectKey(srcKey)
 	if err != nil {
 		return err
 	}
-	dst, err := core.NormalizeObjectKey(dstKey)
+	dst, err := spec.NormalizeObjectKey(dstKey)
 	if err != nil {
 		return err
 	}
@@ -163,7 +162,7 @@ func (c *client) CopyObject(ctx context.Context, srcKey, dstKey string, opts ...
 }
 
 func (c *client) PresignGetURL(ctx context.Context, key string, expires time.Duration) (string, error) {
-	k, err := core.NormalizeObjectKey(key)
+	k, err := spec.NormalizeObjectKey(key)
 	if err != nil {
 		return "", err
 	}
@@ -180,7 +179,7 @@ func (c *client) PresignGetURL(ctx context.Context, key string, expires time.Dur
 }
 
 func (c *client) PresignPutURL(ctx context.Context, key string, expires time.Duration) (string, error) {
-	k, err := core.NormalizeObjectKey(key)
+	k, err := spec.NormalizeObjectKey(key)
 	if err != nil {
 		return "", err
 	}
