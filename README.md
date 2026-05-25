@@ -20,6 +20,7 @@ Components:
 - [gutil](#gutil) Common utility functions collection
 - [protocol](#protocol) Protocol components (includes ghttp, gresty)
 - [ratelimit](#ratelimit) Rate limiting component
+- [storage](#storage) Unified object storage component (supports S3, MinIO, OSS, COS, TOS)
 
 # Installation
 ```bash
@@ -258,6 +259,30 @@ For usage examples, refer to [gtrace usage](gtrace/README.md)
 
 ### Usage
 For usage examples, refer to [ghttp usage](protocol/ghttp/README.md)
+
+## storage
+
+### Overview
+`storage` is a unified object storage component supporting multiple cloud providers with a consistent API.
+
+### Supported Providers
+- AWS S3
+- MinIO
+- Alibaba Cloud OSS
+- Tencent Cloud COS
+- Volcano Engine TOS
+
+### Features
+- Unified API across all providers
+- Multipart upload support
+- Presigned URL generation (GET/PUT)
+- Object listing with paginator
+- Batch operations (delete, copy)
+- URI helper for standardized resource identifiers
+- Key builder with prefix, date layout, and random suffix
+
+### Usage
+For usage examples, refer to [storage usage](storage/README.md)
 
 ## ratelimit
 
