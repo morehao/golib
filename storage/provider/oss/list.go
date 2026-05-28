@@ -43,6 +43,41 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.Li
 	}, nil
 }
 
+func (c *client) ListMultipartUploads(ctx context.Context, opts ...spec.ListMultipartUploadsOption) (*spec.ListMultipartUploadsResult, error) {
+	lo := spec.ApplyListMultipartUploadsOptions(opts...)
+	req := &aliyun.ListMultipartUploadsRequest{
+		Bucket:     aliyun.Ptr(c.bucket),
+		MaxUploads: int32(lo.MaxUploads),
+	}
+	if lo.Prefix != "" {
+		req.Prefix = aliyun.Ptr(lo.Prefix)
+	}
+	if lo.KeyMarker != "" {
+		req.KeyMarker = aliyun.Ptr(lo.KeyMarker)
+	}
+	if lo.UploadIDMarker != "" {
+		req.UploadIdMarker = aliyun.Ptr(lo.UploadIDMarker)
+	}
+	resp, err := c.sdk.ListMultipartUploads(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list multipart uploads: %w", err)
+	}
+	uploads := make([]spec.UploadInfo, 0, len(resp.Uploads))
+	for _, u := range resp.Uploads {
+		uploads = append(uploads, spec.UploadInfo{
+			Key:       aliyun.ToString(u.Key),
+			UploadID:  aliyun.ToString(u.UploadId),
+			Initiated: aliyun.ToTime(u.Initiated),
+		})
+	}
+	return &spec.ListMultipartUploadsResult{
+		Uploads:            uploads,
+		NextKeyMarker:      aliyun.ToString(resp.NextKeyMarker),
+		NextUploadIDMarker: aliyun.ToString(resp.NextUploadIdMarker),
+		IsTruncated:        resp.IsTruncated,
+	}, nil
+}
+
 func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
 	lo := spec.ApplyListOptions(opts...)
 	return &paginator{
