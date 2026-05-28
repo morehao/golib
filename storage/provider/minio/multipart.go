@@ -79,6 +79,28 @@ func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
 	return nil
 }
 
+func (u *uploader) ListParts(ctx context.Context, opts ...spec.ListPartsOption) (*spec.ListPartsResult, error) {
+	lo := spec.ApplyListPartsOptions(opts...)
+	resp, err := u.client.ListObjectParts(ctx, u.bucket, u.key, u.uploadID, int(lo.PartNumberMarker), lo.MaxParts)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list parts for %q: %w", u.key, err)
+	}
+	parts := make([]spec.Part, 0, len(resp.ObjectParts))
+	for _, p := range resp.ObjectParts {
+		parts = append(parts, spec.Part{
+			PartNumber:   int32(p.PartNumber),
+			ETag:         strings.Trim(p.ETag, `"`),
+			Size:         p.Size,
+			LastModified: p.LastModified,
+		})
+	}
+	return &spec.ListPartsResult{
+		Parts:                parts,
+		NextPartNumberMarker: int32(resp.NextPartNumberMarker),
+		IsTruncated:          resp.IsTruncated,
+	}, nil
+}
+
 func (u *uploader) Abort(ctx context.Context) error {
 	err := u.client.AbortMultipartUpload(ctx, u.bucket, u.key, u.uploadID)
 	if err != nil {

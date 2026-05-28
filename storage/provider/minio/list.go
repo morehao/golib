@@ -49,6 +49,28 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.Li
 	}, nil
 }
 
+func (c *client) ListMultipartUploads(ctx context.Context, opts ...spec.ListMultipartUploadsOption) (*spec.ListMultipartUploadsResult, error) {
+	lo := spec.ApplyListMultipartUploadsOptions(opts...)
+	resp, err := c.core.ListMultipartUploads(ctx, c.bucket, lo.Prefix, lo.KeyMarker, lo.UploadIDMarker, "", lo.MaxUploads)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list multipart uploads: %w", err)
+	}
+	uploads := make([]spec.UploadInfo, 0, len(resp.Uploads))
+	for _, u := range resp.Uploads {
+		uploads = append(uploads, spec.UploadInfo{
+			Key:       u.Key,
+			UploadID:  u.UploadID,
+			Initiated: u.Initiated,
+		})
+	}
+	return &spec.ListMultipartUploadsResult{
+		Uploads:            uploads,
+		NextKeyMarker:      resp.NextKeyMarker,
+		NextUploadIDMarker: resp.NextUploadIDMarker,
+		IsTruncated:        resp.IsTruncated,
+	}, nil
+}
+
 func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
 	lo := spec.ApplyListOptions(opts...)
 	return &paginator{
