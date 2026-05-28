@@ -78,36 +78,5 @@ func (c *client) ListMultipartUploads(ctx context.Context, opts ...spec.ListMult
 }
 
 func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
-	lo := spec.ApplyListOptions(opts...)
-	return &paginator{
-		client:  c,
-		prefix:  prefix,
-		options: lo,
-	}
-}
-
-type paginator struct {
-	client  *client
-	prefix  string
-	options spec.ListOptions
-	hasMore bool
-	started bool
-}
-
-func (p *paginator) HasMorePages() bool {
-	if !p.started {
-		return true
-	}
-	return p.hasMore
-}
-
-func (p *paginator) NextPage(ctx context.Context) (*spec.ListResult, error) {
-	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix, spec.WithPageSize(p.options.PageSize), spec.WithContinuationToken(p.options.ContinuationToken))
-	if err != nil {
-		return nil, err
-	}
-	p.hasMore = result.HasMore
-	p.options.ContinuationToken = result.NextToken
-	return result, nil
+	return spec.NewListObjectsPaginator(c, prefix, opts...)
 }
