@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	aws "github.com/aws/aws-sdk-go-v2/aws"
@@ -109,4 +110,41 @@ func (u *uploader) Abort(ctx context.Context) error {
 		return fmt.Errorf("storage: abort multipart upload %q: %w", u.key, err)
 	}
 	return nil
+}
+
+func (u *uploader) ListParts(ctx context.Context, opts ...spec.ListPartsOption) (*spec.ListPartsResult, error) {
+	lo := spec.ApplyListPartsOptions(opts...)
+	input := &awss3.ListPartsInput{
+		Bucket:   aws.String(u.bucket),
+		Key:      aws.String(u.key),
+		UploadId: aws.String(u.uploadID),
+		MaxParts: aws.Int32(int32(lo.MaxParts)),
+	}
+	if lo.PartNumberMarker > 0 {
+		input.PartNumberMarker = aws.String(fmt.Sprintf("%d", lo.PartNumberMarker))
+	}
+	out, err := u.client.ListParts(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list parts for %q: %w", u.key, err)
+	}
+	parts := make([]spec.Part, 0, len(out.Parts))
+	for _, p := range out.Parts {
+		parts = append(parts, spec.Part{
+			PartNumber:   aws.ToInt32(p.PartNumber),
+			ETag:         strings.Trim(aws.ToString(p.ETag), `"`),
+			Size:         aws.ToInt64(p.Size),
+			LastModified: aws.ToTime(p.LastModified),
+		})
+	}
+	nextMarker := int32(0)
+	if aws.ToString(out.NextPartNumberMarker) != "" {
+		if v, err := strconv.Atoi(aws.ToString(out.NextPartNumberMarker)); err == nil {
+			nextMarker = int32(v)
+		}
+	}
+	return &spec.ListPartsResult{
+		Parts:                parts,
+		NextPartNumberMarker: nextMarker,
+		IsTruncated:          aws.ToBool(out.IsTruncated),
+	}, nil
 }
