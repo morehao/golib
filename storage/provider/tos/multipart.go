@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/morehao/golib/storage/spec"
 	tossdk "github.com/volcengine/ve-tos-golang-sdk/v2/tos"
@@ -36,11 +37,32 @@ func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spe
 	}, nil
 }
 
+func (c *client) GetMultipartUploader(_ context.Context, key string, uploadID string) (spec.MultipartUploader, error) {
+	k, err := spec.NormalizeObjectKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return &uploader{
+		client:   c.sdk,
+		bucket:   c.bucket,
+		key:      k,
+		uploadID: uploadID,
+	}, nil
+}
+
 type uploader struct {
 	client   *tossdk.ClientV2
 	bucket   string
 	key      string
 	uploadID string
+}
+
+func (u *uploader) UploadID() string {
+	return u.uploadID
+}
+
+func (u *uploader) PresignUploadPartURL(_ context.Context, partNum int32, expires time.Duration) (string, error) {
+	return "", fmt.Errorf("storage: presign upload part not implemented for tos")
 }
 
 func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (spec.Part, error) {

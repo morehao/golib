@@ -1,10 +1,12 @@
-package filerecord
+package uploadfile
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/morehao/golib/storage/spec"
 	"github.com/stretchr/testify/require"
@@ -13,12 +15,39 @@ import (
 )
 
 // mockStorage implements spec.Storage for testing.
+type mockMultipartUploader struct {
+	spec.MultipartUploader
+	uploadID    string
+	completeFail bool
+}
+
+func (m *mockMultipartUploader) UploadID() string {
+	return m.uploadID
+}
+
+func (m *mockMultipartUploader) PresignUploadPartURL(_ context.Context, partNum int32, expires time.Duration) (string, error) {
+	return fmt.Sprintf("https://presign.example.com/%d?uploadId=%s&expires=%s", partNum, m.uploadID, expires), nil
+}
+
+func (m *mockMultipartUploader) Complete(_ context.Context, parts []spec.Part) error {
+	if m.completeFail {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (m *mockMultipartUploader) Abort(_ context.Context) error {
+	return nil
+}
+
 type mockStorage struct {
 	spec.Storage
-	putCalled    bool
-	deleteCalled bool
-	lastKey      string
-	putFail      bool
+	putCalled       bool
+	deleteCalled    bool
+	lastKey         string
+	putFail         bool
+	multipartCalled bool
+	lastUploadID    string
 }
 
 func (m *mockStorage) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...spec.PutOption) error {
@@ -34,6 +63,19 @@ func (m *mockStorage) DeleteObject(ctx context.Context, key string) error {
 	m.deleteCalled = true
 	m.lastKey = key
 	return nil
+}
+
+func (m *mockStorage) NewMultipartUpload(_ context.Context, key string, opts ...spec.MultipartOption) (spec.MultipartUploader, error) {
+	m.multipartCalled = true
+	m.lastKey = key
+	m.lastUploadID = "mock-upload-id-123"
+	return &mockMultipartUploader{uploadID: m.lastUploadID}, nil
+}
+
+func (m *mockStorage) GetMultipartUploader(_ context.Context, key string, uploadID string) (spec.MultipartUploader, error) {
+	m.lastKey = key
+	m.lastUploadID = uploadID
+	return &mockMultipartUploader{uploadID: uploadID}, nil
 }
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -221,4 +263,192 @@ func TestDeleteFile(t *testing.T) {
 
 	_, err = fs.GetFile(context.Background(), created.ID)
 	require.ErrorIs(t, err, ErrFileNotFound)
+}
+
+func TestInitMultipartUpload_Success(t *testing.T) {
+	db := newTestDB(t)
+	mock := &mockStorage{}
+	fs, err := New(db, mock)
+	require.NoError(t, err)
+
+	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+		Fingerprint: "mp-fp",
+		Name:        "large.mp4",
+		Size:        10485760,
+		MimeType:    "video/mp4",
+		ChunkSize:   5242880,
+		StorageKey:  "videos/large.mp4",
+		StorageURI:  "s3://bucket/videos/large.mp4",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.True(t, mock.multipartCalled)
+	require.Equal(t, "videos/large.mp4", mock.lastKey)
+	require.Equal(t, "mock-upload-id-123", rec.UploadID)
+	require.Equal(t, int64(5242880), rec.ChunkSize)
+	require.Equal(t, FileStatusUploading, rec.Status)
+}
+
+func TestInitMultipartUpload_Dedup_CompletedFile(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	// First, complete a regular upload to create a completed record
+	completed, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "dedup-mp-completed",
+		Name:        "done.mp4",
+		Size:        1000,
+		StorageURI:  "s3://bucket/done.mp4",
+	})
+	require.NoError(t, err)
+
+	// Second InitMultipartUpload with same fingerprint should dedup
+	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+		Fingerprint: "dedup-mp-completed",
+		Name:        "done.mp4",
+		Size:        1000,
+		StorageKey:  "files/done.mp4",
+		StorageURI:  "s3://bucket/done.mp4",
+	})
+	require.NoError(t, err)
+	require.Equal(t, completed.ID, rec.ID)
+}
+
+func TestInitMultipartUpload_InvalidArgs(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	_, err = fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{})
+	require.ErrorIs(t, err, ErrInvalidArgument)
+}
+
+func TestPresignUploadPartURL_Success(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+		Fingerprint: "presign-test",
+		Name:        "test.mp4",
+		Size:        1000,
+		StorageKey:  "test.mp4",
+		StorageURI:  "s3://bucket/test.mp4",
+	})
+	require.NoError(t, err)
+
+	url, err := fs.PresignUploadPartURL(context.Background(), rec.ID, 1, time.Hour)
+	require.NoError(t, err)
+	require.Contains(t, url, "presign.example.com")
+	require.Contains(t, url, rec.UploadID)
+}
+
+func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "non-mp",
+		Name:        "small.txt",
+		Size:        100,
+		StorageURI:  "s3://b/small.txt",
+	})
+	require.NoError(t, err)
+
+	_, err = fs.PresignUploadPartURL(context.Background(), rec.ID, 1, time.Hour)
+	require.ErrorIs(t, err, ErrNotMultipartUpload)
+}
+
+func TestPresignUploadPartURL_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	_, err = fs.PresignUploadPartURL(context.Background(), 999, 1, time.Hour)
+	require.ErrorIs(t, err, ErrFileNotFound)
+}
+
+func TestCompleteMultipartUpload_Success(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+		Fingerprint: "complete-test",
+		Name:        "test.mp4",
+		Size:        1000,
+		StorageKey:  "test.mp4",
+		StorageURI:  "s3://bucket/test.mp4",
+	})
+	require.NoError(t, err)
+
+	parts := []spec.Part{
+		{PartNumber: 1, ETag: "etag-1"},
+		{PartNumber: 2, ETag: "etag-2"},
+	}
+	updated, err := fs.CompleteMultipartUpload(context.Background(), CompleteMultipartUploadRequest{
+		ID:    rec.ID,
+		Parts: parts,
+	})
+	require.NoError(t, err)
+	require.Equal(t, FileStatusCompleted, updated.Status)
+	require.Empty(t, updated.UploadID)
+}
+
+func TestCompleteMultipartUpload_NotMultipart(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "complete-non-mp",
+		Name:        "small.txt",
+		Size:        100,
+		StorageURI:  "s3://b/small.txt",
+	})
+	require.NoError(t, err)
+
+	_, err = fs.CompleteMultipartUpload(context.Background(), CompleteMultipartUploadRequest{ID: rec.ID})
+	require.ErrorIs(t, err, ErrNotMultipartUpload)
+}
+
+func TestAbortMultipartUpload_Success(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+		Fingerprint: "abort-test",
+		Name:        "test.mp4",
+		Size:        1000,
+		StorageKey:  "test.mp4",
+		StorageURI:  "s3://bucket/test.mp4",
+	})
+	require.NoError(t, err)
+
+	err = fs.AbortMultipartUpload(context.Background(), rec.ID)
+	require.NoError(t, err)
+
+	aborted, err := fs.GetFile(context.Background(), rec.ID)
+	require.NoError(t, err)
+	require.Equal(t, FileStatusAborted, aborted.Status)
+}
+
+func TestAbortMultipartUpload_NotMultipart(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "abort-non-mp",
+		Name:        "small.txt",
+		Size:        100,
+		StorageURI:  "s3://b/small.txt",
+	})
+	require.NoError(t, err)
+
+	err = fs.AbortMultipartUpload(context.Background(), rec.ID)
+	require.ErrorIs(t, err, ErrNotMultipartUpload)
 }

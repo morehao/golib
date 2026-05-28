@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/morehao/golib/storage/spec"
 	cossdk "github.com/tencentyun/cos-go-sdk-v5"
@@ -36,23 +37,43 @@ func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spe
 		return nil, fmt.Errorf("storage: create multipart upload %q: %w", k, err)
 	}
 	return &uploader{
-		sdk:      c.sdk,
+		client:   c.sdk,
 		key:      k,
 		uploadID: resp.UploadID,
 	}, nil
 }
 
+func (c *client) GetMultipartUploader(_ context.Context, key string, uploadID string) (spec.MultipartUploader, error) {
+	k, err := spec.NormalizeObjectKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return &uploader{
+		client:   c.sdk,
+		key:      k,
+		uploadID: uploadID,
+	}, nil
+}
+
 type uploader struct {
-	sdk      *cossdk.Client
+	client   *cossdk.Client
 	key      string
 	uploadID string
+}
+
+func (u *uploader) UploadID() string {
+	return u.uploadID
+}
+
+func (u *uploader) PresignUploadPartURL(_ context.Context, partNum int32, expires time.Duration) (string, error) {
+	return "", fmt.Errorf("storage: presign upload part not implemented for cos")
 }
 
 func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (spec.Part, error) {
 	if partNum <= 0 {
 		return spec.Part{}, fmt.Errorf("storage: part number must be positive, got %d", partNum)
 	}
-	resp, err := u.sdk.Object.UploadPart(ctx, u.key, u.uploadID, int(partNum), reader, nil)
+	resp, err := u.client.Object.UploadPart(ctx, u.key, u.uploadID, int(partNum), reader, nil)
 	if err != nil {
 		return spec.Part{}, fmt.Errorf("storage: upload part %d for %q: %w", partNum, u.key, err)
 	}
@@ -70,7 +91,7 @@ func (u *uploader) ListParts(ctx context.Context, opts ...spec.ListPartsOption) 
 	if lo.PartNumberMarker > 0 {
 		opt.PartNumberMarker = fmt.Sprintf("%d", lo.PartNumberMarker)
 	}
-	resp, _, err := u.sdk.Object.ListParts(ctx, u.key, u.uploadID, opt)
+	resp, _, err := u.client.Object.ListParts(ctx, u.key, u.uploadID, opt)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list parts for %q: %w", u.key, err)
 	}
@@ -114,7 +135,7 @@ func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
 			ETag:       p.ETag,
 		})
 	}
-	_, _, err := u.sdk.Object.CompleteMultipartUpload(ctx, u.key, u.uploadID, &cossdk.CompleteMultipartUploadOptions{
+	_, _, err := u.client.Object.CompleteMultipartUpload(ctx, u.key, u.uploadID, &cossdk.CompleteMultipartUploadOptions{
 		Parts: completedParts,
 	})
 	if err != nil {
@@ -124,7 +145,7 @@ func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
 }
 
 func (u *uploader) Abort(ctx context.Context) error {
-	_, err := u.sdk.Object.AbortMultipartUpload(ctx, u.key, u.uploadID)
+	_, err := u.client.Object.AbortMultipartUpload(ctx, u.key, u.uploadID)
 	if err != nil {
 		return fmt.Errorf("storage: abort multipart upload %q: %w", u.key, err)
 	}

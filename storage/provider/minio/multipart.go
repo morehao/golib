@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	minio "github.com/minio/minio-go/v7"
 	"github.com/morehao/golib/storage/spec"
@@ -32,11 +33,28 @@ func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spe
 	}, nil
 }
 
+func (c *client) GetMultipartUploader(_ context.Context, key string, uploadID string) (spec.MultipartUploader, error) {
+	k, err := spec.NormalizeObjectKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return &uploader{
+		client:   c.core,
+		bucket:   c.bucket,
+		key:      k,
+		uploadID: uploadID,
+	}, nil
+}
+
 type uploader struct {
 	client   *minio.Core
 	bucket   string
 	key      string
 	uploadID string
+}
+
+func (u *uploader) UploadID() string {
+	return u.uploadID
 }
 
 func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (spec.Part, error) {
@@ -51,6 +69,10 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 		PartNumber: partNum,
 		ETag:       strings.Trim(objPart.ETag, `"`),
 	}, nil
+}
+
+func (u *uploader) PresignUploadPartURL(_ context.Context, partNum int32, expires time.Duration) (string, error) {
+	return "", fmt.Errorf("storage: presign upload part not implemented for minio")
 }
 
 func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
