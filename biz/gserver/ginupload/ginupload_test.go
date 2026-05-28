@@ -60,6 +60,12 @@ func (m *mockStorage) PresignGetURL(_ context.Context, key string, expires time.
 	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
 }
 
+type failingMockStorage struct{ spec.Storage }
+
+func (m *failingMockStorage) PutObject(_ context.Context, _ string, _ io.Reader, _ int64, _ ...spec.PutOption) error {
+	return io.ErrUnexpectedEOF
+}
+
 // --- helpers ---
 
 func newTestFileStore(t *testing.T) *filestore.FileStore {
@@ -154,6 +160,7 @@ func TestHandleUpload(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "no such file")
 	})
 }
 
@@ -211,6 +218,7 @@ func TestHandleCheckExist(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "fingerprint is required")
 	})
 }
 
@@ -317,6 +325,7 @@ func TestHandlePresignUploadPartURL_NotFound(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, resp.Code)
+	require.Contains(t, resp.Msg, "file not found")
 }
 
 func TestHandleCompleteMultipartUpload(t *testing.T) {
@@ -365,6 +374,7 @@ func TestHandleCompleteMultipartUpload_NotFound(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, resp.Code)
+	require.Contains(t, resp.Msg, "file not found")
 }
 
 func TestHandleAbortMultipartUpload(t *testing.T) {
@@ -434,6 +444,7 @@ func TestHandleGetFileDetail(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "file not found")
 	})
 }
 
@@ -478,6 +489,7 @@ func TestHandlePresignGetFileURL_NotFound(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, resp.Code)
+	require.Contains(t, resp.Msg, "file not found")
 }
 
 func TestHandleDeleteFile(t *testing.T) {
@@ -521,6 +533,30 @@ func TestHandleDeleteFile_NotFound(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.NotEqual(t, 0, resp.Code)
+}
+
+func TestHandleUpload_StorageFailure(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	fs, err := filestore.New(db, &failingMockStorage{})
+	require.NoError(t, err)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	group := r.Group("/api/v1")
+	Register(group, fs)
+
+	w := postForm(r, "/api/v1/file/upload", nil, "file", "test.txt", "data")
+	require.Equal(t, 200, w.Code)
+
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	require.NotEqual(t, 0, resp.Code)
+	require.Contains(t, resp.Msg, "unexpected EOF")
 }
 
 func TestHandleIDValidation(t *testing.T) {
