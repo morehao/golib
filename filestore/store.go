@@ -23,7 +23,7 @@ func (s *store) GetByID(ctx context.Context, id uint) (*FileRecord, error) {
 	var rec FileRecord
 	cond := &fileCond{ID: id}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
-	cond.BuildCondition(db, "core_file")
+	cond.BuildCondition(db, tableName)
 	result := db.Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
@@ -38,7 +38,7 @@ func (s *store) GetByFingerprint(ctx context.Context, fingerprint string, status
 	var rec FileRecord
 	cond := &fileCond{Fingerprint: fingerprint, Status: status}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
-	cond.BuildCondition(db, "core_file")
+	cond.BuildCondition(db, tableName)
 	result := db.Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
@@ -52,7 +52,7 @@ func (s *store) GetByFingerprint(ctx context.Context, fingerprint string, status
 func (s *store) UpdateStatus(ctx context.Context, id uint, status FileStatus) error {
 	cond := &fileCond{ID: id}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
-	cond.BuildCondition(db, "core_file")
+	cond.BuildCondition(db, tableName)
 	result := db.Update("status", status)
 	if result.Error != nil {
 		return result.Error
@@ -67,7 +67,7 @@ func (s *store) GetByUploadID(ctx context.Context, uploadID string) (*FileRecord
 	var rec FileRecord
 	cond := &fileCond{UploadID: uploadID}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
-	cond.BuildCondition(db, "core_file")
+	cond.BuildCondition(db, tableName)
 	result := db.Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
@@ -80,7 +80,7 @@ func (s *store) GetByUploadID(ctx context.Context, uploadID string) (*FileRecord
 
 func (s *store) List(ctx context.Context, cond *fileCond) ([]FileRecord, int64, error) {
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
-	cond.BuildCondition(db, "core_file")
+	cond.BuildCondition(db, tableName)
 
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
@@ -102,7 +102,7 @@ func (s *store) List(ctx context.Context, cond *fileCond) ([]FileRecord, int64, 
 func (s *store) ClearUploadID(ctx context.Context, id uint) error {
 	cond := &fileCond{ID: id}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
-	cond.BuildCondition(db, "core_file")
+	cond.BuildCondition(db, tableName)
 	result := db.Updates(map[string]interface{}{
 		"upload_id": "",
 		"status":    FileStatusCompleted,

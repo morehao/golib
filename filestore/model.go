@@ -7,13 +7,15 @@ import (
 	"gorm.io/gorm"
 )
 
+const tableName = "core_file"
+
 type FileStatus string
 
 const (
-	FileStatusUploading  FileStatus = "uploading"
-	FileStatusCompleted  FileStatus = "completed"
-	FileStatusAborted    FileStatus = "aborted"
-	FileStatusMerging    FileStatus = "merging"
+	FileStatusUploading FileStatus = "uploading"
+	FileStatusCompleted FileStatus = "completed"
+	FileStatusAborted   FileStatus = "aborted"
+	FileStatusMerging   FileStatus = "merging"
 )
 
 type FileRecord struct {
@@ -28,7 +30,7 @@ type FileRecord struct {
 }
 
 func (FileRecord) TableName() string {
-	return "core_file"
+	return tableName
 }
 
 // RecordUploadRequest is used by RecordUpload to persist a completed file record.
