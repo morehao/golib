@@ -158,6 +158,10 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
+		if req.ID == 0 {
+			gincontext.Fail(c, fmt.Errorf("id is required"))
+			return
+		}
 
 		expires := parseExpires(req.Expires, time.Hour)
 
@@ -188,6 +192,10 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		var req completeMultipartRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+		if req.ID == 0 {
+			gincontext.Fail(c, fmt.Errorf("id is required"))
 			return
 		}
 
@@ -223,6 +231,10 @@ func handleAbortMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		var req fileIDRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+		if req.ID == 0 {
+			gincontext.Fail(c, fmt.Errorf("id is required"))
 			return
 		}
 

@@ -25,6 +25,10 @@ func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
+		if req.ID == 0 {
+			gincontext.Fail(c, fmt.Errorf("id is required"))
+			return
+		}
 
 		rec, err := fs.GetFile(c.Request.Context(), req.ID)
 		if err != nil {
@@ -50,6 +54,10 @@ func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 		var req presignDownloadRequest
 		if err := c.ShouldBind(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+		if req.ID == 0 {
+			gincontext.Fail(c, fmt.Errorf("id is required"))
 			return
 		}
 
@@ -82,6 +90,10 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 		var req fileIDRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+		if req.ID == 0 {
+			gincontext.Fail(c, fmt.Errorf("id is required"))
 			return
 		}
 
