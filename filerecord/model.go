@@ -45,4 +45,5 @@ type UploadAndRecordRequest struct {
 	MimeType    string
 	Reader      io.Reader
 	StorageKey  string
+	StorageURI  string
 }
