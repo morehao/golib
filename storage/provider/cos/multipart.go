@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/morehao/golib/storage/spec"
@@ -58,6 +59,39 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 	return spec.Part{
 		PartNumber: partNum,
 		ETag:       strings.Trim(resp.Header.Get("ETag"), `"`),
+	}, nil
+}
+
+func (u *uploader) ListParts(ctx context.Context, opts ...spec.ListPartsOption) (*spec.ListPartsResult, error) {
+	lo := spec.ApplyListPartsOptions(opts...)
+	opt := &cossdk.ObjectListPartsOptions{
+		MaxParts: fmt.Sprintf("%d", lo.MaxParts),
+	}
+	if lo.PartNumberMarker > 0 {
+		opt.PartNumberMarker = fmt.Sprintf("%d", lo.PartNumberMarker)
+	}
+	resp, _, err := u.sdk.Object.ListParts(ctx, u.key, u.uploadID, opt)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list parts for %q: %w", u.key, err)
+	}
+	parts := make([]spec.Part, 0, len(resp.Parts))
+	for _, p := range resp.Parts {
+		parts = append(parts, spec.Part{
+			PartNumber:   int32(p.PartNumber),
+			ETag:         strings.Trim(p.ETag, `"`),
+			Size:         p.Size,
+			LastModified: parseTime(p.LastModified),
+		})
+	}
+	nextMarker := int32(0)
+	if resp.NextPartNumberMarker != "" {
+		marker, _ := strconv.Atoi(resp.NextPartNumberMarker)
+		nextMarker = int32(marker)
+	}
+	return &spec.ListPartsResult{
+		Parts:                parts,
+		NextPartNumberMarker: nextMarker,
+		IsTruncated:          resp.IsTruncated,
 	}, nil
 }
 
