@@ -77,3 +77,38 @@ func (p *paginator) NextPage(ctx context.Context) (*spec.ListResult, error) {
 	p.options.ContinuationToken = result.NextToken
 	return result, nil
 }
+
+func (c *client) ListMultipartUploads(ctx context.Context, opts ...spec.ListMultipartUploadsOption) (*spec.ListMultipartUploadsResult, error) {
+	lo := spec.ApplyListMultipartUploadsOptions(opts...)
+	input := &tossdk.ListMultipartUploadsV2Input{
+		Bucket:     c.bucket,
+		MaxUploads: lo.MaxUploads,
+	}
+	if lo.Prefix != "" {
+		input.Prefix = lo.Prefix
+	}
+	if lo.KeyMarker != "" {
+		input.KeyMarker = lo.KeyMarker
+	}
+	if lo.UploadIDMarker != "" {
+		input.UploadIDMarker = lo.UploadIDMarker
+	}
+	resp, err := c.sdk.ListMultipartUploadsV2(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list multipart uploads: %w", err)
+	}
+	uploads := make([]spec.UploadInfo, 0, len(resp.Uploads))
+	for _, u := range resp.Uploads {
+		uploads = append(uploads, spec.UploadInfo{
+			Key:       u.Key,
+			UploadID:  u.UploadID,
+			Initiated: u.Initiated,
+		})
+	}
+	return &spec.ListMultipartUploadsResult{
+		Uploads:            uploads,
+		NextKeyMarker:      resp.NextKeyMarker,
+		NextUploadIDMarker: resp.NextUploadIDMarker,
+		IsTruncated:        resp.IsTruncated,
+	}, nil
+}

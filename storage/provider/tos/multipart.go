@@ -108,3 +108,34 @@ func (u *uploader) Abort(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (u *uploader) ListParts(ctx context.Context, opts ...spec.ListPartsOption) (*spec.ListPartsResult, error) {
+	lo := spec.ApplyListPartsOptions(opts...)
+	input := &tossdk.ListPartsInput{
+		Bucket:   u.bucket,
+		Key:      u.key,
+		UploadID: u.uploadID,
+		MaxParts: lo.MaxParts,
+	}
+	if lo.PartNumberMarker > 0 {
+		input.PartNumberMarker = int(lo.PartNumberMarker)
+	}
+	resp, err := u.client.ListParts(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list parts for %q: %w", u.key, err)
+	}
+	parts := make([]spec.Part, 0, len(resp.Parts))
+	for _, p := range resp.Parts {
+		parts = append(parts, spec.Part{
+			PartNumber:   int32(p.PartNumber),
+			ETag:         strings.Trim(p.ETag, `"`),
+			Size:         p.Size,
+			LastModified: p.LastModified,
+		})
+	}
+	return &spec.ListPartsResult{
+		Parts:                parts,
+		NextPartNumberMarker: int32(resp.NextPartNumberMarker),
+		IsTruncated:          resp.IsTruncated,
+	}, nil
+}
