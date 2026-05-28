@@ -60,6 +60,7 @@ func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			Size:        fh.Size,
 			MimeType:    fh.Header.Get("Content-Type"),
 			Reader:      f,
+			StoragePath: fingerprint,
 		})
 		if err != nil {
 			gincontext.Fail(c, fmt.Errorf("upload: %w", err))
