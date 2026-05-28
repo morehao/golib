@@ -1,4 +1,4 @@
-package uploadfile
+package filestore
 
 import (
 	"fmt"
