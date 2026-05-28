@@ -564,16 +564,19 @@ func TestHandleIDValidation(t *testing.T) {
 	router := setupRouter(fs)
 
 	tests := []struct {
-		name string
-		path string
-		body any
+		name    string
+		path    string
+		body    any
+		wantMsg string
 	}{
-		{"getFileDetail id=0", "/api/v1/file/getFileDetail", fileIDRequest{ID: 0}},
-		{"presignGetFileURL id=0", "/api/v1/file/presignGetFileURL", presignDownloadRequest{ID: 0}},
-		{"deleteFile id=0", "/api/v1/file/deleteFile", fileIDRequest{ID: 0}},
-		{"presignUploadPartURL id=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{ID: 0, PartNumber: 1}},
-		{"completeMultipartUpload id=0", "/api/v1/file/completeMultipartUpload", completeMultipartRequest{ID: 0}},
-		{"abortMultipartUpload id=0", "/api/v1/file/abortMultipartUpload", fileIDRequest{ID: 0}},
+		{"getFileDetail id=0", "/api/v1/file/getFileDetail", fileIDRequest{ID: 0}, "id is required"},
+		{"presignGetFileURL id=0", "/api/v1/file/presignGetFileURL", presignDownloadRequest{ID: 0}, "id is required"},
+		{"deleteFile id=0", "/api/v1/file/deleteFile", fileIDRequest{ID: 0}, "id is required"},
+		{"presignUploadPartURL id=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{ID: 0, PartNumber: 1}, "id is required"},
+		{"presignUploadPartURL part=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{ID: 1, PartNumber: 0}, "part_number must be greater than 0"},
+		{"presignUploadPartURL part=-1", "/api/v1/file/presignUploadPartURL", presignPartRequest{ID: 1, PartNumber: -1}, "part_number must be greater than 0"},
+		{"completeMultipartUpload id=0", "/api/v1/file/completeMultipartUpload", completeMultipartRequest{ID: 0}, "id is required"},
+		{"abortMultipartUpload id=0", "/api/v1/file/abortMultipartUpload", fileIDRequest{ID: 0}, "id is required"},
 	}
 
 	for _, tt := range tests {
@@ -586,7 +589,7 @@ func TestHandleIDValidation(t *testing.T) {
 			err := json.Unmarshal(w.Body.Bytes(), &resp)
 			require.NoError(t, err)
 			require.NotEqual(t, 0, resp.Code)
-			require.Contains(t, resp.Msg, "id is required")
+			require.Contains(t, resp.Msg, tt.wantMsg)
 		})
 	}
 }

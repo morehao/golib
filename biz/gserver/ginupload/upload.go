@@ -163,6 +163,10 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("id is required"))
 			return
 		}
+		if req.PartNumber <= 0 {
+			gincontext.Fail(c, fmt.Errorf("part_number must be greater than 0"))
+			return
+		}
 
 		expires := parseExpires(req.Expires, time.Hour)
 
@@ -253,7 +257,7 @@ func parseExpires(v string, defaultDuration time.Duration) time.Duration {
 		return defaultDuration
 	}
 	d, err := time.ParseDuration(v)
-	if err != nil {
+	if err != nil || d <= 0 {
 		return defaultDuration
 	}
 	return d
