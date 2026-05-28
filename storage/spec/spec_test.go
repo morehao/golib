@@ -60,6 +60,51 @@ func TestNormalizeConfigAppliesDefaults(t *testing.T) {
 	require.True(t, cfg.UsePathStyle)
 }
 
+func TestApplyListMultipartUploadsOptionsDefaults(t *testing.T) {
+	opts := ApplyListMultipartUploadsOptions()
+	require.Equal(t, 1000, opts.MaxUploads)
+	require.Empty(t, opts.Prefix)
+	require.Empty(t, opts.KeyMarker)
+	require.Empty(t, opts.UploadIDMarker)
+}
+
+func TestApplyListMultipartUploadsOptions(t *testing.T) {
+	opts := ApplyListMultipartUploadsOptions(
+		WithMaxUploads(500),
+		WithPrefix("images/"),
+		WithKeyMarker("a.jpg"),
+		WithUploadIDMarker("upload123"),
+	)
+	require.Equal(t, 500, opts.MaxUploads)
+	require.Equal(t, "images/", opts.Prefix)
+	require.Equal(t, "a.jpg", opts.KeyMarker)
+	require.Equal(t, "upload123", opts.UploadIDMarker)
+}
+
+func TestApplyListPartsOptionsDefaults(t *testing.T) {
+	opts := ApplyListPartsOptions()
+	require.Equal(t, 1000, opts.MaxParts)
+	require.Equal(t, int32(0), opts.PartNumberMarker)
+}
+
+func TestApplyListPartsOptions(t *testing.T) {
+	opts := ApplyListPartsOptions(
+		WithMaxParts(200),
+		WithPartNumberMarker(50),
+	)
+	require.Equal(t, 200, opts.MaxParts)
+	require.Equal(t, int32(50), opts.PartNumberMarker)
+}
+
+func TestPartHasSizeAndLastModified(t *testing.T) {
+	now := time.Now()
+	p := Part{PartNumber: 1, ETag: "abc", Size: 1024, LastModified: now}
+	require.Equal(t, int32(1), p.PartNumber)
+	require.Equal(t, "abc", p.ETag)
+	require.Equal(t, int64(1024), p.Size)
+	require.Equal(t, now, p.LastModified)
+}
+
 func TestNormalizeConfigPreservesExplicitValues(t *testing.T) {
 	cfg := NormalizeConfig(Config{
 		Provider:          ProviderMinIO,

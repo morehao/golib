@@ -18,12 +18,14 @@ type Storage interface {
 	PresignGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
 	PresignPutURL(ctx context.Context, key string, expires time.Duration) (string, error)
 	NewMultipartUpload(ctx context.Context, key string, opts ...MultipartOption) (MultipartUploader, error)
+	ListMultipartUploads(ctx context.Context, opts ...ListMultipartUploadsOption) (*ListMultipartUploadsResult, error)
 }
 
 type MultipartUploader interface {
 	UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (Part, error)
 	Complete(ctx context.Context, parts []Part) error
 	Abort(ctx context.Context) error
+	ListParts(ctx context.Context, opts ...ListPartsOption) (*ListPartsResult, error)
 }
 
 type Paginator interface {

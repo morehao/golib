@@ -144,3 +144,63 @@ func ApplyMultipartOptions(opts ...MultipartOption) MultipartOptions {
 	}
 	return out
 }
+
+type ListMultipartUploadsOptions struct {
+	MaxUploads    int
+	Prefix        string
+	KeyMarker     string
+	UploadIDMarker string
+}
+
+type ListMultipartUploadsOption func(*ListMultipartUploadsOptions)
+
+func WithMaxUploads(v int) ListMultipartUploadsOption {
+	return func(o *ListMultipartUploadsOptions) { o.MaxUploads = v }
+}
+
+func WithPrefix(v string) ListMultipartUploadsOption {
+	return func(o *ListMultipartUploadsOptions) { o.Prefix = v }
+}
+
+func WithKeyMarker(v string) ListMultipartUploadsOption {
+	return func(o *ListMultipartUploadsOptions) { o.KeyMarker = v }
+}
+
+func WithUploadIDMarker(v string) ListMultipartUploadsOption {
+	return func(o *ListMultipartUploadsOptions) { o.UploadIDMarker = v }
+}
+
+func ApplyListMultipartUploadsOptions(opts ...ListMultipartUploadsOption) ListMultipartUploadsOptions {
+	out := ListMultipartUploadsOptions{MaxUploads: 1000}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
+	}
+	return out
+}
+
+type ListPartsOptions struct {
+	MaxParts         int
+	PartNumberMarker int32
+}
+
+type ListPartsOption func(*ListPartsOptions)
+
+func WithMaxParts(v int) ListPartsOption {
+	return func(o *ListPartsOptions) { o.MaxParts = v }
+}
+
+func WithPartNumberMarker(v int32) ListPartsOption {
+	return func(o *ListPartsOptions) { o.PartNumberMarker = v }
+}
+
+func ApplyListPartsOptions(opts ...ListPartsOption) ListPartsOptions {
+	out := ListPartsOptions{MaxParts: 1000}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&out)
+		}
+	}
+	return out
+}
