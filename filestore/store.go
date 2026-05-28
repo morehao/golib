@@ -22,7 +22,7 @@ func (s *store) Create(ctx context.Context, record *FileRecord) error {
 
 func (s *store) GetByID(ctx context.Context, id uint) (*FileRecord, error) {
 	var rec FileRecord
-	cond := &IDCond{ID: id}
+	cond := &fileCond{ID: id}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
 	cond.BuildCondition(db, "core_file")
 	err := db.First(&rec).Error
@@ -37,7 +37,7 @@ func (s *store) GetByID(ctx context.Context, id uint) (*FileRecord, error) {
 
 func (s *store) GetByFingerprint(ctx context.Context, fingerprint string, status FileStatus) (*FileRecord, error) {
 	var rec FileRecord
-	cond := &FingerprintCond{Fingerprint: fingerprint, Status: status}
+	cond := &fileCond{Fingerprint: fingerprint, Status: status}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
 	cond.BuildCondition(db, "core_file")
 	err := db.First(&rec).Error
@@ -51,7 +51,7 @@ func (s *store) GetByFingerprint(ctx context.Context, fingerprint string, status
 }
 
 func (s *store) UpdateStatus(ctx context.Context, id uint, status FileStatus) error {
-	cond := &IDCond{ID: id}
+	cond := &fileCond{ID: id}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
 	cond.BuildCondition(db, "core_file")
 	result := db.Update("status", status)
@@ -66,7 +66,7 @@ func (s *store) UpdateStatus(ctx context.Context, id uint, status FileStatus) er
 
 func (s *store) GetByUploadID(ctx context.Context, uploadID string) (*FileRecord, error) {
 	var rec FileRecord
-	cond := &UploadIDCond{UploadID: uploadID}
+	cond := &fileCond{UploadID: uploadID}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
 	cond.BuildCondition(db, "core_file")
 	err := db.First(&rec).Error
@@ -101,7 +101,7 @@ func (s *store) List(ctx context.Context, cond *fileCond) ([]FileRecord, int64, 
 }
 
 func (s *store) ClearUploadID(ctx context.Context, id uint) error {
-	cond := &IDCond{ID: id}
+	cond := &fileCond{ID: id}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
 	cond.BuildCondition(db, "core_file")
 	result := db.Updates(map[string]interface{}{

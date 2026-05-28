@@ -43,19 +43,27 @@ type RecordUploadRequest struct {
 }
 
 type fileCond struct {
-	Status     FileStatus
-	Keyword    string
-	Page       int
-	PageSize   int
-	OrderField string
+	ID          uint
+	Fingerprint string
+	UploadID    string
+	Status      FileStatus
+	Page        int
+	PageSize    int
+	OrderField  string
 }
 
 func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
+	if c.ID > 0 {
+		db.Where(fmt.Sprintf("%s.id = ?", tableName), c.ID)
+	}
+	if c.Fingerprint != "" {
+		db.Where(fmt.Sprintf("%s.fingerprint = ?", tableName), c.Fingerprint)
+	}
+	if c.UploadID != "" {
+		db.Where(fmt.Sprintf("%s.upload_id = ?", tableName), c.UploadID)
+	}
 	if c.Status != "" {
 		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)
-	}
-	if c.Keyword != "" {
-		db.Where(fmt.Sprintf("%s.name LIKE ?", tableName), "%"+c.Keyword+"%")
 	}
 	if c.OrderField != "" {
 		db.Order(c.OrderField)
@@ -64,36 +72,6 @@ func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 
 func (c *fileCond) GetPageInfo() (page int, pageSize int) {
 	return c.Page, c.PageSize
-}
-
-type FingerprintCond struct {
-	Fingerprint string
-	Status      FileStatus
-}
-
-func (c *FingerprintCond) BuildCondition(db *gorm.DB, tableName string) {
-	if c.Fingerprint != "" {
-		db.Where(fmt.Sprintf("%s.fingerprint = ?", tableName), c.Fingerprint)
-	}
-	if c.Status != "" {
-		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)
-	}
-}
-
-type IDCond struct {
-	ID uint
-}
-
-func (c *IDCond) BuildCondition(db *gorm.DB, tableName string) {
-	db.Where(fmt.Sprintf("%s.id = ?", tableName), c.ID)
-}
-
-type UploadIDCond struct {
-	UploadID string
-}
-
-func (c *UploadIDCond) BuildCondition(db *gorm.DB, tableName string) {
-	db.Where(fmt.Sprintf("%s.upload_id = ?", tableName), c.UploadID)
 }
 
 // UploadAndRecordRequest is used by UploadAndRecord to upload bytes and persist a record.

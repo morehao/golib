@@ -95,7 +95,10 @@ func (s *store) Delete(ctx context.Context, group, key string) error {
 	if group == "" || key == "" {
 		return errGroupAndKeyRequired
 	}
-	return s.db.WithContext(ctx).Where("group_name = ? AND `key` = ?", group, key).Delete(&ConfigEntity{}).Error
+	cond := &ConfigCond{Group: group, Key: key, ExactKey: true}
+	db := s.db.WithContext(ctx).Model(&ConfigEntity{})
+	cond.BuildCondition(db, tableName)
+	return db.Delete(&ConfigEntity{}).Error
 }
 
 func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType ValueType, val any) error {
@@ -133,8 +136,12 @@ func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, erro
 		return nil, errGroupAndKeyRequired
 	}
 
+	cond := &ConfigCond{Group: group, Key: key, ExactKey: true}
+	db := s.db.WithContext(ctx).Model(&ConfigEntity{})
+	cond.BuildCondition(db, tableName)
+
 	var config ConfigEntity
-	err := s.db.WithContext(ctx).Where("group_name = ? AND `key` = ?", group, key).First(&config).Error
+	err := db.First(&config).Error
 	if err != nil {
 		return &ConfigEntity{}, nil
 	}

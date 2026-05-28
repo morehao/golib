@@ -59,6 +59,7 @@ type ConfigCond struct {
 	Page       int
 	PageSize   int
 	OrderField string
+	ExactKey   bool
 }
 
 func (c *ConfigCond) BuildCondition(db *gorm.DB, tableName string) {
@@ -66,7 +67,11 @@ func (c *ConfigCond) BuildCondition(db *gorm.DB, tableName string) {
 		db.Where(fmt.Sprintf("%s.group_name = ?", tableName), c.Group)
 	}
 	if c.Key != "" {
-		db.Where(fmt.Sprintf("%s.key LIKE ?", tableName), "%"+c.Key+"%")
+		if c.ExactKey {
+			db.Where(fmt.Sprintf("%s.key = ?", tableName), c.Key)
+		} else {
+			db.Where(fmt.Sprintf("%s.key LIKE ?", tableName), "%"+c.Key+"%")
+		}
 	}
 	if c.ValueType != "" {
 		db.Where(fmt.Sprintf("%s.value_type = ?", tableName), c.ValueType)
