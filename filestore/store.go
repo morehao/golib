@@ -2,7 +2,6 @@ package filestore
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -25,12 +24,12 @@ func (s *store) GetByID(ctx context.Context, id uint) (*FileRecord, error) {
 	cond := &fileCond{ID: id}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
 	cond.BuildCondition(db, "core_file")
-	err := db.First(&rec).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("%w: id=%d", ErrFileNotFound, id)
-		}
-		return nil, err
+	result := db.Find(&rec)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, fmt.Errorf("%w: id=%d", ErrFileNotFound, id)
 	}
 	return &rec, nil
 }
@@ -40,12 +39,12 @@ func (s *store) GetByFingerprint(ctx context.Context, fingerprint string, status
 	cond := &fileCond{Fingerprint: fingerprint, Status: status}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
 	cond.BuildCondition(db, "core_file")
-	err := db.First(&rec).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("%w: fingerprint=%s, status=%s", ErrFileNotFound, fingerprint, status)
-		}
-		return nil, err
+	result := db.Find(&rec)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, fmt.Errorf("%w: fingerprint=%s, status=%s", ErrFileNotFound, fingerprint, status)
 	}
 	return &rec, nil
 }
@@ -69,12 +68,12 @@ func (s *store) GetByUploadID(ctx context.Context, uploadID string) (*FileRecord
 	cond := &fileCond{UploadID: uploadID}
 	db := s.db.WithContext(ctx).Model(&FileRecord{})
 	cond.BuildCondition(db, "core_file")
-	err := db.First(&rec).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("%w: uploadID=%s", ErrFileNotFound, uploadID)
-		}
-		return nil, err
+	result := db.Find(&rec)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, fmt.Errorf("%w: uploadID=%s", ErrFileNotFound, uploadID)
 	}
 	return &rec, nil
 }

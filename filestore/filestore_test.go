@@ -42,12 +42,14 @@ func (m *mockMultipartUploader) Abort(_ context.Context) error {
 
 type mockStorage struct {
 	spec.Storage
-	putCalled       bool
-	deleteCalled    bool
-	lastKey         string
-	putFail         bool
-	multipartCalled bool
-	lastUploadID    string
+	putCalled          bool
+	deleteCalled       bool
+	lastKey            string
+	putFail            bool
+	multipartCalled    bool
+	lastUploadID       string
+	presignGetURLCalled bool
+	presignGetURLFail  bool
 }
 
 func (m *mockStorage) PutObject(ctx context.Context, key string, reader io.Reader, size int64, opts ...spec.PutOption) error {
@@ -76,6 +78,15 @@ func (m *mockStorage) GetMultipartUploader(_ context.Context, key string, upload
 	m.lastKey = key
 	m.lastUploadID = uploadID
 	return &mockMultipartUploader{uploadID: uploadID}, nil
+}
+
+func (m *mockStorage) PresignGetURL(_ context.Context, key string, expires time.Duration) (string, error) {
+	m.presignGetURLCalled = true
+	m.lastKey = key
+	if m.presignGetURLFail {
+		return "", io.ErrUnexpectedEOF
+	}
+	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
 }
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -114,7 +125,7 @@ func TestCheckExist_Found(t *testing.T) {
 		Name:        "test.txt",
 		Size:        100,
 		MimeType:    "text/plain",
-		StorageURI:  "s3://bucket/test.txt",
+		StoragePath: "test.txt",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, rec)
@@ -143,7 +154,7 @@ func TestRecordUpload_DuplicateFingerprint(t *testing.T) {
 		Fingerprint: "dup",
 		Name:        "a.txt",
 		Size:        10,
-		StorageURI:  "s3://bucket/a.txt",
+		StoragePath: "a.txt",
 	}
 	_, err = fs.RecordUpload(context.Background(), req)
 	require.NoError(t, err)
@@ -164,14 +175,13 @@ func TestUploadAndRecord_Success(t *testing.T) {
 		Size:        1024,
 		MimeType:    "image/jpeg",
 		Reader:      strings.NewReader("fake-image-data"),
-		StorageKey:  "images/photo.jpg",
-		StorageURI:  "s3://bucket/images/photo.jpg",
+		StoragePath: "images/photo.jpg",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	require.True(t, mock.putCalled)
 	require.Equal(t, "images/photo.jpg", mock.lastKey)
-	require.Equal(t, "s3://bucket/images/photo.jpg", rec.StorageURI)
+	require.Equal(t, "images/photo.jpg", rec.StoragePath)
 }
 
 func TestUploadAndRecord_Dedup(t *testing.T) {
@@ -185,8 +195,7 @@ func TestUploadAndRecord_Dedup(t *testing.T) {
 		Name:        "same.txt",
 		Size:        100,
 		Reader:      strings.NewReader("data"),
-		StorageKey:  "files/same.txt",
-		StorageURI:  "s3://bucket/files/same.txt",
+		StoragePath: "files/same.txt",
 	}
 
 	first, err := fs.UploadAndRecord(context.Background(), req)
@@ -212,8 +221,7 @@ func TestUploadAndRecord_PutObjectError(t *testing.T) {
 		Name:        "fail.txt",
 		Size:        100,
 		Reader:      strings.NewReader("data"),
-		StorageKey:  "fail.txt",
-		StorageURI:  "s3://bucket/fail.txt",
+		StoragePath: "fail.txt",
 	})
 	require.Error(t, err)
 }
@@ -227,7 +235,7 @@ func TestGetFile(t *testing.T) {
 		Fingerprint: "gettest",
 		Name:        "get.txt",
 		Size:        1,
-		StorageURI:  "s3://b/get.txt",
+		StoragePath: "get.txt",
 	})
 	require.NoError(t, err)
 
@@ -245,6 +253,38 @@ func TestGetFile_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrFileNotFound)
 }
 
+func TestPresignGetFileURL_Success(t *testing.T) {
+	db := newTestDB(t)
+	mock := &mockStorage{}
+	fs, err := New(db, mock)
+	require.NoError(t, err)
+
+	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "url-test",
+		Name:        "test.txt",
+		Size:        100,
+		MimeType:    "text/plain",
+		StoragePath: "files/test.txt",
+	})
+	require.NoError(t, err)
+
+	url, err := fs.PresignGetFileURL(context.Background(), rec.ID, time.Hour)
+	require.NoError(t, err)
+	require.True(t, mock.presignGetURLCalled)
+	require.Contains(t, url, "presign.example.com")
+	require.Contains(t, url, "files/test.txt")
+	require.Contains(t, url, "1h0m0s")
+}
+
+func TestPresignGetFileURL_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	_, err = fs.PresignGetFileURL(context.Background(), 999, time.Hour)
+	require.ErrorIs(t, err, ErrFileNotFound)
+}
+
 func TestDeleteFile(t *testing.T) {
 	db := newTestDB(t)
 	fs, err := New(db, &mockStorage{})
@@ -254,7 +294,7 @@ func TestDeleteFile(t *testing.T) {
 		Fingerprint: "deltest",
 		Name:        "del.txt",
 		Size:        1,
-		StorageURI:  "s3://b/del.txt",
+		StoragePath: "del.txt",
 	})
 	require.NoError(t, err)
 
@@ -276,16 +316,13 @@ func TestInitMultipartUpload_Success(t *testing.T) {
 		Name:        "large.mp4",
 		Size:        10485760,
 		MimeType:    "video/mp4",
-		ChunkSize:   5242880,
-		StorageKey:  "videos/large.mp4",
-		StorageURI:  "s3://bucket/videos/large.mp4",
+		StoragePath: "videos/large.mp4",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	require.True(t, mock.multipartCalled)
 	require.Equal(t, "videos/large.mp4", mock.lastKey)
 	require.Equal(t, "mock-upload-id-123", rec.UploadID)
-	require.Equal(t, int64(5242880), rec.ChunkSize)
 	require.Equal(t, FileStatusUploading, rec.Status)
 }
 
@@ -299,7 +336,7 @@ func TestInitMultipartUpload_Dedup_CompletedFile(t *testing.T) {
 		Fingerprint: "dedup-mp-completed",
 		Name:        "done.mp4",
 		Size:        1000,
-		StorageURI:  "s3://bucket/done.mp4",
+		StoragePath: "done.mp4",
 	})
 	require.NoError(t, err)
 
@@ -308,8 +345,7 @@ func TestInitMultipartUpload_Dedup_CompletedFile(t *testing.T) {
 		Fingerprint: "dedup-mp-completed",
 		Name:        "done.mp4",
 		Size:        1000,
-		StorageKey:  "files/done.mp4",
-		StorageURI:  "s3://bucket/done.mp4",
+		StoragePath: "files/done.mp4",
 	})
 	require.NoError(t, err)
 	require.Equal(t, completed.ID, rec.ID)
@@ -333,8 +369,7 @@ func TestPresignUploadPartURL_Success(t *testing.T) {
 		Fingerprint: "presign-test",
 		Name:        "test.mp4",
 		Size:        1000,
-		StorageKey:  "test.mp4",
-		StorageURI:  "s3://bucket/test.mp4",
+		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
@@ -353,7 +388,7 @@ func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
 		Fingerprint: "non-mp",
 		Name:        "small.txt",
 		Size:        100,
-		StorageURI:  "s3://b/small.txt",
+		StoragePath: "small.txt",
 	})
 	require.NoError(t, err)
 
@@ -379,8 +414,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 		Fingerprint: "complete-test",
 		Name:        "test.mp4",
 		Size:        1000,
-		StorageKey:  "test.mp4",
-		StorageURI:  "s3://bucket/test.mp4",
+		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
@@ -406,7 +440,7 @@ func TestCompleteMultipartUpload_NotMultipart(t *testing.T) {
 		Fingerprint: "complete-non-mp",
 		Name:        "small.txt",
 		Size:        100,
-		StorageURI:  "s3://b/small.txt",
+		StoragePath: "small.txt",
 	})
 	require.NoError(t, err)
 
@@ -423,8 +457,7 @@ func TestAbortMultipartUpload_Success(t *testing.T) {
 		Fingerprint: "abort-test",
 		Name:        "test.mp4",
 		Size:        1000,
-		StorageKey:  "test.mp4",
-		StorageURI:  "s3://bucket/test.mp4",
+		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
@@ -445,7 +478,7 @@ func TestAbortMultipartUpload_NotMultipart(t *testing.T) {
 		Fingerprint: "abort-non-mp",
 		Name:        "small.txt",
 		Size:        100,
-		StorageURI:  "s3://b/small.txt",
+		StoragePath: "small.txt",
 	})
 	require.NoError(t, err)
 

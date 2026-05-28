@@ -22,10 +22,8 @@ type FileRecord struct {
 	Name        string     `gorm:"column:name;type:varchar(256);comment:原始文件名"`
 	Size        int64      `gorm:"column:size;comment:文件大小(字节)"`
 	MimeType    string     `gorm:"column:mime_type;type:varchar(128);comment:MIME 类型"`
-	StorageURI  string     `gorm:"column:storage_uri;type:varchar(512);comment:存储位置 URI，格式 {provider}://{bucket}/{key}"`
-	StorageKey  string     `gorm:"column:storage_key;type:varchar(512);comment:存储对象 key"`
+	StoragePath string     `gorm:"column:storage_path;type:varchar(512);comment:存储对象路径"`
 	UploadID    string     `gorm:"column:upload_id;type:varchar(128);index;comment:S3 multipart upload session ID"`
-	ChunkSize   int64      `gorm:"column:chunk_size;comment:standard chunk size in bytes (0 for non-multipart)"`
 	Status      FileStatus `gorm:"column:status;type:varchar(32);default:uploading;comment:状态：uploading/completed/aborted/merging"`
 }
 
@@ -39,7 +37,7 @@ type RecordUploadRequest struct {
 	Name        string
 	Size        int64
 	MimeType    string
-	StorageURI  string
+	StoragePath string
 }
 
 type fileCond struct {
@@ -81,6 +79,5 @@ type UploadAndRecordRequest struct {
 	Size        int64
 	MimeType    string
 	Reader      io.Reader
-	StorageKey  string
-	StorageURI  string
+	StoragePath string
 }
