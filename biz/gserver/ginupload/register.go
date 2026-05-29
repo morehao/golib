@@ -19,5 +19,6 @@ func Register(group *gin.RouterGroup, fs *filestore.FileStore) {
 		r.POST("/getFileDetail", handleGetFileDetail(fs))
 		r.POST("/presignGetFileURL", handlePresignGetFileURL(fs))
 		r.POST("/deleteFile", handleDeleteFile(fs))
+		r.GET("/redirect/:fileID", handleRedirectGetFileURL(fs))
 	}
 }
