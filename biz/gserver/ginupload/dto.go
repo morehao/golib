@@ -72,7 +72,7 @@ type fileDetailResponse struct {
 	MimeType    string `json:"mime_type"`               // MIME类型
 	StoragePath string `json:"storage_path"`            // 存储路径
 	UploadID    string `json:"upload_id,omitempty"`     // 分片上传ID
-	Status      string `json:"status"`                  // 状态
+	Status      string `json:"status"`                  // 状态: uploading/completed/aborted
 	CreatedAt   string `json:"created_at"`              // 创建时间
 	UpdatedAt   string `json:"updated_at"`              // 更新时间
 }
