@@ -189,7 +189,7 @@ func TestHandleCheckExist(t *testing.T) {
 		require.Equal(t, 0, resp.Code)
 		require.True(t, resp.Data.Exists)
 		require.NotNil(t, resp.Data.File)
-		require.Equal(t, rec.ID, resp.Data.File.ID)
+		require.Equal(t, rec.ID, resp.Data.File.FileID)
 	})
 
 	t.Run("not exists", func(t *testing.T) {
@@ -218,7 +218,7 @@ func TestHandleCheckExist(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "fingerprint is required")
+		require.Contains(t, resp.Msg, "failed on the 'required' tag")
 	})
 }
 
@@ -293,7 +293,7 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 	require.NoError(t, err)
 
 	w := postJSON(router, "/api/v1/file/presignUploadPartURL", presignPartRequest{
-		ID:         rec.ID,
+		FileID: rec.ID,
 		PartNumber: 1,
 	})
 	require.Equal(t, 200, w.Code)
@@ -313,7 +313,7 @@ func TestHandlePresignUploadPartURL_NotFound(t *testing.T) {
 	router := setupRouter(fs)
 
 	w := postJSON(router, "/api/v1/file/presignUploadPartURL", presignPartRequest{
-		ID:         999,
+		FileID:    999,
 		PartNumber: 1,
 	})
 	require.Equal(t, 200, w.Code)
@@ -341,7 +341,7 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 	require.NoError(t, err)
 
 	req := completeMultipartRequest{
-		ID: rec.ID,
+		FileID: rec.ID,
 		Parts: []uploadPart{
 			{PartNumber: 1, ETag: "etag-1"},
 			{PartNumber: 2, ETag: "etag-2"},
@@ -364,7 +364,7 @@ func TestHandleCompleteMultipartUpload_NotFound(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	w := postJSON(router, "/api/v1/file/completeMultipartUpload", completeMultipartRequest{ID: 999})
+	w := postJSON(router, "/api/v1/file/completeMultipartUpload", completeMultipartRequest{FileID: 999})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -389,7 +389,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/abortMultipartUpload", fileIDRequest{ID: rec.ID})
+	w := postJSON(router, "/api/v1/file/abortMultipartUpload", fileIDRequest{FileID: rec.ID})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -419,7 +419,7 @@ func TestHandleGetFileDetail(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("found", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/getFileDetail", fileIDRequest{ID: rec.ID})
+		w := postJSON(router, "/api/v1/file/getFileDetail", fileIDRequest{FileID: rec.ID})
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -429,12 +429,12 @@ func TestHandleGetFileDetail(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.Equal(t, 0, resp.Code)
-		require.Equal(t, rec.ID, resp.Data.ID)
+		require.Equal(t, rec.ID, resp.Data.FileID)
 		require.Equal(t, "detail.txt", resp.Data.Name)
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/getFileDetail", fileIDRequest{ID: 99999})
+		w := postJSON(router, "/api/v1/file/getFileDetail", fileIDRequest{FileID: 99999})
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -461,7 +461,7 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/presignGetFileURL", presignDownloadRequest{ID: rec.ID})
+	w := postJSON(router, "/api/v1/file/presignGetFileURL", presignDownloadRequest{FileID: rec.ID})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -479,7 +479,7 @@ func TestHandlePresignGetFileURL_NotFound(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	w := postJSON(router, "/api/v1/file/presignGetFileURL", presignDownloadRequest{ID: 999})
+	w := postJSON(router, "/api/v1/file/presignGetFileURL", presignDownloadRequest{FileID: 999})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -504,7 +504,7 @@ func TestHandleDeleteFile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/deleteFile", fileIDRequest{ID: rec.ID})
+	w := postJSON(router, "/api/v1/file/deleteFile", fileIDRequest{FileID: rec.ID})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -523,7 +523,7 @@ func TestHandleDeleteFile_NotFound(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	w := postJSON(router, "/api/v1/file/deleteFile", fileIDRequest{ID: 999})
+	w := postJSON(router, "/api/v1/file/deleteFile", fileIDRequest{FileID: 999})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -559,6 +559,58 @@ func TestHandleUpload_StorageFailure(t *testing.T) {
 	require.Contains(t, resp.Msg, "unexpected EOF")
 }
 
+func TestHandleRedirectGetFileURL(t *testing.T) {
+	fs := newTestFileStore(t)
+	router := setupRouter(fs)
+
+	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+		Fingerprint: "redirect-fp",
+		Name:        "img.png",
+		Size:        1024,
+		MimeType:    "image/png",
+		StoragePath: "images/img.png",
+	})
+	require.NoError(t, err)
+
+	t.Run("redirects to presigned URL", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/redirect/%d", rec.ID), nil)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, 302, w.Code)
+		require.Contains(t, w.Header().Get("Location"), "presign.example.com")
+		require.Contains(t, w.Header().Get("Location"), "images/img.png")
+	})
+
+	t.Run("invalid fileID", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/redirect/abc", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/redirect/99999", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+}
+
 func TestHandleIDValidation(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
@@ -569,14 +621,14 @@ func TestHandleIDValidation(t *testing.T) {
 		body    any
 		wantMsg string
 	}{
-		{"getFileDetail id=0", "/api/v1/file/getFileDetail", fileIDRequest{ID: 0}, "id is required"},
-		{"presignGetFileURL id=0", "/api/v1/file/presignGetFileURL", presignDownloadRequest{ID: 0}, "id is required"},
-		{"deleteFile id=0", "/api/v1/file/deleteFile", fileIDRequest{ID: 0}, "id is required"},
-		{"presignUploadPartURL id=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{ID: 0, PartNumber: 1}, "id is required"},
-		{"presignUploadPartURL part=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{ID: 1, PartNumber: 0}, "part_number must be greater than 0"},
-		{"presignUploadPartURL part=-1", "/api/v1/file/presignUploadPartURL", presignPartRequest{ID: 1, PartNumber: -1}, "part_number must be greater than 0"},
-		{"completeMultipartUpload id=0", "/api/v1/file/completeMultipartUpload", completeMultipartRequest{ID: 0}, "id is required"},
-		{"abortMultipartUpload id=0", "/api/v1/file/abortMultipartUpload", fileIDRequest{ID: 0}, "id is required"},
+		{"getFileDetail id=0", "/api/v1/file/getFileDetail", fileIDRequest{FileID: 0}, "failed on the 'required' tag"},
+		{"presignGetFileURL id=0", "/api/v1/file/presignGetFileURL", presignDownloadRequest{FileID: 0}, "failed on the 'required' tag"},
+		{"deleteFile id=0", "/api/v1/file/deleteFile", fileIDRequest{FileID: 0}, "failed on the 'required' tag"},
+		{"presignUploadPartURL id=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{FileID: 0, PartNumber: 1}, "failed on the 'required' tag"},
+		{"presignUploadPartURL part=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{FileID: 1, PartNumber: 0}, "failed on the 'required' tag"},
+		{"presignUploadPartURL part=-1", "/api/v1/file/presignUploadPartURL", presignPartRequest{FileID: 1, PartNumber: -1}, "failed on the 'gt' tag"},
+		{"completeMultipartUpload id=0", "/api/v1/file/completeMultipartUpload", completeMultipartRequest{FileID: 0}, "failed on the 'required' tag"},
+		{"abortMultipartUpload id=0", "/api/v1/file/abortMultipartUpload", fileIDRequest{FileID: 0}, "failed on the 'required' tag"},
 	}
 
 	for _, tt := range tests {
