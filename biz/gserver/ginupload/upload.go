@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gcontext/gincontext"
@@ -145,9 +144,7 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		expires := parseExpires(req.Expires, time.Hour)
-
-		url, err := fs.PresignUploadPartURL(c.Request.Context(), req.FileID, req.PartNumber, expires)
+		url, err := fs.PresignUploadPartURL(c.Request.Context(), req.FileID, req.PartNumber)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -155,7 +152,7 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 
 		gincontext.Success(c, presignURLResponse{
 			URL:       url,
-			ExpiresIn: int(expires.Seconds()),
+			ExpiresIn: int(fs.GetExpiry().Seconds()),
 		})
 	}
 }
@@ -213,15 +210,4 @@ func handleAbortMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 
 		gincontext.Success(c, nil)
 	}
-}
-
-func parseExpires(v string, defaultDuration time.Duration) time.Duration {
-	if v == "" {
-		return defaultDuration
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return defaultDuration
-	}
-	return d
 }

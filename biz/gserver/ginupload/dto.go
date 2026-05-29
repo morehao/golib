@@ -52,9 +52,8 @@ type createMultipartResponse struct {
 }
 
 type presignPartRequest struct {
-	FileID     uint   `json:"file_id" form:"file_id" binding:"required"`              // 文件ID
-	PartNumber int32  `json:"part_number" form:"part_number" binding:"required,gt=0"` // 分片编号
-	Expires    string `json:"expires" form:"expires"`                                 // 过期时间(如 1h)
+	FileID     uint  `json:"file_id" form:"file_id" binding:"required"`              // 文件ID
+	PartNumber int32 `json:"part_number" form:"part_number" binding:"required,gt=0"` // 分片编号
 }
 
 type completeMultipartRequest struct {
@@ -78,6 +77,5 @@ type fileDetailResponse struct {
 }
 
 type presignDownloadRequest struct {
-	FileID  uint   `json:"file_id" form:"file_id" binding:"required"` // 文件ID
-	Expires string `json:"expires" form:"expires"`                    // 过期时间(如 1h)
+	FileID uint `json:"file_id" form:"file_id" binding:"required"` // 文件ID
 }

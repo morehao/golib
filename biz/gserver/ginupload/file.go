@@ -51,9 +51,7 @@ func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		expires := parseExpires(req.Expires, time.Hour)
-
-		url, err := fs.PresignGetFileURL(c.Request.Context(), req.FileID, expires)
+		url, err := fs.PresignGetFileURL(c.Request.Context(), req.FileID)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -61,7 +59,7 @@ func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 
 		gincontext.Success(c, presignURLResponse{
 			URL:       url,
-			ExpiresIn: int(expires.Seconds()),
+			ExpiresIn: int(fs.GetExpiry().Seconds()),
 		})
 	}
 }
@@ -94,7 +92,6 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 重定向获取文件URL
 // @Produce application/json
 // @Param fileID path uint true "文件ID"
-// @Param expires query string false "过期时间(如 1h)"
 // @Success 302 {string} string "重定向到文件URL"
 // @Router /file/redirect/{fileID} [get]
 func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
@@ -106,9 +103,7 @@ func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		expires := parseExpires(c.Query("expires"), time.Hour)
-
-		url, err := fs.PresignGetFileURL(c.Request.Context(), uint(fileID), expires)
+		url, err := fs.PresignGetFileURL(c.Request.Context(), uint(fileID))
 		if err != nil {
 			gincontext.Fail(c, err)
 			return

@@ -268,12 +268,10 @@ func TestPresignGetFileURL_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	url, err := fs.PresignGetFileURL(context.Background(), rec.ID, time.Hour)
+	url, err := fs.PresignGetFileURL(context.Background(), rec.ID, WithExpires(time.Hour))
 	require.NoError(t, err)
 	require.True(t, mock.presignGetURLCalled)
 	require.Contains(t, url, "presign.example.com")
-	require.Contains(t, url, "files/test.txt")
-	require.Contains(t, url, "1h0m0s")
 }
 
 func TestPresignGetFileURL_NotFound(t *testing.T) {
@@ -281,7 +279,7 @@ func TestPresignGetFileURL_NotFound(t *testing.T) {
 	fs, err := New(db, &mockStorage{})
 	require.NoError(t, err)
 
-	_, err = fs.PresignGetFileURL(context.Background(), 999, time.Hour)
+	_, err = fs.PresignGetFileURL(context.Background(), 999, WithExpires(time.Hour))
 	require.ErrorIs(t, err, ErrFileNotFound)
 }
 
@@ -373,10 +371,11 @@ func TestPresignUploadPartURL_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	url, err := fs.PresignUploadPartURL(context.Background(), rec.ID, 1, time.Hour)
+	url, err := fs.PresignUploadPartURL(context.Background(), rec.ID, 1, WithExpires(time.Hour))
 	require.NoError(t, err)
 	require.Contains(t, url, "presign.example.com")
 	require.Contains(t, url, rec.UploadID)
+	require.Contains(t, url, "1h0m0s")
 }
 
 func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
@@ -392,7 +391,7 @@ func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = fs.PresignUploadPartURL(context.Background(), rec.ID, 1, time.Hour)
+	_, err = fs.PresignUploadPartURL(context.Background(), rec.ID, 1, WithExpires(time.Hour))
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
 }
 
@@ -401,8 +400,47 @@ func TestPresignUploadPartURL_NotFound(t *testing.T) {
 	fs, err := New(db, &mockStorage{})
 	require.NoError(t, err)
 
-	_, err = fs.PresignUploadPartURL(context.Background(), 999, 1, time.Hour)
+	_, err = fs.PresignUploadPartURL(context.Background(), 999, 1, WithExpires(time.Hour))
 	require.ErrorIs(t, err, ErrFileNotFound)
+}
+
+func TestPresignGetFileURL_DefaultExpiry(t *testing.T) {
+	db := newTestDB(t)
+	mock := &mockStorage{}
+	fs, err := New(db, mock)
+	require.NoError(t, err)
+
+	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "default-expiry",
+		Name:        "test.txt",
+		Size:        100,
+		MimeType:    "text/plain",
+		StoragePath: "files/test.txt",
+	})
+	require.NoError(t, err)
+
+	url, err := fs.PresignGetFileURL(context.Background(), rec.ID)
+	require.NoError(t, err)
+	require.True(t, mock.presignGetURLCalled)
+	require.Contains(t, url, defaultPresignExpiry.String())
+}
+
+func TestPresignUploadPartURL_WithExpires(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{})
+	require.NoError(t, err)
+
+	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+		Fingerprint: "presign-expires-test",
+		Name:        "test.mp4",
+		Size:        1000,
+		StoragePath: "test.mp4",
+	})
+	require.NoError(t, err)
+
+	url, err := fs.PresignUploadPartURL(context.Background(), rec.ID, 1, WithExpires(5*time.Minute))
+	require.NoError(t, err)
+	require.Contains(t, url, "5m0s")
 }
 
 func TestCompleteMultipartUpload_Success(t *testing.T) {

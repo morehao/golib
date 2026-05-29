@@ -10,16 +10,54 @@ import (
 	"gorm.io/gorm"
 )
 
+const defaultPresignExpiry = 2 * time.Hour
+
+type PresignOption func(*presignOptions)
+
+type presignOptions struct {
+	expires time.Duration
+}
+
+func WithExpires(d time.Duration) PresignOption {
+	return func(o *presignOptions) {
+		o.expires = d
+	}
+}
+
+type FileStoreOption func(*fileStoreOptions)
+
+type fileStoreOptions struct{}
+
 type FileStore struct {
 	store *store
 	st    spec.Storage
 }
 
-func New(db *gorm.DB, st spec.Storage) (*FileStore, error) {
+func New(db *gorm.DB, st spec.Storage, opts ...FileStoreOption) (*FileStore, error) {
+	var o fileStoreOptions
+	for _, fn := range opts {
+		fn(&o)
+	}
+
 	if err := db.AutoMigrate(&FileRecord{}); err != nil {
 		return nil, fmt.Errorf("filestore.New: auto-migrate: %w", err)
 	}
 	return &FileStore{store: newStore(db), st: st}, nil
+}
+
+func (s *FileStore) GetExpiry() time.Duration {
+	return defaultPresignExpiry
+}
+
+func applyPresignOptions(opts ...PresignOption) time.Duration {
+	var o presignOptions
+	for _, fn := range opts {
+		fn(&o)
+	}
+	if o.expires > 0 {
+		return o.expires
+	}
+	return defaultPresignExpiry
 }
 
 func (s *FileStore) CheckExist(ctx context.Context, fingerprint string) (*FileRecord, bool, error) {
@@ -98,12 +136,13 @@ func (s *FileStore) GetFile(ctx context.Context, id uint) (*FileRecord, error) {
 	return rec, nil
 }
 
-func (s *FileStore) PresignGetFileURL(ctx context.Context, id uint, expires time.Duration) (string, error) {
+func (s *FileStore) PresignGetFileURL(ctx context.Context, id uint, opts ...PresignOption) (string, error) {
 	rec, err := s.store.GetByID(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignGetFileURL: %w", err)
 	}
 
+	expires := applyPresignOptions(opts...)
 	url, err := s.st.PresignGetURL(ctx, rec.StoragePath, expires)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignGetFileURL: %w", err)
@@ -171,7 +210,7 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 	return rec, nil
 }
 
-func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum int32, expires time.Duration) (string, error) {
+func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum int32, opts ...PresignOption) (string, error) {
 	rec, err := s.store.GetByID(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignUploadPartURL: %w", err)
@@ -185,6 +224,7 @@ func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum i
 		return "", fmt.Errorf("filestore.PresignUploadPartURL: get uploader: %w", err)
 	}
 
+	expires := applyPresignOptions(opts...)
 	url, err := uploader.PresignUploadPartURL(ctx, partNum, expires)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignUploadPartURL: presign: %w", err)
