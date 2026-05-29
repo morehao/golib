@@ -3,7 +3,6 @@ package ginupload
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -83,11 +82,6 @@ func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		if req.Fingerprint == "" {
-			gincontext.Fail(c, errors.New("fingerprint is required"))
-			return
-		}
-
 		rec, exists, err := fs.CheckExist(c.Request.Context(), req.Fingerprint)
 		if err != nil {
 			gincontext.Fail(c, err)
@@ -130,7 +124,7 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		gincontext.Success(c, createMultipartResponse{
-			ID:          rec.ID,
+			FileID:      rec.ID,
 			UploadID:    rec.UploadID,
 			Fingerprint: rec.Fingerprint,
 		})
@@ -151,18 +145,9 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		if req.ID == 0 {
-			gincontext.Fail(c, fmt.Errorf("id is required"))
-			return
-		}
-		if req.PartNumber <= 0 {
-			gincontext.Fail(c, fmt.Errorf("part_number must be greater than 0"))
-			return
-		}
-
 		expires := parseExpires(req.Expires, time.Hour)
 
-		url, err := fs.PresignUploadPartURL(c.Request.Context(), req.ID, req.PartNumber, expires)
+		url, err := fs.PresignUploadPartURL(c.Request.Context(), req.FileID, req.PartNumber, expires)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -189,18 +174,13 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		if req.ID == 0 {
-			gincontext.Fail(c, fmt.Errorf("id is required"))
-			return
-		}
-
 		parts := make([]spec.Part, len(req.Parts))
 		for i, p := range req.Parts {
 			parts[i] = spec.Part{PartNumber: p.PartNumber, ETag: p.ETag}
 		}
 
 		rec, err := fs.CompleteMultipartUpload(c.Request.Context(), filestore.CompleteMultipartUploadRequest{
-			ID:    req.ID,
+			ID:    req.FileID,
 			Parts: parts,
 		})
 		if err != nil {
@@ -226,12 +206,7 @@ func handleAbortMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		if req.ID == 0 {
-			gincontext.Fail(c, fmt.Errorf("id is required"))
-			return
-		}
-
-		if err := fs.AbortMultipartUpload(c.Request.Context(), req.ID); err != nil {
+		if err := fs.AbortMultipartUpload(c.Request.Context(), req.FileID); err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
