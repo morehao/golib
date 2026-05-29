@@ -2,6 +2,8 @@ package ginupload
 
 import (
 	"fmt"
+	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,12 +25,8 @@ func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		if req.ID == 0 {
-			gincontext.Fail(c, fmt.Errorf("id is required"))
-			return
-		}
 
-		rec, err := fs.GetFile(c.Request.Context(), req.ID)
+		rec, err := fs.GetFile(c.Request.Context(), req.FileID)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -52,14 +50,10 @@ func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		if req.ID == 0 {
-			gincontext.Fail(c, fmt.Errorf("id is required"))
-			return
-		}
 
 		expires := parseExpires(req.Expires, time.Hour)
 
-		url, err := fs.PresignGetFileURL(c.Request.Context(), req.ID, expires)
+		url, err := fs.PresignGetFileURL(c.Request.Context(), req.FileID, expires)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -86,12 +80,8 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		if req.ID == 0 {
-			gincontext.Fail(c, fmt.Errorf("id is required"))
-			return
-		}
 
-		if err := fs.DeleteFile(c.Request.Context(), req.ID); err != nil {
+		if err := fs.DeleteFile(c.Request.Context(), req.FileID); err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
@@ -100,11 +90,39 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 	}
 }
 
+// @Tags 文件
+// @Summary 重定向获取文件URL
+// @Produce application/json
+// @Param fileID path uint true "文件ID"
+// @Param expires query string false "过期时间(如 1h)"
+// @Success 302 {string} string "重定向到文件URL"
+// @Router /file/redirect/{fileID} [get]
+func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		fileIDStr := c.Param("fileID")
+		fileID, err := strconv.ParseUint(fileIDStr, 10, 64)
+		if err != nil || fileID == 0 {
+			gincontext.Fail(c, fmt.Errorf("invalid fileID: %w", err))
+			return
+		}
+
+		expires := parseExpires(c.Query("expires"), time.Hour)
+
+		url, err := fs.PresignGetFileURL(c.Request.Context(), uint(fileID), expires)
+		if err != nil {
+			gincontext.Fail(c, err)
+			return
+		}
+
+		c.Redirect(http.StatusFound, url)
+	}
+}
+
 // -- helpers --
 
 func toFileRecordResp(rec *filestore.FileRecord) *fileRecordResponse {
 	return &fileRecordResponse{
-		ID:          rec.ID,
+		FileID:      rec.ID,
 		Fingerprint: rec.Fingerprint,
 		Name:        rec.Name,
 		Size:        rec.Size,
@@ -116,7 +134,7 @@ func toFileRecordResp(rec *filestore.FileRecord) *fileRecordResponse {
 
 func toFileDetailResp(rec *filestore.FileRecord) *fileDetailResponse {
 	return &fileDetailResponse{
-		ID:          rec.ID,
+		FileID:      rec.ID,
 		Fingerprint: rec.Fingerprint,
 		Name:        rec.Name,
 		Size:        rec.Size,
