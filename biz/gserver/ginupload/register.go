@@ -12,7 +12,7 @@ func Register(group *gin.RouterGroup, fs *filestore.FileStore) {
 	{
 		r.POST("/upload", handleUpload(fs))
 		r.POST("/checkExist", handleCheckExist(fs))
-		r.POST("/initMultipartUpload", handleInitMultipartUpload(fs))
+		r.POST("/createMultipartUpload", handleCreateMultipartUpload(fs))
 		r.POST("/presignUploadPartURL", handlePresignUploadPartURL(fs))
 		r.POST("/completeMultipartUpload", handleCompleteMultipartUpload(fs))
 		r.POST("/abortMultipartUpload", handleAbortMultipartUpload(fs))

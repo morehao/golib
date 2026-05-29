@@ -14,16 +14,14 @@ import (
 	"github.com/morehao/golib/storage/spec"
 )
 
-// Upload
-// @Summary      simple upload
-// @Description  upload file with fingerprint dedup
-// @Tags         file
-// @Accept       multipart/form-data
-// @Produce      json
-// @Param        file formData file true "file to upload"
-// @Param        fingerprint formData string false "SHA256 fingerprint for dedup"
-// @Success      200 {object} gincontext.DtoRender{data=fileRecordResponse}
-// @Router       /file/upload [post]
+// @Tags 文件
+// @Summary 上传文件
+// @accept multipart/form-data
+// @Produce application/json
+// @Param file formData file true "上传文件"
+// @Param fingerprint formData string false "SHA256指纹，用于去重"
+// @Success 200 {object} gincontext.DtoRender{data=fileRecordResponse}
+// @Router /file/upload [post]
 func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		fh, err := c.FormFile("file")
@@ -71,15 +69,13 @@ func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	}
 }
 
-// CheckExist
-// @Summary      check file existence by fingerprint
-// @Description  check if file with given fingerprint already exists (dedup)
-// @Tags         file
-// @Accept       json
-// @Produce      json
-// @Param        body body checkExistRequest true "check exist request"
-// @Success      200 {object} gincontext.DtoRender{data=checkExistResponse}
-// @Router       /file/checkExist [post]
+// @Tags 文件
+// @Summary 检查文件是否存在
+// @accept application/json
+// @Produce application/json
+// @Param req body checkExistRequest true "指纹"
+// @Success 200 {object} gincontext.DtoRender{data=checkExistResponse}
+// @Router /file/checkExist [post]
 func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req checkExistRequest
@@ -106,18 +102,16 @@ func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
 	}
 }
 
-// InitMultipartUpload
-// @Summary      initialize multipart upload
-// @Description  start a new multipart upload session
-// @Tags         file
-// @Accept       json
-// @Produce      json
-// @Param        body body initMultipartRequest true "init multipart request"
-// @Success      200 {object} gincontext.DtoRender{data=initMultipartResponse}
-// @Router       /file/initMultipartUpload [post]
-func handleInitMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
+// @Tags 文件
+// @Summary 创建分片上传
+// @accept application/json
+// @Produce application/json
+// @Param req body createMultipartRequest true "创建分片上传"
+// @Success 200 {object} gincontext.DtoRender{data=createMultipartResponse}
+// @Router /file/createMultipartUpload [post]
+func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req initMultipartRequest
+		var req createMultipartRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
@@ -135,7 +129,7 @@ func handleInitMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		gincontext.Success(c, initMultipartResponse{
+		gincontext.Success(c, createMultipartResponse{
 			ID:          rec.ID,
 			UploadID:    rec.UploadID,
 			Fingerprint: rec.Fingerprint,
@@ -143,15 +137,13 @@ func handleInitMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	}
 }
 
-// PresignUploadPartURL
-// @Summary      presign upload part URL
-// @Description  get presigned URL for uploading a specific part
-// @Tags         file
-// @Accept       json
-// @Produce      json
-// @Param        body body presignPartRequest true "presign part request"
-// @Success      200 {object} gincontext.DtoRender{data=presignURLResponse}
-// @Router       /file/presignUploadPartURL [post]
+// @Tags 文件
+// @Summary 获取上传分片地址
+// @accept application/json
+// @Produce application/json
+// @Param req body presignPartRequest true "分片上传"
+// @Success 200 {object} gincontext.DtoRender{data=presignURLResponse}
+// @Router /file/presignUploadPartURL [post]
 func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req presignPartRequest
@@ -183,15 +175,13 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 	}
 }
 
-// CompleteMultipartUpload
-// @Summary      complete multipart upload
-// @Description  complete multipart upload with uploaded parts
-// @Tags         file
-// @Accept       json
-// @Produce      json
-// @Param        body body completeMultipartRequest true "complete multipart request"
-// @Success      200 {object} gincontext.DtoRender{data=fileRecordResponse}
-// @Router       /file/completeMultipartUpload [post]
+// @Tags 文件
+// @Summary 完成分片上传
+// @accept application/json
+// @Produce application/json
+// @Param req body completeMultipartRequest true "完成分片上传"
+// @Success 200 {object} gincontext.DtoRender{data=fileRecordResponse}
+// @Router /file/completeMultipartUpload [post]
 func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req completeMultipartRequest
@@ -222,15 +212,13 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	}
 }
 
-// AbortMultipartUpload
-// @Summary      abort multipart upload
-// @Description  abort and clean up multipart upload session
-// @Tags         file
-// @Accept       json
-// @Produce      json
-// @Param        body body fileIDRequest true "abort multipart request"
-// @Success      200 {object} gincontext.DtoRender
-// @Router       /file/abortMultipartUpload [post]
+// @Tags 文件
+// @Summary 取消分片上传
+// @accept application/json
+// @Produce application/json
+// @Param req body fileIDRequest true "文件ID"
+// @Success 200 {object} gincontext.DtoRender
+// @Router /file/abortMultipartUpload [post]
 func handleAbortMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req fileIDRequest

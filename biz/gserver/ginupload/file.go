@@ -9,15 +9,13 @@ import (
 	"github.com/morehao/golib/filestore"
 )
 
-// GetFileDetail
-// @Summary      get file detail
-// @Description  get file record detail by id
-// @Tags         file
-// @Accept       json
-// @Produce      json
-// @Param        body body fileIDRequest true "file id request"
-// @Success      200 {object} gincontext.DtoRender{data=fileDetailResponse}
-// @Router       /file/getFileDetail [post]
+// @Tags 文件
+// @Summary 获取文件详情
+// @accept application/json
+// @Produce application/json
+// @Param req body fileIDRequest true "文件ID"
+// @Success 200 {object} gincontext.DtoRender{data=fileDetailResponse}
+// @Router /file/getFileDetail [post]
 func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req fileIDRequest
@@ -40,15 +38,13 @@ func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 	}
 }
 
-// PresignGetFileURL
-// @Summary      presign get file URL
-// @Description  get presigned download URL for a file
-// @Tags         file
-// @Accept       json
-// @Produce      json
-// @Param        body body presignDownloadRequest true "presign download request"
-// @Success      200 {object} gincontext.DtoRender{data=presignURLResponse}
-// @Router       /file/presignGetFileURL [post]
+// @Tags 文件
+// @Summary 获取文件下载地址
+// @accept application/json
+// @Produce application/json
+// @Param req body presignDownloadRequest true "下载请求"
+// @Success 200 {object} gincontext.DtoRender{data=presignURLResponse}
+// @Router /file/presignGetFileURL [post]
 func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req presignDownloadRequest
@@ -76,15 +72,13 @@ func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 	}
 }
 
-// DeleteFile
-// @Summary      delete file
-// @Description  delete a file record
-// @Tags         file
-// @Accept       json
-// @Produce      json
-// @Param        body body fileIDRequest true "delete file request"
-// @Success      200 {object} gincontext.DtoRender
-// @Router       /file/deleteFile [post]
+// @Tags 文件
+// @Summary 删除文件
+// @accept application/json
+// @Produce application/json
+// @Param req body fileIDRequest true "文件ID"
+// @Success 200 {object} gincontext.DtoRender
+// @Router /file/deleteFile [post]
 func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req fileIDRequest

@@ -37,7 +37,7 @@ type checkExistResponse struct {
 	File   *fileRecordResponse `json:"file,omitempty"`
 }
 
-type initMultipartRequest struct {
+type createMultipartRequest struct {
 	Fingerprint string `json:"fingerprint"`
 	Name        string `json:"name"`
 	Size        int64  `json:"size"`
@@ -45,7 +45,7 @@ type initMultipartRequest struct {
 	StoragePath string `json:"storage_path"`
 }
 
-type initMultipartResponse struct {
+type createMultipartResponse struct {
 	ID          uint   `json:"id"`
 	UploadID    string `json:"upload_id"`
 	Fingerprint string `json:"fingerprint"`

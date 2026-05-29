@@ -226,19 +226,19 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	req := initMultipartRequest{
+	req := createMultipartRequest{
 		Fingerprint: "mp-fp",
 		Name:        "large.mp4",
 		Size:        10485760,
 		MimeType:    "video/mp4",
 		StoragePath: "videos/large.mp4",
 	}
-	w := postJSON(router, "/api/v1/file/initMultipartUpload", req)
+	w := postJSON(router, "/api/v1/file/createMultipartUpload", req)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
 		Code int                  `json:"code"`
-		Data initMultipartResponse `json:"data"`
+		Data createMultipartResponse `json:"data"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
@@ -259,18 +259,18 @@ func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 	require.NoError(t, err)
 
 	router := setupRouter(fs)
-	req := initMultipartRequest{
+	req := createMultipartRequest{
 		Fingerprint: "existing-fp",
 		Name:        "new.mp4",
 		Size:        999999,
 		StoragePath: "new.mp4",
 	}
-	w := postJSON(router, "/api/v1/file/initMultipartUpload", req)
+	w := postJSON(router, "/api/v1/file/createMultipartUpload", req)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
 		Code int                  `json:"code"`
-		Data initMultipartResponse `json:"data"`
+		Data createMultipartResponse `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
