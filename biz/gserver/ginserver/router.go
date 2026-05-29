@@ -10,8 +10,8 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
-type Version struct {
-	Name        string
+type VersionGroup struct {
+	Version     string
 	Middlewares []gin.HandlerFunc
 }
 
@@ -19,19 +19,19 @@ type RouterGroups struct {
 	groups map[string]*gin.RouterGroup
 }
 
-func NewRouterGroups(engine *gin.Engine, appName string, versions ...Version) *RouterGroups {
+func NewRouterGroups(engine *gin.Engine, appName string, versions ...VersionGroup) *RouterGroups {
 	routerGroups := &RouterGroups{groups: map[string]*gin.RouterGroup{}}
 
-	for _, version := range versions {
-		versionName := normalizePathPart(version.Name)
+	for _, vg := range versions {
+		versionName := normalizePathPart(vg.Version)
 		if versionName == "" {
 			continue
 		}
 		group := engine.Group(fmt.Sprintf("/%s/%s", versionName, normalizePathPart(appName)))
 		group.Use(otelgin.Middleware(appName))
 		group.Use(ginmiddleware.AccessLog())
-		if len(version.Middlewares) > 0 {
-			group.Use(version.Middlewares...)
+		if len(vg.Middlewares) > 0 {
+			group.Use(vg.Middlewares...)
 		}
 		routerGroups.AddGroup(versionName, group)
 	}

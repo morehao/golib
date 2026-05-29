@@ -277,7 +277,7 @@ func main() {
 
     // 1. 创建 ginserver 路由分组
     rg := ginserver.NewRouterGroups(engine, "myapp",
-        ginserver.Version{Name: "v1"},
+        ginserver.VersionGroup{Version: "v1"},
     )
     group := rg.MustGetGroup("v1")  // -> /v1/myapp
 
