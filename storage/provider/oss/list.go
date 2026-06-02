@@ -43,37 +43,41 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.Li
 	}, nil
 }
 
-func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
-	lo := spec.ApplyListOptions(opts...)
-	return &paginator{
-		client:  c,
-		prefix:  prefix,
-		options: lo,
+func (c *client) ListMultipartUploads(ctx context.Context, opts ...spec.ListMultipartUploadsOption) (*spec.ListMultipartUploadsResult, error) {
+	lo := spec.ApplyListMultipartUploadsOptions(opts...)
+	req := &aliyun.ListMultipartUploadsRequest{
+		Bucket:     aliyun.Ptr(c.bucket),
+		MaxUploads: int32(lo.MaxUploads),
 	}
-}
-
-type paginator struct {
-	client  *client
-	prefix  string
-	options spec.ListOptions
-	hasMore bool
-	started bool
-}
-
-func (p *paginator) HasMorePages() bool {
-	if !p.started {
-		return true
+	if lo.Prefix != "" {
+		req.Prefix = aliyun.Ptr(lo.Prefix)
 	}
-	return p.hasMore
-}
-
-func (p *paginator) NextPage(ctx context.Context) (*spec.ListResult, error) {
-	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix, spec.WithPageSize(p.options.PageSize), spec.WithContinuationToken(p.options.ContinuationToken))
+	if lo.KeyMarker != "" {
+		req.KeyMarker = aliyun.Ptr(lo.KeyMarker)
+	}
+	if lo.UploadIDMarker != "" {
+		req.UploadIdMarker = aliyun.Ptr(lo.UploadIDMarker)
+	}
+	resp, err := c.sdk.ListMultipartUploads(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("storage: list multipart uploads: %w", err)
 	}
-	p.hasMore = result.HasMore
-	p.options.ContinuationToken = result.NextToken
-	return result, nil
+	uploads := make([]spec.UploadInfo, 0, len(resp.Uploads))
+	for _, u := range resp.Uploads {
+		uploads = append(uploads, spec.UploadInfo{
+			Key:       aliyun.ToString(u.Key),
+			UploadID:  aliyun.ToString(u.UploadId),
+			Initiated: aliyun.ToTime(u.Initiated),
+		})
+	}
+	return &spec.ListMultipartUploadsResult{
+		Uploads:            uploads,
+		NextKeyMarker:      aliyun.ToString(resp.NextKeyMarker),
+		NextUploadIDMarker: aliyun.ToString(resp.NextUploadIdMarker),
+		IsTruncated:        resp.IsTruncated,
+	}, nil
+}
+
+func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
+	return spec.NewListObjectsPaginator(c, prefix, opts...)
 }

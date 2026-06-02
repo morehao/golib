@@ -44,36 +44,40 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.Li
 }
 
 func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
-	lo := spec.ApplyListOptions(opts...)
-	return &paginator{
-		client:  c,
-		prefix:  prefix,
-		options: lo,
+	return spec.NewListObjectsPaginator(c, prefix, opts...)
+}
+
+func (c *client) ListMultipartUploads(ctx context.Context, opts ...spec.ListMultipartUploadsOption) (*spec.ListMultipartUploadsResult, error) {
+	lo := spec.ApplyListMultipartUploadsOptions(opts...)
+	input := &tossdk.ListMultipartUploadsV2Input{
+		Bucket:     c.bucket,
+		MaxUploads: lo.MaxUploads,
 	}
-}
-
-type paginator struct {
-	client  *client
-	prefix  string
-	options spec.ListOptions
-	hasMore bool
-	started bool
-}
-
-func (p *paginator) HasMorePages() bool {
-	if !p.started {
-		return true
+	if lo.Prefix != "" {
+		input.Prefix = lo.Prefix
 	}
-	return p.hasMore
-}
-
-func (p *paginator) NextPage(ctx context.Context) (*spec.ListResult, error) {
-	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix, spec.WithPageSize(p.options.PageSize), spec.WithContinuationToken(p.options.ContinuationToken))
+	if lo.KeyMarker != "" {
+		input.KeyMarker = lo.KeyMarker
+	}
+	if lo.UploadIDMarker != "" {
+		input.UploadIDMarker = lo.UploadIDMarker
+	}
+	resp, err := c.sdk.ListMultipartUploadsV2(ctx, input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("storage: list multipart uploads: %w", err)
 	}
-	p.hasMore = result.HasMore
-	p.options.ContinuationToken = result.NextToken
-	return result, nil
+	uploads := make([]spec.UploadInfo, 0, len(resp.Uploads))
+	for _, u := range resp.Uploads {
+		uploads = append(uploads, spec.UploadInfo{
+			Key:       u.Key,
+			UploadID:  u.UploadID,
+			Initiated: u.Initiated,
+		})
+	}
+	return &spec.ListMultipartUploadsResult{
+		Uploads:            uploads,
+		NextKeyMarker:      resp.NextKeyMarker,
+		NextUploadIDMarker: resp.NextUploadIDMarker,
+		IsTruncated:        resp.IsTruncated,
+	}, nil
 }

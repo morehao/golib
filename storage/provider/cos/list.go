@@ -42,37 +42,40 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.Li
 	}, nil
 }
 
-func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
-	lo := spec.ApplyListOptions(opts...)
-	return &paginator{
-		client:  c,
-		prefix:  prefix,
-		options: lo,
+func (c *client) ListMultipartUploads(ctx context.Context, opts ...spec.ListMultipartUploadsOption) (*spec.ListMultipartUploadsResult, error) {
+	lo := spec.ApplyListMultipartUploadsOptions(opts...)
+	opt := &cossdk.ListMultipartUploadsOptions{
+		MaxUploads: lo.MaxUploads,
 	}
-}
-
-type paginator struct {
-	client  *client
-	prefix  string
-	options spec.ListOptions
-	hasMore bool
-	started bool
-}
-
-func (p *paginator) HasMorePages() bool {
-	if !p.started {
-		return true
+	if lo.Prefix != "" {
+		opt.Prefix = lo.Prefix
 	}
-	return p.hasMore
-}
-
-func (p *paginator) NextPage(ctx context.Context) (*spec.ListResult, error) {
-	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix, spec.WithPageSize(p.options.PageSize), spec.WithContinuationToken(p.options.ContinuationToken))
+	if lo.KeyMarker != "" {
+		opt.KeyMarker = lo.KeyMarker
+	}
+	if lo.UploadIDMarker != "" {
+		opt.UploadIDMarker = lo.UploadIDMarker
+	}
+	resp, _, err := c.sdk.Bucket.ListMultipartUploads(ctx, opt)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("storage: list multipart uploads: %w", err)
 	}
-	p.hasMore = result.HasMore
-	p.options.ContinuationToken = result.NextToken
-	return result, nil
+	uploads := make([]spec.UploadInfo, 0, len(resp.Uploads))
+	for _, u := range resp.Uploads {
+		uploads = append(uploads, spec.UploadInfo{
+			Key:       u.Key,
+			UploadID:  u.UploadID,
+			Initiated: parseTime(u.Initiated),
+		})
+	}
+	return &spec.ListMultipartUploadsResult{
+		Uploads:            uploads,
+		NextKeyMarker:      resp.NextKeyMarker,
+		NextUploadIDMarker: resp.NextUploadIDMarker,
+		IsTruncated:        resp.IsTruncated,
+	}, nil
+}
+
+func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
+	return spec.NewListObjectsPaginator(c, prefix, opts...)
 }

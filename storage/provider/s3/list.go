@@ -44,37 +44,39 @@ func (c *client) ListObjects(ctx context.Context, prefix string, opts ...spec.Li
 	}, nil
 }
 
-func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
-	lo := spec.ApplyListOptions(opts...)
-	return &paginator{
-		client:  c,
-		prefix:  prefix,
-		options: lo,
+func (c *client) ListMultipartUploads(ctx context.Context, opts ...spec.ListMultipartUploadsOption) (*spec.ListMultipartUploadsResult, error) {
+	lo := spec.ApplyListMultipartUploadsOptions(opts...)
+	input := &awss3.ListMultipartUploadsInput{
+		Bucket:     aws.String(c.bucket),
+		Prefix:     aws.String(lo.Prefix),
+		MaxUploads: aws.Int32(int32(lo.MaxUploads)),
 	}
-}
-
-type paginator struct {
-	client  *client
-	prefix  string
-	options spec.ListOptions
-	hasMore bool
-	started bool
-}
-
-func (p *paginator) HasMorePages() bool {
-	if !p.started {
-		return true
+	if lo.KeyMarker != "" {
+		input.KeyMarker = aws.String(lo.KeyMarker)
 	}
-	return p.hasMore
-}
-
-func (p *paginator) NextPage(ctx context.Context) (*spec.ListResult, error) {
-	p.started = true
-	result, err := p.client.ListObjects(ctx, p.prefix, spec.WithPageSize(p.options.PageSize), spec.WithContinuationToken(p.options.ContinuationToken))
+	if lo.UploadIDMarker != "" {
+		input.UploadIdMarker = aws.String(lo.UploadIDMarker)
+	}
+	out, err := c.sdk.ListMultipartUploads(ctx, input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("storage: list multipart uploads: %w", err)
 	}
-	p.hasMore = result.HasMore
-	p.options.ContinuationToken = result.NextToken
-	return result, nil
+	uploads := make([]spec.UploadInfo, 0, len(out.Uploads))
+	for _, u := range out.Uploads {
+		uploads = append(uploads, spec.UploadInfo{
+			Key:       aws.ToString(u.Key),
+			UploadID:  aws.ToString(u.UploadId),
+			Initiated: aws.ToTime(u.Initiated),
+		})
+	}
+	return &spec.ListMultipartUploadsResult{
+		Uploads:            uploads,
+		NextKeyMarker:      aws.ToString(out.NextKeyMarker),
+		NextUploadIDMarker: aws.ToString(out.NextUploadIdMarker),
+		IsTruncated:        aws.ToBool(out.IsTruncated),
+	}, nil
+}
+
+func (c *client) ListObjectsPaginator(ctx context.Context, prefix string, opts ...spec.ListOption) spec.Paginator {
+	return spec.NewListObjectsPaginator(c, prefix, opts...)
 }

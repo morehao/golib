@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	aliyun "github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 	"github.com/morehao/golib/storage/spec"
@@ -38,11 +39,32 @@ func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spe
 	}, nil
 }
 
+func (c *client) GetMultipartUploader(_ context.Context, key string, uploadID string) (spec.MultipartUploader, error) {
+	k, err := spec.NormalizeObjectKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return &uploader{
+		sdk:      c.sdk,
+		bucket:   c.bucket,
+		key:      k,
+		uploadID: uploadID,
+	}, nil
+}
+
 type uploader struct {
 	sdk      *aliyun.Client
 	bucket   string
 	key      string
 	uploadID string
+}
+
+func (u *uploader) UploadID() string {
+	return u.uploadID
+}
+
+func (u *uploader) PresignUploadPartURL(_ context.Context, partNum int32, expires time.Duration) (string, error) {
+	return "", fmt.Errorf("storage: presign upload part not implemented for oss")
 }
 
 func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (spec.Part, error) {
@@ -97,6 +119,37 @@ func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
 		return fmt.Errorf("storage: complete multipart upload %q: %w", u.key, err)
 	}
 	return nil
+}
+
+func (u *uploader) ListParts(ctx context.Context, opts ...spec.ListPartsOption) (*spec.ListPartsResult, error) {
+	lo := spec.ApplyListPartsOptions(opts...)
+	req := &aliyun.ListPartsRequest{
+		Bucket:   aliyun.Ptr(u.bucket),
+		Key:      aliyun.Ptr(u.key),
+		UploadId: aliyun.Ptr(u.uploadID),
+		MaxParts: int32(lo.MaxParts),
+	}
+	if lo.PartNumberMarker > 0 {
+		req.PartNumberMarker = lo.PartNumberMarker
+	}
+	resp, err := u.sdk.ListParts(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list parts for %q: %w", u.key, err)
+	}
+	parts := make([]spec.Part, 0, len(resp.Parts))
+	for _, p := range resp.Parts {
+		parts = append(parts, spec.Part{
+			PartNumber:   p.PartNumber,
+			ETag:         strings.Trim(aliyun.ToString(p.ETag), `"`),
+			Size:         p.Size,
+			LastModified: safeTime(p.LastModified),
+		})
+	}
+	return &spec.ListPartsResult{
+		Parts:                parts,
+		NextPartNumberMarker: int32(resp.NextPartNumberMarker),
+		IsTruncated:          resp.IsTruncated,
+	}, nil
 }
 
 func (u *uploader) Abort(ctx context.Context) error {

@@ -25,8 +25,29 @@ type ListResult struct {
 }
 
 type Part struct {
-	PartNumber int32
-	ETag       string
+	PartNumber   int32
+	ETag         string
+	Size         int64
+	LastModified time.Time
+}
+
+type UploadInfo struct {
+	Key       string
+	UploadID  string
+	Initiated time.Time
+}
+
+type ListMultipartUploadsResult struct {
+	Uploads            []UploadInfo
+	NextKeyMarker      string
+	NextUploadIDMarker string
+	IsTruncated        bool
+}
+
+type ListPartsResult struct {
+	Parts                []Part
+	NextPartNumberMarker int32
+	IsTruncated          bool
 }
 
 type URI struct {

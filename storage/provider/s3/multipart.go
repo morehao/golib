@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"time"
 
 	aws "github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -31,18 +33,38 @@ func (c *client) NewMultipartUpload(ctx context.Context, key string, opts ...spe
 		return nil, fmt.Errorf("storage: create multipart upload %q: %w", k, err)
 	}
 	return &uploader{
-		client:   c.sdk,
-		bucket:   c.bucket,
-		key:      k,
-		uploadID: aws.ToString(resp.UploadId),
+		client:        c.sdk,
+		presignClient: awss3.NewPresignClient(c.sdk),
+		bucket:        c.bucket,
+		key:           k,
+		uploadID:      aws.ToString(resp.UploadId),
+	}, nil
+}
+
+func (c *client) GetMultipartUploader(_ context.Context, key string, uploadID string) (spec.MultipartUploader, error) {
+	k, err := spec.NormalizeObjectKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return &uploader{
+		client:        c.sdk,
+		presignClient: awss3.NewPresignClient(c.sdk),
+		bucket:        c.bucket,
+		key:           k,
+		uploadID:      uploadID,
 	}, nil
 }
 
 type uploader struct {
-	client   *awss3.Client
-	bucket   string
-	key      string
-	uploadID string
+	client        *awss3.Client
+	presignClient *awss3.PresignClient
+	bucket        string
+	key           string
+	uploadID      string
+}
+
+func (u *uploader) UploadID() string {
+	return u.uploadID
 }
 
 func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Reader, size int64) (spec.Part, error) {
@@ -64,6 +86,24 @@ func (u *uploader) UploadPart(ctx context.Context, partNum int32, reader io.Read
 		PartNumber: partNum,
 		ETag:       strings.Trim(aws.ToString(resp.ETag), `"`),
 	}, nil
+}
+
+func (u *uploader) PresignUploadPartURL(ctx context.Context, partNum int32, expires time.Duration) (string, error) {
+	if partNum <= 0 {
+		return "", fmt.Errorf("storage: part number must be positive, got %d", partNum)
+	}
+	req, err := u.presignClient.PresignUploadPart(ctx, &awss3.UploadPartInput{
+		Bucket:   aws.String(u.bucket),
+		Key:      aws.String(u.key),
+		PartNumber: aws.Int32(partNum),
+		UploadId: aws.String(u.uploadID),
+	}, func(opts *awss3.PresignOptions) {
+		opts.Expires = expires
+	})
+	if err != nil {
+		return "", fmt.Errorf("storage: presign upload part %d for %q: %w", partNum, u.key, err)
+	}
+	return req.URL, nil
 }
 
 func (u *uploader) Complete(ctx context.Context, parts []spec.Part) error {
@@ -109,4 +149,41 @@ func (u *uploader) Abort(ctx context.Context) error {
 		return fmt.Errorf("storage: abort multipart upload %q: %w", u.key, err)
 	}
 	return nil
+}
+
+func (u *uploader) ListParts(ctx context.Context, opts ...spec.ListPartsOption) (*spec.ListPartsResult, error) {
+	lo := spec.ApplyListPartsOptions(opts...)
+	input := &awss3.ListPartsInput{
+		Bucket:   aws.String(u.bucket),
+		Key:      aws.String(u.key),
+		UploadId: aws.String(u.uploadID),
+		MaxParts: aws.Int32(int32(lo.MaxParts)),
+	}
+	if lo.PartNumberMarker > 0 {
+		input.PartNumberMarker = aws.String(fmt.Sprintf("%d", lo.PartNumberMarker))
+	}
+	out, err := u.client.ListParts(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list parts for %q: %w", u.key, err)
+	}
+	parts := make([]spec.Part, 0, len(out.Parts))
+	for _, p := range out.Parts {
+		parts = append(parts, spec.Part{
+			PartNumber:   aws.ToInt32(p.PartNumber),
+			ETag:         strings.Trim(aws.ToString(p.ETag), `"`),
+			Size:         aws.ToInt64(p.Size),
+			LastModified: aws.ToTime(p.LastModified),
+		})
+	}
+	nextMarker := int32(0)
+	if aws.ToString(out.NextPartNumberMarker) != "" {
+		if v, err := strconv.Atoi(aws.ToString(out.NextPartNumberMarker)); err == nil {
+			nextMarker = int32(v)
+		}
+	}
+	return &spec.ListPartsResult{
+		Parts:                parts,
+		NextPartNumberMarker: nextMarker,
+		IsTruncated:          aws.ToBool(out.IsTruncated),
+	}, nil
 }
