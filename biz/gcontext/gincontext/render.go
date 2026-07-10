@@ -56,18 +56,8 @@ func buildErrorResponse(ctx *gin.Context, err error) gcontext.ResponseRender {
 		r.SetMsg(gErr.Msg)
 	} else {
 		r.SetCode(-1)
-		r.SetMsg(cause(err).Error())
+		r.SetMsg(gerror.Cause(err).Error())
 	}
 	r.SetData(gin.H{})
 	return r
-}
-
-func cause(err error) error {
-	for {
-		unwrapped := errors.Unwrap(err)
-		if unwrapped == nil {
-			return err
-		}
-		err = unwrapped
-	}
 }
