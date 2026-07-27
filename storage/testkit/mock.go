@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,6 +78,9 @@ func (m *mockStorage) ListObjects(ctx context.Context, bucket, prefix string, op
 }
 
 func (m *mockStorage) putObject(ctx context.Context, bucket, key string, body io.Reader, opts ...storage.PutOption) (*storage.PutObjectResult, error) {
+	if strings.HasPrefix(key, "/") || strings.Contains(key, "..") || strings.Contains(key, "//") || key == "" {
+		return nil, fmt.Errorf("%w: invalid key", storage.ErrInvalidPath)
+	}
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return nil, err
