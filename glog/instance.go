@@ -34,13 +34,13 @@ func newLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 	if cfg == nil {
 		cfg = GetDefaultLogConfig()
 	}
-	if cfg.LoggerType == 0 {
+	if cfg.LoggerType == "" {
 		cfg.LoggerType = LoggerTypeSlog
 	}
 
 	factory, ok := registeredFactories[cfg.LoggerType]
 	if !ok {
-		return nil, fmt.Errorf("glog: unknown LoggerType %d, import glog/slog or glog/zap to register", cfg.LoggerType)
+		return nil, fmt.Errorf("glog: unknown LoggerType %s, import glog/driver/slog or glog/driver/zap to register", cfg.LoggerType)
 	}
 	return factory(cfg, opts...)
 }
@@ -53,85 +53,96 @@ func getDefaultLogger() (Logger, error) {
 }
 
 func GetDefaultLogger() Logger {
-	return defaultLoggerInstance
+	return ensureLogger()
 }
 
 func GetLoggerConfig() *LogConfig {
-	return defaultLoggerInstance.GetConfig()
+	log := ensureLogger()
+	return log.GetConfig()
 }
 
 func Debug(ctx context.Context, args ...any) {
-	defaultLoggerInstance.Debug(ctx, args...)
+	ensureLogger().Debug(ctx, args...)
 }
 
 func Debugf(ctx context.Context, format string, kvs ...any) {
-	defaultLoggerInstance.Debugf(ctx, format, kvs...)
+	ensureLogger().Debugf(ctx, format, kvs...)
 }
 
 func Debugw(ctx context.Context, msg string, kvs ...any) {
-	defaultLoggerInstance.Debugw(ctx, msg, kvs...)
+	ensureLogger().Debugw(ctx, msg, kvs...)
 }
 
 func Info(ctx context.Context, args ...any) {
-	defaultLoggerInstance.Info(ctx, args...)
+	ensureLogger().Info(ctx, args...)
 }
 
 func Infof(ctx context.Context, format string, kvs ...any) {
-	defaultLoggerInstance.Infof(ctx, format, kvs...)
+	ensureLogger().Infof(ctx, format, kvs...)
 }
 
 func Infow(ctx context.Context, msg string, kvs ...any) {
-	defaultLoggerInstance.Infow(ctx, msg, kvs...)
+	ensureLogger().Infow(ctx, msg, kvs...)
 }
 
 func Warn(ctx context.Context, args ...any) {
-	defaultLoggerInstance.Warn(ctx, args...)
+	ensureLogger().Warn(ctx, args...)
 }
 
 func Warnf(ctx context.Context, format string, kvs ...any) {
-	defaultLoggerInstance.Warnf(ctx, format, kvs...)
+	ensureLogger().Warnf(ctx, format, kvs...)
 }
 
 func Warnw(ctx context.Context, msg string, kvs ...any) {
-	defaultLoggerInstance.Warnw(ctx, msg, kvs...)
+	ensureLogger().Warnw(ctx, msg, kvs...)
 }
 
 func Error(ctx context.Context, args ...any) {
-	defaultLoggerInstance.Error(ctx, args...)
+	ensureLogger().Error(ctx, args...)
 }
 
 func Errorf(ctx context.Context, format string, kvs ...any) {
-	defaultLoggerInstance.Errorf(ctx, format, kvs...)
+	ensureLogger().Errorf(ctx, format, kvs...)
 }
 
 func Errorw(ctx context.Context, msg string, kvs ...any) {
-	defaultLoggerInstance.Errorw(ctx, msg, kvs...)
+	ensureLogger().Errorw(ctx, msg, kvs...)
 }
 
 func Panic(ctx context.Context, args ...any) {
-	defaultLoggerInstance.Panic(ctx, args...)
+	ensureLogger().Panic(ctx, args...)
 }
 
 func Panicf(ctx context.Context, format string, kvs ...any) {
-	defaultLoggerInstance.Panicf(ctx, format, kvs...)
+	ensureLogger().Panicf(ctx, format, kvs...)
 }
 
 func Panicw(ctx context.Context, msg string, kvs ...any) {
-	defaultLoggerInstance.Panicw(ctx, msg, kvs...)
+	ensureLogger().Panicw(ctx, msg, kvs...)
 }
 
 func Fatal(ctx context.Context, args ...any) {
-	defaultLoggerInstance.Fatal(ctx, args...)
+	ensureLogger().Fatal(ctx, args...)
 }
 
 func Fatalf(ctx context.Context, format string, kvs ...any) {
-	defaultLoggerInstance.Fatalf(ctx, format, kvs...)
+	ensureLogger().Fatalf(ctx, format, kvs...)
 }
 
 func Fatalw(ctx context.Context, msg string, kvs ...any) {
-	defaultLoggerInstance.Fatalw(ctx, msg, kvs...)
+	ensureLogger().Fatalw(ctx, msg, kvs...)
 }
 
 func Close() error {
+	if defaultLoggerInstance == nil {
+		return nil
+	}
 	return defaultLoggerInstance.Logger.Close()
+}
+
+func ensureLogger() Logger {
+	if defaultLoggerInstance == nil {
+		return newNopLogger()
+	}
+	return defaultLoggerInstance
 }

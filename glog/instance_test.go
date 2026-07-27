@@ -21,9 +21,9 @@ func TestAppendExtraKeys(t *testing.T) {
 }
 
 func TestRegisterLoggerType(t *testing.T) {
-	RegisterLoggerType(LoggerTypeSlog+100, func(cfg *LogConfig, opts ...Option) (Logger, error) {
+	RegisterLoggerType(LoggerType("custom"), func(cfg *LogConfig, opts ...Option) (Logger, error) {
 		return nil, nil
 	})
-	_, ok := registeredFactories[LoggerTypeSlog+100]
+	_, ok := registeredFactories[LoggerType("custom")]
 	assert.True(t, ok)
 }

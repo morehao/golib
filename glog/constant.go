@@ -1,10 +1,10 @@
 package glog
 
-type LoggerType uint8
+type LoggerType string
 
 const (
-	LoggerTypeZap LoggerType = iota + 1
-	LoggerTypeSlog
+	LoggerTypeZap  LoggerType = "zap"
+	LoggerTypeSlog LoggerType = "slog"
 )
 
 type LoggerFactory func(cfg *LogConfig, opts ...Option) (Logger, error)
