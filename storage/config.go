@@ -22,7 +22,6 @@ type Config struct {
 	Region    string `yaml:"region"`     // 区域
 	AccessKey string `yaml:"access_key"` // 访问密钥
 	SecretKey string `yaml:"secret_key"` // 秘密密钥
-	Bucket    string `yaml:"bucket"`     // 存储桶名称
 	UseSSL    bool   `yaml:"use_ssl"`    // 是否使用 SSL 连接
 
 	// 本地磁盘后端
