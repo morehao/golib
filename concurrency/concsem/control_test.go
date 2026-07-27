@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
-	_ "github.com/morehao/golib/glog/slog"
+	_ "github.com/morehao/golib/glog/driver/slog"
 )
 
 func TestControl_Run(t *testing.T) {

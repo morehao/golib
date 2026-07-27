@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
-	_ "github.com/morehao/golib/glog/slog"
+	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
