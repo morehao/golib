@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/morehao/golib/storage/spec"
+	"github.com/morehao/golib/storage"
 	"gorm.io/gorm"
 )
 
@@ -29,11 +29,12 @@ type FileStoreOption func(*fileStoreOptions)
 type fileStoreOptions struct{}
 
 type FileStore struct {
-	store *store
-	st    spec.Storage
+	store  *store
+	st     storage.Storage
+	bucket string
 }
 
-func New(db *gorm.DB, st spec.Storage, opts ...FileStoreOption) (*FileStore, error) {
+func New(db *gorm.DB, st storage.Storage, bucket string, opts ...FileStoreOption) (*FileStore, error) {
 	var o fileStoreOptions
 	for _, fn := range opts {
 		fn(&o)
@@ -42,7 +43,7 @@ func New(db *gorm.DB, st spec.Storage, opts ...FileStoreOption) (*FileStore, err
 	if err := db.AutoMigrate(&FileRecord{}); err != nil {
 		return nil, fmt.Errorf("filestore.New: auto-migrate: %w", err)
 	}
-	return &FileStore{store: newStore(db), st: st}, nil
+	return &FileStore{store: newStore(db), st: st, bucket: bucket}, nil
 }
 
 func (s *FileStore) GetExpiry() time.Duration {
@@ -104,7 +105,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		return existing, nil
 	}
 
-	if err := s.st.PutObject(ctx, req.StoragePath, req.Reader, req.Size); err != nil {
+	if _, err := s.st.PutObject(ctx, s.bucket, req.StoragePath, req.Reader); err != nil {
 		return nil, fmt.Errorf("filestore.UploadAndRecord: put object: %w", err)
 	}
 
@@ -119,10 +120,10 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		// TOCTOU: another goroutine may have created the record between CheckExist and Create
 		existing, lookupErr := s.store.GetByFingerprint(ctx, req.Fingerprint, FileStatusCompleted)
 		if lookupErr == nil {
-			_ = s.st.DeleteObject(ctx, req.StoragePath)
+			_ = s.st.DeleteObject(ctx, s.bucket, req.StoragePath)
 			return existing, nil
 		}
-		_ = s.st.DeleteObject(ctx, req.StoragePath)
+		_ = s.st.DeleteObject(ctx, s.bucket, req.StoragePath)
 		return nil, fmt.Errorf("filestore.UploadAndRecord: record upload: %w", err)
 	}
 	return rec, nil
@@ -143,7 +144,7 @@ func (s *FileStore) PresignGetFileURL(ctx context.Context, id uint, opts ...Pres
 	}
 
 	expires := applyPresignOptions(opts...)
-	url, err := s.st.PresignGetURL(ctx, rec.StoragePath, expires)
+	url, err := s.st.PresignGetObject(ctx, s.bucket, rec.StoragePath, expires)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignGetFileURL: %w", err)
 	}
@@ -167,7 +168,7 @@ type InitMultipartUploadRequest struct {
 
 type CompleteMultipartUploadRequest struct {
 	ID    uint
-	Parts []spec.Part
+	Parts []storage.CompletedPart
 }
 
 func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUploadRequest) (*FileRecord, error) {
@@ -183,9 +184,9 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		return existing, nil
 	}
 
-	uploader, err := s.st.NewMultipartUpload(ctx, req.StoragePath)
+	uploadID, err := s.st.CreateMultipartUpload(ctx, s.bucket, req.StoragePath)
 	if err != nil {
-		return nil, fmt.Errorf("filestore.InitMultipartUpload: new multipart upload: %w", err)
+		return nil, fmt.Errorf("filestore.InitMultipartUpload: create multipart upload: %w", err)
 	}
 
 	rec := &FileRecord{
@@ -194,15 +195,13 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		Size:        req.Size,
 		MimeType:    req.MimeType,
 		StoragePath: req.StoragePath,
-		UploadID:    uploader.UploadID(),
+		UploadID:    uploadID,
 		Status:      FileStatusUploading,
 	}
 	if err := s.store.Create(ctx, rec); err != nil {
 		existing, lookupErr := s.store.GetByFingerprint(ctx, req.Fingerprint, FileStatusCompleted)
 		if lookupErr == nil {
-			if mu, muErr := s.st.GetMultipartUploader(ctx, req.StoragePath, rec.UploadID); muErr == nil {
-				_ = mu.Abort(ctx)
-			}
+			_ = s.st.AbortMultipartUpload(ctx, s.bucket, req.StoragePath, rec.UploadID)
 			return existing, nil
 		}
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: create record: %w", err)
@@ -219,13 +218,8 @@ func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum i
 		return "", fmt.Errorf("%w: id=%d", ErrNotMultipartUpload, id)
 	}
 
-	uploader, err := s.st.GetMultipartUploader(ctx, rec.StoragePath, rec.UploadID)
-	if err != nil {
-		return "", fmt.Errorf("filestore.PresignUploadPartURL: get uploader: %w", err)
-	}
-
 	expires := applyPresignOptions(opts...)
-	url, err := uploader.PresignUploadPartURL(ctx, partNum, expires)
+	url, err := s.st.PresignPutObject(ctx, s.bucket, rec.StoragePath, expires)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignUploadPartURL: presign: %w", err)
 	}
@@ -245,12 +239,7 @@ func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMul
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: update status to merging: %w", err)
 	}
 
-	uploader, err := s.st.GetMultipartUploader(ctx, rec.StoragePath, rec.UploadID)
-	if err != nil {
-		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: get uploader: %w", err)
-	}
-
-	if err := uploader.Complete(ctx, req.Parts); err != nil {
+	if err := s.st.CompleteMultipartUpload(ctx, s.bucket, rec.StoragePath, rec.UploadID, req.Parts); err != nil {
 		_ = s.store.UpdateStatus(ctx, req.ID, FileStatusUploading)
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: complete: %w", err)
 	}
@@ -275,12 +264,7 @@ func (s *FileStore) AbortMultipartUpload(ctx context.Context, id uint) error {
 		return fmt.Errorf("%w: id=%d", ErrNotMultipartUpload, id)
 	}
 
-	uploader, err := s.st.GetMultipartUploader(ctx, rec.StoragePath, rec.UploadID)
-	if err != nil {
-		return fmt.Errorf("filestore.AbortMultipartUpload: get uploader: %w", err)
-	}
-
-	if err := uploader.Abort(ctx); err != nil {
+	if err := s.st.AbortMultipartUpload(ctx, s.bucket, rec.StoragePath, rec.UploadID); err != nil {
 		return fmt.Errorf("filestore.AbortMultipartUpload: abort: %w", err)
 	}
 

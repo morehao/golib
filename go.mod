@@ -4,7 +4,6 @@ go 1.26.1
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.5.1
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.17
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.16
@@ -19,13 +18,10 @@ require (
 	github.com/go-redsync/redsync/v4 v4.16.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
-	github.com/minio/minio-go/v7 v7.1.0
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
-	github.com/tencentyun/cos-go-sdk-v5 v0.7.73
-	github.com/volcengine/ve-tos-golang-sdk/v2 v2.9.5
 	github.com/xuri/excelize/v2 v2.10.1
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
@@ -55,20 +51,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.17 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
-	github.com/clbanning/mxj v1.8.4 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/go-ini/ini v1.67.0 // indirect
-	github.com/google/go-querystring v1.0.0 // indirect
-	github.com/klauspost/compress v1.18.2 // indirect
-	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
-	github.com/minio/crc64nvme v1.1.1 // indirect
-	github.com/minio/md5-simd v1.1.2 // indirect
-	github.com/mitchellh/mapstructure v1.4.3 // indirect
-	github.com/mozillazg/go-httpheader v0.2.1 // indirect
-	github.com/philhofer/fwd v1.2.0 // indirect
-	github.com/rs/xid v1.6.0 // indirect
-	github.com/tinylib/msgp v1.6.1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 )
 

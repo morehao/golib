@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gcontext/gincontext"
 	"github.com/morehao/golib/filestore"
-	"github.com/morehao/golib/storage/spec"
+	"github.com/morehao/golib/storage"
 )
 
 // @Tags 文件
@@ -171,9 +171,9 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		parts := make([]spec.Part, len(req.Parts))
+		parts := make([]storage.CompletedPart, len(req.Parts))
 		for i, p := range req.Parts {
-			parts[i] = spec.Part{PartNumber: p.PartNumber, ETag: p.ETag}
+			parts[i] = storage.CompletedPart{PartNumber: int(p.PartNumber), ETag: p.ETag}
 		}
 
 		rec, err := fs.CompleteMultipartUpload(c.Request.Context(), filestore.CompleteMultipartUploadRequest{

@@ -14,7 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/filestore"
-	"github.com/morehao/golib/storage/spec"
+	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -24,46 +24,37 @@ import (
 
 var bg = context.Background()
 
-type mockMultipartUploader struct {
-	spec.MultipartUploader
-	uploadID string
-}
+type mockStorage struct{ storage.Storage }
 
-func (m *mockMultipartUploader) UploadID() string { return m.uploadID }
-
-func (m *mockMultipartUploader) PresignUploadPartURL(_ context.Context, partNum int32, _ time.Duration) (string, error) {
-	return fmt.Sprintf("https://presign.example.com/%d?uploadId=%s", partNum, m.uploadID), nil
-}
-
-func (m *mockMultipartUploader) Complete(_ context.Context, _ []spec.Part) error { return nil }
-
-func (m *mockMultipartUploader) Abort(_ context.Context) error { return nil }
-
-type mockStorage struct{ spec.Storage }
-
-func (m *mockStorage) PutObject(_ context.Context, _ string, reader io.Reader, _ int64, _ ...spec.PutOption) error {
+func (m *mockStorage) PutObject(_ context.Context, _ string, _ string, reader io.Reader, _ ...storage.PutOption) (*storage.PutObjectResult, error) {
 	_, _ = io.Copy(io.Discard, reader)
+	return &storage.PutObjectResult{}, nil
+}
+
+func (m *mockStorage) DeleteObject(_ context.Context, _ string, _ string) error { return nil }
+
+func (m *mockStorage) CreateMultipartUpload(_ context.Context, _ string, _ string, _ ...storage.PutOption) (string, error) {
+	return "mock-upload-id", nil
+}
+
+func (m *mockStorage) CompleteMultipartUpload(_ context.Context, _ string, _ string, _ string, _ []storage.CompletedPart) error {
 	return nil
 }
 
-func (m *mockStorage) DeleteObject(_ context.Context, _ string) error { return nil }
+func (m *mockStorage) AbortMultipartUpload(_ context.Context, _ string, _ string, _ string) error { return nil }
 
-func (m *mockStorage) NewMultipartUpload(_ context.Context, _ string, _ ...spec.MultipartOption) (spec.MultipartUploader, error) {
-	return &mockMultipartUploader{uploadID: "mock-upload-id"}, nil
-}
-
-func (m *mockStorage) GetMultipartUploader(_ context.Context, _ string, uploadID string) (spec.MultipartUploader, error) {
-	return &mockMultipartUploader{uploadID: uploadID}, nil
-}
-
-func (m *mockStorage) PresignGetURL(_ context.Context, key string, expires time.Duration) (string, error) {
+func (m *mockStorage) PresignGetObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.GetOption) (string, error) {
 	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
 }
 
-type failingMockStorage struct{ spec.Storage }
+func (m *mockStorage) PresignPutObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.PutOption) (string, error) {
+	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
+}
 
-func (m *failingMockStorage) PutObject(_ context.Context, _ string, _ io.Reader, _ int64, _ ...spec.PutOption) error {
-	return io.ErrUnexpectedEOF
+type failingMockStorage struct{ storage.Storage }
+
+func (m *failingMockStorage) PutObject(_ context.Context, _ string, _ string, _ io.Reader, _ ...storage.PutOption) (*storage.PutObjectResult, error) {
+	return nil, io.ErrUnexpectedEOF
 }
 
 // --- helpers ---
@@ -72,7 +63,7 @@ func newTestFileStore(t *testing.T) *filestore.FileStore {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	fs, err := filestore.New(db, &mockStorage{})
+	fs, err := filestore.New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 	return fs
 }
@@ -538,7 +529,7 @@ func TestHandleDeleteFile_NotFound(t *testing.T) {
 func TestHandleUpload_StorageFailure(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	fs, err := filestore.New(db, &failingMockStorage{})
+	fs, err := filestore.New(db, &failingMockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
 	gin.SetMode(gin.TestMode)
