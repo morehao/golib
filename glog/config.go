@@ -8,30 +8,19 @@
  */
 package glog
 
-// LogConfig 模块级别的日志配置
 type LogConfig struct {
-	// Service 服务名
-	Service string
-	// Module 模块名称，如 "es", "gorm", "redis" 等
-	Module string
-	// Level 日志级别
-	Level Level `json:"level" yaml:"level"`
-	// Writer 日志输出类型
-	Writer WriterType `json:"writer" yaml:"writer"`
-	// Dir 日志文件目录
-	Dir string `json:"dir" yaml:"dir"`
-	// ExtraKeys 需要从上下文中提取的额外字段
-	ExtraKeys []string `json:"extra_keys" yaml:"extra_keys"`
-	// MaxSize 单个日志文件的最大大小（MB），超过则切割，默认 100
-	MaxSize int `json:"max_size" yaml:"max_size"`
-	// MaxBackups 保留的旧日志文件数量，默认 10
-	MaxBackups int `json:"max_backups" yaml:"max_backups"`
-	// MaxAge 保留日志文件的最大天数，默认 7
-	MaxAge int `json:"max_age" yaml:"max_age"`
-	// Compress 是否压缩旧日志文件，默认 false
-	Compress bool `json:"compress" yaml:"compress"`
-	// EnableOTELTrace 是否自动注入 OpenTelemetry trace 关联字段
-	EnableOTELTrace bool `json:"enable_otel_trace" yaml:"enable_otel_trace"`
+	Service         string
+	Module          string
+	Level           Level      `json:"level" yaml:"level"`
+	Writer          WriterType `json:"writer" yaml:"writer"`
+	Dir             string     `json:"dir" yaml:"dir"`
+	ExtraKeys       []string   `json:"extra_keys" yaml:"extra_keys"`
+	MaxSize         int        `json:"max_size" yaml:"max_size"`
+	MaxBackups      int        `json:"max_backups" yaml:"max_backups"`
+	MaxAge          int        `json:"max_age" yaml:"max_age"`
+	Compress        bool       `json:"compress" yaml:"compress"`
+	EnableOTELTrace bool       `json:"enable_otel_trace" yaml:"enable_otel_trace"`
+	LoggerType      LoggerType `json:"logger_type" yaml:"logger_type"`
 }
 
 func AppendExtraKeys(cfg *LogConfig, keys ...string) {
@@ -51,15 +40,16 @@ func AppendExtraKeys(cfg *LogConfig, keys ...string) {
 
 func GetDefaultLogConfig() *LogConfig {
 	return &LogConfig{
-		Service:         defaultServiceName,
-		Module:          defaultModuleName,
+		Service:         DefaultServiceName,
+		Module:          DefaultModuleName,
 		Level:           DebugLevel,
 		Writer:          WriterConsole,
-		Dir:             defaultLogDir,
+		Dir:             DefaultLogDir,
 		MaxSize:         100,
 		MaxBackups:      10,
 		MaxAge:          7,
 		Compress:        false,
 		EnableOTELTrace: true,
+		LoggerType:      LoggerTypeSlog,
 	}
 }

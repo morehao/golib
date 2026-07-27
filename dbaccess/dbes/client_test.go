@@ -7,6 +7,7 @@ import (
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
 	"github.com/morehao/golib/glog"
+	_ "github.com/morehao/golib/glog/slog"
 	"github.com/stretchr/testify/assert"
 )
 

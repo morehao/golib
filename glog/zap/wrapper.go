@@ -1,4 +1,4 @@
-package glog
+package zap
 
 import (
 	"fmt"
@@ -8,20 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/morehao/golib/glog"
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// ---------------------------------------------------------------------------
-// Encoder
-// ---------------------------------------------------------------------------
-
-// gZapEncoder 只负责 messageHook，fieldHook 已上移到 ctxLogw 层处理。
 type gZapEncoder struct {
 	zapcore.Encoder
-	messageHookFunc MessageHookFunc
+	messageHookFunc glog.MessageHookFunc
 }
 
 func getZapEncoder(cfg *zapLoggerConfig) zapcore.Encoder {
@@ -55,48 +51,32 @@ func (enc *gZapEncoder) EncodeEntry(ent zapcore.Entry, fields []zapcore.Field) (
 	return enc.Encoder.EncodeEntry(ent, fields)
 }
 
-// ---------------------------------------------------------------------------
-// Console writer
-// ---------------------------------------------------------------------------
-
 func getZapStandoutWriter() zapcore.WriteSyncer {
 	return os.Stdout
 }
 
-// ---------------------------------------------------------------------------
-// Daily-rotate file writer
-// ---------------------------------------------------------------------------
-
-// dailyRotateWriter 在每次 Write 时检测日期，跨天后自动切换到新目录/文件。
-// 同时内置 256KB 缓冲，每 5 秒强制刷盘，与原实现保持一致。
 type dailyRotateWriter struct {
 	mu         sync.Mutex
-	cfg        *LogConfig
-	fileSuffix string // "full" or "wf"
+	cfg        *glog.LogConfig
+	fileSuffix string
 
-	// 当前活跃的 lumberjack logger 及其对应的日期字符串
-	current *lumberjack.Logger
-	today   string
-
-	// 带缓冲的包装层，跨天时需要一并替换
+	current  *lumberjack.Logger
+	today    string
 	buffered *zapcore.BufferedWriteSyncer
 }
 
-func newDailyRotateWriter(cfg *LogConfig, fileSuffix string) (*dailyRotateWriter, error) {
+func newDailyRotateWriter(cfg *glog.LogConfig, fileSuffix string) (*dailyRotateWriter, error) {
 	w := &dailyRotateWriter{
 		cfg:        cfg,
 		fileSuffix: fileSuffix,
 	}
-	// 初始化当天的 writer
 	if err := w.rotate(time.Now().Format("20060102")); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
-// rotate 切换到新的日期目录，必须在持有 mu 或初始化阶段调用。
 func (w *dailyRotateWriter) rotate(today string) error {
-	// 关闭旧的缓冲 writer（刷盘）
 	if w.buffered != nil {
 		_ = w.buffered.Stop()
 	}
@@ -140,7 +120,6 @@ func (w *dailyRotateWriter) rotate(today string) error {
 	return nil
 }
 
-// Write 实现 io.Writer，跨天时自动切换。
 func (w *dailyRotateWriter) Write(p []byte) (n int, err error) {
 	today := time.Now().Format("20060102")
 
@@ -157,7 +136,6 @@ func (w *dailyRotateWriter) Write(p []byte) (n int, err error) {
 	return buf.Write(p)
 }
 
-// Sync 实现 zapcore.WriteSyncer。
 func (w *dailyRotateWriter) Sync() error {
 	w.mu.Lock()
 	buf := w.buffered
@@ -168,7 +146,6 @@ func (w *dailyRotateWriter) Sync() error {
 	return nil
 }
 
-// getZapFileWriter 返回支持跨天切换的 WriteSyncer。
-func getZapFileWriter(cfg *LogConfig, fileSuffix string) (zapcore.WriteSyncer, error) {
+func getZapFileWriter(cfg *glog.LogConfig, fileSuffix string) (zapcore.WriteSyncer, error) {
 	return newDailyRotateWriter(cfg, fileSuffix)
 }

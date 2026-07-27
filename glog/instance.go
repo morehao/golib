@@ -2,6 +2,7 @@ package glog
 
 import (
 	"context"
+	"fmt"
 )
 
 type loggerInstance struct {
@@ -9,6 +10,12 @@ type loggerInstance struct {
 }
 
 var defaultLoggerInstance *loggerInstance
+
+var registeredFactories = map[LoggerType]LoggerFactory{}
+
+func RegisterLoggerType(t LoggerType, factory LoggerFactory) {
+	registeredFactories[t] = factory
+}
 
 func InitLogger(cfg *LogConfig, opts ...Option) error {
 	logger, err := newLogger(cfg, opts...)
@@ -27,26 +34,22 @@ func newLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 	if cfg == nil {
 		cfg = GetDefaultLogConfig()
 	}
-
-	opt := getOptConfig(opts...)
-	loggerType := opt.loggerType
-	if loggerType == 0 {
-		loggerType = LoggerTypeZap
+	if cfg.LoggerType == 0 {
+		cfg.LoggerType = LoggerTypeSlog
 	}
 
-	switch loggerType {
-	case LoggerTypeSlog:
-		return newSlogLogger(cfg, opts...)
-	default:
-		return newZapLogger(cfg, opts...)
+	factory, ok := registeredFactories[cfg.LoggerType]
+	if !ok {
+		return nil, fmt.Errorf("glog: unknown LoggerType %d, import glog/slog or glog/zap to register", cfg.LoggerType)
 	}
+	return factory(cfg, opts...)
 }
 
 func getDefaultLogger() (Logger, error) {
 	if defaultLoggerInstance != nil {
 		return defaultLoggerInstance, nil
 	}
-	return newLogger(GetDefaultLogConfig(), WithCallerSkip(defaultLogCallerSkip))
+	return newLogger(GetDefaultLogConfig(), WithCallerSkip(DefaultLogCallerSkip))
 }
 
 func GetDefaultLogger() Logger {

@@ -1,4 +1,4 @@
-package glog
+package slog
 
 import (
 	"bytes"
@@ -12,50 +12,42 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/morehao/golib/glog"
 	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// ---------------------------------------------------------------------------
-// gSlogHandler
-// ---------------------------------------------------------------------------
-
-// gSlogHandler 是统一的 slog.Handler 实现。
-// 所有横切关注点（OTEL trace、ctx extra keys、field/message hook）
-// 都集中在这一层处理，logger 层不再重复注入。
 type gSlogHandler struct {
 	handler         slog.Handler
-	fieldHookFunc   FieldHookFunc
-	messageHookFunc MessageHookFunc
+	fieldHookFunc   glog.FieldHookFunc
+	messageHookFunc glog.MessageHookFunc
 	enableOTELTrace bool
-	cfg             *LogConfig // 只读，构造后不修改
+	cfg             *glog.LogConfig
 }
 
-func newSlogHandler(cfg *LogConfig, optCfg *optConfig, writer io.Writer) *gSlogHandler {
+func newSlogHandler(cfg *glog.LogConfig, optCfg *glog.OptConfig, writer io.Writer) *gSlogHandler {
 	h := &gSlogHandler{
 		enableOTELTrace: cfg.EnableOTELTrace,
 		cfg:             cfg,
 	}
 
 	if optCfg != nil {
-		h.fieldHookFunc = optCfg.fieldHookFunc
-		h.messageHookFunc = optCfg.messageHookFunc
-		if optCfg.enableOTELTrace != nil {
-			h.enableOTELTrace = *optCfg.enableOTELTrace
+		h.fieldHookFunc = optCfg.FieldHookFunc
+		h.messageHookFunc = optCfg.MessageHookFunc
+		if optCfg.EnableOTELTrace != nil {
+			h.enableOTELTrace = *optCfg.EnableOTELTrace
 		}
 	}
 
 	handlerOpts := &slog.HandlerOptions{
-		AddSource: true,
-		Level:     logLevelToSlog(cfg.Level),
-		// 将自定义 Level 常量（PanicLevel / FatalLevel）映射为可读字符串
+		AddSource:   true,
+		Level:       logLevelToSlog(cfg.Level),
 		ReplaceAttr: replaceLevel,
 	}
 	h.handler = slog.NewJSONHandler(writer, handlerOpts)
 	return h
 }
 
-// replaceLevel 把内部扩展 Level 值转为语义字符串，避免输出 "ERROR+1" 之类。
 func replaceLevel(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) != 0 || a.Key != slog.LevelKey {
 		return a
@@ -78,25 +70,21 @@ func (h *gSlogHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *gSlogHandler) Handle(ctx context.Context, r slog.Record) error {
-	if skipLog(ctx) {
+	if glog.SkipLog(ctx) {
 		return nil
 	}
 
-	// Clone 避免与调用方共享 attrs 切片
 	r = r.Clone()
 
-	// message hook
 	if h.messageHookFunc != nil {
 		r.Message = h.messageHookFunc(r.Message)
 	}
 
-	// 提取横切字段（OTEL trace + ctx extra keys），使用 pool 减少 GC 压力
 	fields := acquireFields()
 	defer releaseFields(fields)
 
 	fields = h.extractFields(ctx, fields)
 
-	// field hook：允许外部修改/过滤字段
 	if h.fieldHookFunc != nil {
 		h.fieldHookFunc(fields)
 	}
@@ -114,7 +102,7 @@ func (h *gSlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		fieldHookFunc:   h.fieldHookFunc,
 		messageHookFunc: h.messageHookFunc,
 		enableOTELTrace: h.enableOTELTrace,
-		cfg:             h.cfg, // cfg 构造后只读，共享指针安全
+		cfg:             h.cfg,
 	}
 }
 
@@ -128,28 +116,25 @@ func (h *gSlogHandler) WithGroup(name string) slog.Handler {
 	}
 }
 
-// extractFields 从 ctx 提取需要附加到每条日志的字段，结果追加到 dst 中。
-// 只在 handler 层调用一次，不在 logger 层重复。
-func (h *gSlogHandler) extractFields(ctx context.Context, dst []Field) []Field {
+func (h *gSlogHandler) extractFields(ctx context.Context, dst []glog.Field) []glog.Field {
 	if h.enableOTELTrace {
 		sc := trace.SpanFromContext(ctx).SpanContext()
 		if sc.IsValid() {
 			dst = append(dst,
-				Field{Key: KeyTraceID, Value: sc.TraceID().String()},
-				Field{Key: KeySpanID, Value: sc.SpanID().String()},
-				Field{Key: KeyTraceFlags, Value: sc.TraceFlags().String()},
+				glog.Field{Key: glog.KeyTraceID, Value: sc.TraceID().String()},
+				glog.Field{Key: glog.KeySpanID, Value: sc.SpanID().String()},
+				glog.Field{Key: glog.KeyTraceFlags, Value: sc.TraceFlags().String()},
 			)
 		}
 	}
 
 	if h.cfg != nil {
 		for _, key := range h.cfg.ExtraKeys {
-			// OTEL 已注入的 key 不重复写入
 			if h.enableOTELTrace && isOTELKey(key) {
 				continue
 			}
 			if v := ctx.Value(key); v != nil {
-				dst = append(dst, Field{Key: key, Value: v})
+				dst = append(dst, glog.Field{Key: key, Value: v})
 			}
 		}
 	}
@@ -158,27 +143,22 @@ func (h *gSlogHandler) extractFields(ctx context.Context, dst []Field) []Field {
 }
 
 func isOTELKey(key string) bool {
-	return key == KeyTraceID || key == KeySpanID || key == KeyTraceFlags
+	return key == glog.KeyTraceID || key == glog.KeySpanID || key == glog.KeyTraceFlags
 }
-
-// ---------------------------------------------------------------------------
-// Fields Pool —— 复用 []Field，减少高频日志路径的 GC 压力
-// ---------------------------------------------------------------------------
 
 var fieldsPool = sync.Pool{
 	New: func() any {
-		s := make([]Field, 0, 8)
+		s := make([]glog.Field, 0, 8)
 		return &s
 	},
 }
 
-func acquireFields() []Field {
-	p := fieldsPool.Get().(*[]Field)
+func acquireFields() []glog.Field {
+	p := fieldsPool.Get().(*[]glog.Field)
 	return (*p)[:0]
 }
 
-func releaseFields(fields []Field) {
-	// 避免池中持有大 slice 导致内存泄漏
+func releaseFields(fields []glog.Field) {
 	if cap(fields) > 64 {
 		return
 	}
@@ -186,40 +166,30 @@ func releaseFields(fields []Field) {
 	fieldsPool.Put(p)
 }
 
-// ---------------------------------------------------------------------------
-// Level 映射
-// ---------------------------------------------------------------------------
-
-// slog 没有内建 Panic/Fatal，用偏移量自定义，与 logLevelToSlog 保持一致。
 const (
 	slogLevelPanic = slog.LevelError + 1
 	slogLevelFatal = slog.LevelError + 2
 )
 
-func logLevelToSlog(level Level) slog.Level {
+func logLevelToSlog(level glog.Level) slog.Level {
 	switch level {
-	case DebugLevel:
+	case glog.DebugLevel:
 		return slog.LevelDebug
-	case InfoLevel:
+	case glog.InfoLevel:
 		return slog.LevelInfo
-	case WarnLevel:
+	case glog.WarnLevel:
 		return slog.LevelWarn
-	case ErrorLevel:
+	case glog.ErrorLevel:
 		return slog.LevelError
-	case PanicLevel:
+	case glog.PanicLevel:
 		return slogLevelPanic
-	case FatalLevel:
+	case glog.FatalLevel:
 		return slogLevelFatal
 	default:
 		return slog.LevelInfo
 	}
 }
 
-// ---------------------------------------------------------------------------
-// levelWriter —— wf 文件的 Warn+ 过滤层
-// ---------------------------------------------------------------------------
-
-// levelWriter 包装底层 writer，只透传 >= minLevel 的日志行。
 type levelWriter struct {
 	w        io.Writer
 	minLevel slog.Level
@@ -227,13 +197,11 @@ type levelWriter struct {
 
 func (lw *levelWriter) Write(p []byte) (int, error) {
 	if !lw.shouldWrite(p) {
-		return len(p), nil // 丢弃但不报错
+		return len(p), nil
 	}
 	return lw.w.Write(p)
 }
 
-// shouldWrite 只扫描每行日志的前 256 字节（level 字段由 slog JSON handler 固定输出在前部），
-// 避免 message 或其他字段中含 `"level":"` 导致误判。
 func (lw *levelWriter) shouldWrite(p []byte) bool {
 	scanRange := p
 	if len(p) > 256 {
@@ -243,7 +211,7 @@ func (lw *levelWriter) shouldWrite(p []byte) bool {
 	needle := []byte(`"level":"`)
 	idx := bytes.Index(scanRange, needle)
 	if idx < 0 {
-		return true // 解析不到 level 字段时放行
+		return true
 	}
 	rest := scanRange[idx+len(needle):]
 	end := bytes.IndexByte(rest, '"')
@@ -266,31 +234,26 @@ func (lw *levelWriter) shouldWrite(p []byte) bool {
 	case "FATAL":
 		return slogLevelFatal >= lw.minLevel
 	default:
-		return true // 未知 level 放行
+		return true
 	}
 }
 
-// ---------------------------------------------------------------------------
-// gSlogFileWriter —— 带日期轮转的文件 writer
-// ---------------------------------------------------------------------------
-
-// writerPair 持有一对日志文件 writer，作为原子替换的整体单元。
 type writerPair struct {
 	full     *lumberjack.Logger
 	wf       *levelWriter
-	fullFile *os.File // 持有底层 *os.File，用于 Close 时 Sync 刷盘
+	fullFile *os.File
 	wfFile   *os.File
 }
 
 type gSlogFileWriter struct {
-	cfg          *LogConfig
-	rotateMu     sync.Mutex // 仅保护 rotate 操作，不参与常规写入
+	cfg          *glog.LogConfig
+	rotateMu     sync.Mutex
 	current      atomic.Pointer[writerPair]
-	currentDate  atomic.Value // string，存当前日期 "20060102"
-	nextRotateAt atomic.Int64 // Unix seconds，下一次需要 rotate 的时间点
+	currentDate  atomic.Value
+	nextRotateAt atomic.Int64
 }
 
-func newSlogFileWriter(cfg *LogConfig) (*gSlogFileWriter, error) {
+func newSlogFileWriter(cfg *glog.LogConfig) (*gSlogFileWriter, error) {
 	w := &gSlogFileWriter{cfg: cfg}
 	pair, dateStr, nextAt, err := w.buildWriterPair(time.Now())
 	if err != nil {
@@ -302,12 +265,10 @@ func newSlogFileWriter(cfg *LogConfig) (*gSlogFileWriter, error) {
 	return w, nil
 }
 
-// needsRotate 通过 atomic 快速判断是否需要切换日期目录，无需加锁。
 func (w *gSlogFileWriter) needsRotate(now time.Time) bool {
 	return now.Unix() >= w.nextRotateAt.Load()
 }
 
-// buildWriterPair 构造新的 writerPair，不持有任何锁。
 func (w *gSlogFileWriter) buildWriterPair(now time.Time) (*writerPair, string, int64, error) {
 	dateStr := now.Format("20060102")
 	dir := w.cfg.Dir + "/" + dateStr
@@ -337,7 +298,6 @@ func (w *gSlogFileWriter) buildWriterPair(now time.Time) (*writerPair, string, i
 		LocalTime:  true,
 	}
 
-	// 打开底层 *os.File，仅用于 Close 时 Sync 刷盘，不参与常规写入
 	fullFile, err := openLogFile(fullPath)
 	if err != nil {
 		return nil, "", 0, err
@@ -359,7 +319,6 @@ func (w *gSlogFileWriter) buildWriterPair(now time.Time) (*writerPair, string, i
 	return pair, dateStr, tomorrow.Unix(), nil
 }
 
-// openLogFile 以 append 模式打开日志文件，仅持有 fd 用于 Sync，不做日常写入。
 func openLogFile(filePath string) (*os.File, error) {
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -368,22 +327,18 @@ func openLogFile(filePath string) (*os.File, error) {
 	return f, nil
 }
 
-// rotate 在持有 rotateMu 的情况下完成日期切换，采用 double-check 防止重复 rotate。
 func (w *gSlogFileWriter) rotate() error {
 	w.rotateMu.Lock()
 	defer w.rotateMu.Unlock()
 
-	// 重新取时间，避免加锁前后跨天导致 dateStr 不一致
 	now := time.Now()
 
-	// double-check：可能在等锁期间已被其他 goroutine rotate 完毕
 	if !w.needsRotate(now) {
 		return nil
 	}
 
 	newDateStr := now.Format("20060102")
 	if cur, ok := w.currentDate.Load().(string); ok && cur == newDateStr {
-		// 日期未变（极罕见的时钟抖动场景），仅更新 nextRotateAt 防止无限循环
 		tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
 		w.nextRotateAt.Store(tomorrow.Unix())
 		return nil
@@ -394,12 +349,10 @@ func (w *gSlogFileWriter) rotate() error {
 		return err
 	}
 
-	// 原子替换，新的 goroutine 立即可见新 pair
 	old := w.current.Swap(pair)
 	w.currentDate.Store(dateStr)
 	w.nextRotateAt.Store(nextAt)
 
-	// 异步关闭旧资源，不阻塞写入路径
 	go closeWriterPair(old)
 
 	return nil
@@ -444,14 +397,12 @@ func (w *gSlogFileWriter) resolvedRotateConfig() (maxSize, maxBackups, maxAge in
 }
 
 func (w *gSlogFileWriter) Write(p []byte) (int, error) {
-	// 快速路径：atomic 读，无锁判断是否需要 rotate
 	if w.needsRotate(time.Now()) {
 		if err := w.rotate(); err != nil {
 			return 0, err
 		}
 	}
 
-	// 无锁读取当前 pair，lumberjack 内部自带锁保证并发安全
 	pair := w.current.Load()
 
 	n, err := pair.full.Write(p)
@@ -459,13 +410,11 @@ func (w *gSlogFileWriter) Write(p []byte) (int, error) {
 		return n, err
 	}
 
-	// wf 内置 levelWriter 过滤，直接写；忽略 wf 写入错误，不影响 full 路径
 	_, _ = pair.wf.Write(p)
 
 	return n, nil
 }
 
-// Close 刷盘并释放当前所有文件资源。应在服务退出时调用。
 func (w *gSlogFileWriter) Close() error {
 	pair := w.current.Load()
 	if pair == nil {
