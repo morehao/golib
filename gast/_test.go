@@ -48,6 +48,7 @@ func platformRouter(privateRouter *gin.RouterGroup) {
 	routerGroup.POST("test3") // 3
 	routerGroup.POST("test3") // 3
 	routerGroup.POST("test3") // 3
+	routerGroup.POST("test3") // 3
 	routerGroup.POST("test")
 }
 func NewFunction() {

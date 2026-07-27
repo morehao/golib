@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
+	_ "github.com/morehao/golib/glog/slog"
 	"github.com/stretchr/testify/assert"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"resty.dev/v3"
 )
 
 func TestNewClient(t *testing.T) {
+	glog.InitLogger(glog.GetDefaultLogConfig())
 	client := NewClient()
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.Client)

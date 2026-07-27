@@ -1,6 +1,8 @@
 package dbes
 
-import "github.com/morehao/golib/glog"
+import (
+	"github.com/morehao/golib/glog"
+)
 
 type ESConfig struct {
 	Service      string `yaml:"service"`  // 服务名称

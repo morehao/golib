@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
+	_ "github.com/morehao/golib/glog/slog"
 	"github.com/stretchr/testify/assert"
 )
 

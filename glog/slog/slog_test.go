@@ -1,4 +1,4 @@
-package glog
+package slog_test
 
 import (
 	"context"
@@ -10,19 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/glog"
+	_ "github.com/morehao/golib/glog/slog"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
-
-func testSlogLoggerConfig() *LogConfig {
-	return &LogConfig{
-		Service: "slog-test",
-		Module:  "test-module",
-		Level:   InfoLevel,
-		Writer:  WriterConsole,
-		Dir:     "log/slog-test",
-	}
-}
 
 func TestSlogLoggerInit(t *testing.T) {
 	tempDir := "log/slog-test-init"
@@ -32,36 +24,38 @@ func TestSlogLoggerInit(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	t.Run("TestSlogBasicInit", func(t *testing.T) {
-		config := &LogConfig{
-			Service: "slog-service",
-			Module:  "slog-module",
-			Level:   InfoLevel,
-			Writer:  WriterFile,
-			Dir:     tempDir,
+		config := &glog.LogConfig{
+			Service:    "slog-service",
+			Module:     "slog-module",
+			Level:      glog.InfoLevel,
+			Writer:     glog.WriterFile,
+			Dir:        tempDir,
+			LoggerType: glog.LoggerTypeSlog,
 		}
 
-		err := InitLogger(config, WithLoggerType(LoggerTypeSlog))
+		err := glog.InitLogger(config)
 		assert.Nil(t, err)
 
-		Info(context.Background(), "slog test message")
+		glog.Info(context.Background(), "slog test message")
 
 		expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
 		expectedFile := filepath.Join(expectedDir, "slog-service_full.log")
-		if !fileExists(expectedFile) {
+		if !glog.FileExists(expectedFile) {
 			t.Errorf("Log file not created: %s", expectedFile)
 		}
 	})
 
 	t.Run("TestSlogConsoleLogger", func(t *testing.T) {
-		config := &LogConfig{
-			Service: "slog-service",
-			Module:  "slog-module",
-			Level:   InfoLevel,
-			Writer:  WriterConsole,
-			Dir:     tempDir,
+		config := &glog.LogConfig{
+			Service:    "slog-service",
+			Module:     "slog-module",
+			Level:      glog.InfoLevel,
+			Writer:     glog.WriterConsole,
+			Dir:        tempDir,
+			LoggerType: glog.LoggerTypeSlog,
 		}
 
-		logger, getLoggerErr := newSlogLogger(config)
+		logger, getLoggerErr := glog.NewLogger(config)
 		assert.Nil(t, getLoggerErr)
 		if logger == nil {
 			t.Error("Slog console logger not initialized")
@@ -74,8 +68,15 @@ func TestSlogLoggerInit(t *testing.T) {
 }
 
 func TestSlogLoggerLevels(t *testing.T) {
-	config := testSlogLoggerConfig()
-	logger, err := newSlogLogger(config)
+	config := &glog.LogConfig{
+		Service:    "slog-test",
+		Module:     "test-module",
+		Level:      glog.InfoLevel,
+		Writer:     glog.WriterConsole,
+		Dir:        "log/slog-test",
+		LoggerType: glog.LoggerTypeSlog,
+	}
+	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
@@ -93,8 +94,15 @@ func TestSlogLoggerLevels(t *testing.T) {
 }
 
 func TestSlogLoggerWithFields(t *testing.T) {
-	config := testSlogLoggerConfig()
-	logger, err := newSlogLogger(config)
+	config := &glog.LogConfig{
+		Service:    "slog-test",
+		Module:     "test-module",
+		Level:      glog.InfoLevel,
+		Writer:     glog.WriterConsole,
+		Dir:        "log/slog-test",
+		LoggerType: glog.LoggerTypeSlog,
+	}
+	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
@@ -103,8 +111,15 @@ func TestSlogLoggerWithFields(t *testing.T) {
 }
 
 func TestSlogLoggerFormat(t *testing.T) {
-	config := testSlogLoggerConfig()
-	logger, err := newSlogLogger(config)
+	config := &glog.LogConfig{
+		Service:    "slog-test",
+		Module:     "test-module",
+		Level:      glog.InfoLevel,
+		Writer:     glog.WriterConsole,
+		Dir:        "log/slog-test",
+		LoggerType: glog.LoggerTypeSlog,
+	}
+	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
@@ -121,14 +136,15 @@ func TestSlogLoggerHook(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	config := &LogConfig{
-		Service: "slog-hook",
-		Level:   DebugLevel,
-		Writer:  WriterConsole,
-		Dir:     tempDir,
+	config := &glog.LogConfig{
+		Service:    "slog-hook",
+		Level:      glog.DebugLevel,
+		Writer:     glog.WriterConsole,
+		Dir:        tempDir,
+		LoggerType: glog.LoggerTypeSlog,
 	}
 
-	var phoneDesensitizationHook = func(fields []Field) {
+	var phoneDesensitizationHook = func(fields []glog.Field) {
 		phoneRegex := regexp.MustCompile(`(\d{3})\d{4}(\d{4})`)
 		for i := range fields {
 			if fields[i].Key == "phone" {
@@ -151,7 +167,7 @@ func TestSlogLoggerHook(t *testing.T) {
 		return message
 	}
 
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog), WithFieldHookFunc(phoneDesensitizationHook), WithMessageHookFunc(pwdDesensitizationHook))
+	logger, err := glog.NewLogger(config, glog.WithFieldHookFunc(phoneDesensitizationHook), glog.WithMessageHookFunc(pwdDesensitizationHook))
 	assert.Nil(t, err)
 
 	ctx := context.Background()
@@ -166,22 +182,23 @@ func TestSlogLoggerExtraKeys(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	config := &LogConfig{
-		Service:   "slog-extrakeys",
-		Module:    "test",
-		Level:     DebugLevel,
-		Writer:    WriterConsole,
-		Dir:       tempDir,
-		ExtraKeys: []string{KeyTraceID, "user_id", KeyAppRequestID},
+	config := &glog.LogConfig{
+		Service:    "slog-extrakeys",
+		Module:     "test",
+		Level:      glog.DebugLevel,
+		Writer:     glog.WriterConsole,
+		Dir:        tempDir,
+		ExtraKeys:  []string{glog.KeyTraceID, "user_id", glog.KeyAppRequestID},
+		LoggerType: glog.LoggerTypeSlog,
 	}
 
-	logger, err := newSlogLogger(config)
+	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, KeyTraceID, "123456")
+	ctx = context.WithValue(ctx, glog.KeyTraceID, "123456")
 	ctx = context.WithValue(ctx, "user_id", "user123")
-	ctx = context.WithValue(ctx, KeyAppRequestID, "req789")
+	ctx = context.WithValue(ctx, glog.KeyAppRequestID, "req789")
 	ctx = context.WithValue(ctx, "other_field", "should_not_appear")
 
 	logger.Infow(ctx, "test message with extra fields", "key", "value")
@@ -193,16 +210,17 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 	tempDir := "log/slog-otel-test"
 	defer os.RemoveAll(tempDir)
 
-	config := &LogConfig{
+	config := &glog.LogConfig{
 		Service:         "slog-otel",
 		Module:          "test",
-		Level:           InfoLevel,
-		Writer:          WriterFile,
+		Level:           glog.InfoLevel,
+		Writer:          glog.WriterFile,
 		Dir:             tempDir,
 		EnableOTELTrace: true,
+		LoggerType:      glog.LoggerTypeSlog,
 	}
 
-	logger, err := newSlogLogger(config)
+	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
 	tp := trace.NewTracerProvider()
@@ -220,25 +238,26 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.Contains(t, content, KeyTraceID)
-	assert.Contains(t, content, KeySpanID)
-	assert.Contains(t, content, KeyTraceFlags)
+	assert.Contains(t, content, glog.KeyTraceID)
+	assert.Contains(t, content, glog.KeySpanID)
+	assert.Contains(t, content, glog.KeyTraceFlags)
 }
 
 func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 	tempDir := "log/slog-otel-disabled-test"
 	defer os.RemoveAll(tempDir)
 
-	config := &LogConfig{
+	config := &glog.LogConfig{
 		Service:         "slog-otel-disabled",
 		Module:          "test",
-		Level:           InfoLevel,
-		Writer:          WriterFile,
+		Level:           glog.InfoLevel,
+		Writer:          glog.WriterFile,
 		Dir:             tempDir,
 		EnableOTELTrace: false,
+		LoggerType:      glog.LoggerTypeSlog,
 	}
 
-	logger, err := newSlogLogger(config)
+	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
 	tp := trace.NewTracerProvider()
@@ -256,25 +275,26 @@ func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
 }
 
 func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
 	tempDir := "log/slog-otel-option-test"
 	defer os.RemoveAll(tempDir)
 
-	config := &LogConfig{
+	config := &glog.LogConfig{
 		Service:         "slog-otel-option",
 		Module:          "test",
-		Level:           InfoLevel,
-		Writer:          WriterFile,
+		Level:           glog.InfoLevel,
+		Writer:          glog.WriterFile,
 		Dir:             tempDir,
 		EnableOTELTrace: true,
+		LoggerType:      glog.LoggerTypeSlog,
 	}
 
-	logger, err := newSlogLogger(config, WithLoggerType(LoggerTypeSlog), WithOTELTrace(false))
+	logger, err := glog.NewLogger(config, glog.WithOTELTrace(false))
 	assert.Nil(t, err)
 
 	tp := trace.NewTracerProvider()
@@ -292,25 +312,26 @@ func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
 }
 
 func TestSlogLoggerOTELTraceWithoutSpanContext(t *testing.T) {
 	tempDir := "log/slog-otel-nospan-test"
 	defer os.RemoveAll(tempDir)
 
-	config := &LogConfig{
+	config := &glog.LogConfig{
 		Service:         "slog-otel-nospan",
 		Module:          "test",
-		Level:           InfoLevel,
-		Writer:          WriterFile,
+		Level:           glog.InfoLevel,
+		Writer:          glog.WriterFile,
 		Dir:             tempDir,
 		EnableOTELTrace: true,
+		LoggerType:      glog.LoggerTypeSlog,
 	}
 
-	logger, err := newSlogLogger(config)
+	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
 	logger.Infow(context.Background(), "without span context", "key", "value")
@@ -321,34 +342,35 @@ func TestSlogLoggerOTELTraceWithoutSpanContext(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
 }
 
 func TestSlogLoggerRotation(t *testing.T) {
 	tempDir := "log/slog-rotation-test"
 	defer os.RemoveAll(tempDir)
 
-	config := &LogConfig{
+	config := &glog.LogConfig{
 		Service:    "slog-rotation-test",
-		Level:      InfoLevel,
-		Writer:     WriterFile,
+		Level:      glog.InfoLevel,
+		Writer:     glog.WriterFile,
 		Dir:        tempDir,
 		MaxSize:    1,
 		MaxBackups: 5,
 		MaxAge:     7,
 		Compress:   false,
+		LoggerType: glog.LoggerTypeSlog,
 	}
 
-	err := InitLogger(config, WithLoggerType(LoggerTypeSlog))
+	err := glog.InitLogger(config)
 	assert.Nil(t, err)
 
 	ctx := context.Background()
 
 	largeMessage := strings.Repeat("x", 200*1024)
 	for i := 0; i < 10; i++ {
-		Info(ctx, fmt.Sprintf("large message %d: %s", i, largeMessage))
+		glog.Info(ctx, fmt.Sprintf("large message %d: %s", i, largeMessage))
 	}
 
 	time.Sleep(2 * time.Second)
@@ -356,7 +378,7 @@ func TestSlogLoggerRotation(t *testing.T) {
 	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
 	baseFile := filepath.Join(expectedDir, "slog-rotation-test_full.log")
 
-	assert.True(t, fileExists(baseFile), "Current log file should exist")
+	assert.True(t, glog.FileExists(baseFile), "Current log file should exist")
 
 	files, err := os.ReadDir(expectedDir)
 	assert.Nil(t, err)
@@ -371,5 +393,5 @@ func TestSlogLoggerRotation(t *testing.T) {
 
 	assert.True(t, rotated, "Log rotation should occur when file size exceeds MaxSize")
 
-	Close()
+	glog.Close()
 }

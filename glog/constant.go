@@ -1,15 +1,13 @@
 package glog
 
-import (
-	"go.uber.org/zap/zapcore"
-)
-
 type LoggerType uint8
 
 const (
 	LoggerTypeZap LoggerType = iota + 1
 	LoggerTypeSlog
 )
+
+type LoggerFactory func(cfg *LogConfig, opts ...Option) (Logger, error)
 
 const (
 	KeyLogger         = "logger"
@@ -87,15 +85,6 @@ const (
 	FatalLevel Level = "fatal"
 )
 
-var logLevelMap = map[Level]zapcore.Level{
-	DebugLevel: zapcore.DebugLevel,
-	InfoLevel:  zapcore.InfoLevel,
-	WarnLevel:  zapcore.WarnLevel,
-	ErrorLevel: zapcore.ErrorLevel,
-	PanicLevel: zapcore.PanicLevel,
-	FatalLevel: zapcore.FatalLevel,
-}
-
 type WriterType string
 
 const (
@@ -104,8 +93,8 @@ const (
 )
 
 const (
-	defaultServiceName   = "app"
-	defaultModuleName    = "default"
-	defaultLogDir        = "./logs"
-	defaultLogCallerSkip = 6
+	DefaultServiceName   = "app"
+	DefaultModuleName    = "default"
+	DefaultLogDir        = "./logs"
+	DefaultLogCallerSkip = 6
 )

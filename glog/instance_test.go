@@ -1,58 +1,10 @@
 package glog
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
-
-func TestDefaultLogger(t *testing.T) {
-	ctx := context.Background()
-	Debug(ctx, "message", "debug")
-	Info(ctx, "message", "info")
-	Warn(ctx, "message", "warn")
-	Error(ctx, "message", "error")
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic after Panic")
-		}
-	}()
-	Panic(ctx, "message", "fatal")
-}
-
-func TestLogLevels(t *testing.T) {
-	ctx := context.Background()
-	Debug(ctx, "message", "debug message")
-	Info(ctx, "message", "info message")
-	Warn(ctx, "message", "warn message")
-	Error(ctx, "message", "error message")
-}
-
-func TestSync(t *testing.T) {
-	Close()
-
-	logger, err := getDefaultLogger()
-	assert.Nil(t, err)
-	if logger == nil {
-		t.Error("Default logger should still work after Close")
-	}
-	InitLogger(GetDefaultLogConfig())
-}
-
-func TestLogWithFields(t *testing.T) {
-	ctx := context.Background()
-	Infow(ctx, "info with fields", "key1", "value1", "key2", "value2")
-	Errorw(ctx, "error with fields", "error", "something went wrong", "code", 500)
-}
-
-func TestLogFormat(t *testing.T) {
-	ctx := context.Background()
-	Debugf(ctx, "debug format: %s", "value")
-	Infof(ctx, "info format: %s", "value")
-	Warnf(ctx, "warn format: %s", "value")
-	Errorf(ctx, "error format: %s", "value")
-}
 
 func TestAppendExtraKeys(t *testing.T) {
 	cfg := &LogConfig{ExtraKeys: []string{"a", "b"}}
@@ -66,4 +18,12 @@ func TestAppendExtraKeys(t *testing.T) {
 	cfg = &LogConfig{ExtraKeys: []string{KeyAppRequestID}}
 	AppendExtraKeys(cfg, KeyAppRequestID)
 	assert.Equal(t, []string{KeyAppRequestID}, cfg.ExtraKeys)
+}
+
+func TestRegisterLoggerType(t *testing.T) {
+	RegisterLoggerType(LoggerTypeSlog+100, func(cfg *LogConfig, opts ...Option) (Logger, error) {
+		return nil, nil
+	})
+	_, ok := registeredFactories[LoggerTypeSlog+100]
+	assert.True(t, ok)
 }
