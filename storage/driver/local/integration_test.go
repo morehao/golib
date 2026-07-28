@@ -18,7 +18,7 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New local driver: %v", err)
 	}
-	bucket := "testbucket"
+	bucket := testutil.GetEnv(testutil.StorageLocalBucket, "testbucket")
 	dataDir := dir + "/data/" + bucket
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		t.Fatalf("create bucket dir: %v", err)

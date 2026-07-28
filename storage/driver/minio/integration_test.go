@@ -35,5 +35,5 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New minio driver: %v", err)
 	}
-	testutil.RunStorageSuite(t, s, "testbucket")
+	testutil.RunStorageSuite(t, s, testutil.GetEnv(testutil.StorageMinioBucket, "testbucket"))
 }

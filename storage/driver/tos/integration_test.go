@@ -24,5 +24,5 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New tos driver: %v", err)
 	}
-	testutil.RunStorageSuite(t, s, "testbucket")
+	testutil.RunStorageSuite(t, s, testutil.GetEnv(testutil.StorageTOSBucket, "testbucket"))
 }
