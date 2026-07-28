@@ -14,7 +14,7 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/morehao/golib/storage"
-	"github.com/morehao/golib/storage/driver/s3driver"
+	"github.com/morehao/golib/storage/driver/s3base"
 )
 
 func init() {
@@ -23,7 +23,7 @@ func init() {
 }
 
 type driver struct {
-	*s3driver.Driver
+	*s3base.Driver
 }
 
 var _ storage.Storage = (*driver)(nil)
@@ -40,20 +40,20 @@ func NewPathBuilder(cfg storage.Config) storage.PathBuilder {
 func New(cfg storage.Config) (storage.Storage, error) {
 	pb := NewPathBuilder(cfg)
 
-	inner, err := s3driver.New(cfg, pb,
-		s3driver.WithS3Options(func(o *s3.Options) {
+	inner, err := s3base.New(cfg, pb,
+		s3base.WithS3Options(func(o *s3.Options) {
 			o.APIOptions = append(o.APIOptions, func(s *middleware.Stack) error {
 				return s.Finalize.Add(cosContentMD5Middleware{}, middleware.Before)
 			})
 		}),
-		s3driver.WithIfNotExistsS3Opt(func(o *s3.Options) {
+		s3base.WithIfNotExistsS3Opt(func(o *s3.Options) {
 			o.APIOptions = append(o.APIOptions, smithyhttp.SetHeaderValue("x-cos-forbid-overwrite", "true"))
 		}),
 	)
 	if err != nil {
 		return nil, err
 	}
-	return &driver{Driver: inner.(*s3driver.Driver)}, nil
+	return &driver{Driver: inner.(*s3base.Driver)}, nil
 }
 
 func usePathStyle(endpoint string) bool {

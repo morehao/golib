@@ -3,7 +3,7 @@ package minio
 
 import (
 	"github.com/morehao/golib/storage"
-	"github.com/morehao/golib/storage/driver/s3driver"
+	"github.com/morehao/golib/storage/driver/s3base"
 )
 
 func init() {
@@ -11,7 +11,7 @@ func init() {
 	storage.RegisterPathBuilder(string(storage.DriverMinio), NewPathBuilder)
 }
 
-var _ storage.Storage = (*s3driver.Driver)(nil)
+var _ storage.Storage = (*s3base.Driver)(nil)
 
 func NewPathBuilder(cfg storage.Config) storage.PathBuilder {
 	return &storage.S3PathBuilder{
@@ -23,5 +23,5 @@ func NewPathBuilder(cfg storage.Config) storage.PathBuilder {
 }
 
 func New(cfg storage.Config) (storage.Storage, error) {
-	return s3driver.New(cfg, NewPathBuilder(cfg))
+	return s3base.New(cfg, NewPathBuilder(cfg))
 }

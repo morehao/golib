@@ -1,4 +1,4 @@
-package s3driver
+package s3base
 
 import (
 	"errors"

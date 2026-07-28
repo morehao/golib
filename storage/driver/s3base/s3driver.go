@@ -1,6 +1,6 @@
-// Package s3driver 基于 aws-sdk-go-v2/service/s3 的统一 S3 driver 实现，
-// 供 minio / seaweedfs / cos 等 S3 兼容后端共用。
-package s3driver
+// Package s3base 基于 aws-sdk-go-v2/service/s3 的统一 S3 driver 实现，
+// 供 minio / oss / tos / cos 等 S3 兼容后端共用。
+package s3base
 
 import (
 	"context"
