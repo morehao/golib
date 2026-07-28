@@ -123,9 +123,9 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		gincontext.Success(c, createMultipartResponse{
-			FileID:      rec.ID,
-			UploadID:    rec.UploadID,
-			Fingerprint: rec.Fingerprint,
+			FileID:     rec.ID,
+			UploadID:   rec.UploadID,
+			FileHashID: rec.FileHashID,
 		})
 	}
 }

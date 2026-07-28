@@ -17,13 +17,11 @@ type uploadPart struct {
 }
 
 type fileRecordResponse struct {
-	FileID      uint   `json:"file_id"`      // 文件ID
-	Fingerprint string `json:"fingerprint"`  // 文件指纹(SHA256)
-	Name        string `json:"name"`         // 文件名
-	Size        int64  `json:"size"`         // 文件大小(字节)
-	MimeType    string `json:"mime_type"`    // MIME类型
-	StoragePath string `json:"storage_path"` // 存储路径
-	Status      string `json:"status"`       // 状态: uploading/completed/aborted
+	FileID     uint   `json:"file_id"`
+	FileHashID uint   `json:"file_hash_id"`
+	Name       string `json:"name"`
+	MimeType   string `json:"mime_type"`
+	Status     string `json:"status"`
 }
 
 // --- upload ---
@@ -46,9 +44,9 @@ type createMultipartRequest struct {
 }
 
 type createMultipartResponse struct {
-	FileID      uint   `json:"file_id"`      // 文件ID
-	UploadID    string `json:"upload_id"`    // 分片上传ID(S3 UploadID)
-	Fingerprint string `json:"fingerprint"`  // 文件指纹
+	FileID     uint   `json:"file_id"`
+	UploadID   string `json:"upload_id"`
+	FileHashID uint   `json:"file_hash_id"`
 }
 
 type presignPartRequest struct {
@@ -64,16 +62,17 @@ type completeMultipartRequest struct {
 // --- file ---
 
 type fileDetailResponse struct {
-	FileID      uint   `json:"file_id"`               // 文件ID
-	Fingerprint string `json:"fingerprint"`            // 文件指纹(SHA256)
-	Name        string `json:"name"`                   // 文件名
-	Size        int64  `json:"size"`                   // 文件大小(字节)
-	MimeType    string `json:"mime_type"`               // MIME类型
-	StoragePath string `json:"storage_path"`            // 存储路径
-	UploadID    string `json:"upload_id,omitempty"`     // 分片上传ID
-	Status      string `json:"status"`                  // 状态: uploading/completed/aborted
-	CreatedAt   string `json:"created_at"`              // 创建时间
-	UpdatedAt   string `json:"updated_at"`              // 更新时间
+	FileID      uint   `json:"file_id"`
+	FileHashID  uint   `json:"file_hash_id"`
+	Fingerprint string `json:"fingerprint"`
+	Name        string `json:"name"`
+	Size        int64  `json:"size"`
+	MimeType    string `json:"mime_type"`
+	StorageURI  string `json:"storage_uri"`
+	UploadID    string `json:"upload_id,omitempty"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 type presignDownloadRequest struct {
