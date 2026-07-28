@@ -39,6 +39,12 @@ go test ./...
 
 The `.env` file is gitignored and will not be committed. If no `.env` file or environment variables are set, tests fall back to default values (`127.0.0.1` with password `123456`), so CI pipelines work without any extra setup.
 
+Environment variables are loaded automatically in two ways:
+1. **`go test ./...` from project root**: `env_test.go`'s `TestMain` loads `.env`
+2. **Sub-package runs (VS Code, `go test ./codegen/...`, etc.)**: `internal/testenv` package's `init()` searches upward from the working directory to find `.env`
+
+This means VS Code users can run individual tests without any extra configuration.
+
 Test-specific environment variables:
 
 | Variable | Description | Default |
