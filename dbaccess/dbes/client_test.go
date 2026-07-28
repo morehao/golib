@@ -2,6 +2,7 @@ package dbes
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -10,6 +11,14 @@ import (
 	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/stretchr/testify/assert"
 )
+
+func esEnvAddr() string {
+	addr := os.Getenv("ELASTICSEARCH_ADDR")
+	if addr == "" {
+		addr = "http://localhost:9200"
+	}
+	return addr
+}
 
 func TestNewTypedES(t *testing.T) {
 	t.Skip("requires real ES server")
@@ -28,7 +37,7 @@ func TestNewTypedES(t *testing.T) {
 	assert.Nil(t, initLogErr)
 	cfg := &ESConfig{
 		Service: "es",
-		Addr:    "http://localhost:9200",
+		Addr:    esEnvAddr(),
 	}
 	_, typedClient, initErr := New(cfg)
 	assert.Nil(t, initErr)
@@ -62,7 +71,7 @@ func TestNewSimpleES(t *testing.T) {
 	assert.Nil(t, initLogErr)
 	cfg := &ESConfig{
 		Service: "es",
-		Addr:    "http://localhost:9200",
+		Addr:    esEnvAddr(),
 	}
 	simpleClient, _, initErr := New(cfg)
 	assert.Nil(t, initErr)
