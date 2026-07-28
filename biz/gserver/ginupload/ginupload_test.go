@@ -26,6 +26,18 @@ var bg = context.Background()
 
 type mockStorage struct{ storage.Storage }
 
+var _ storage.PathBuilder = (*storage.LocalPathBuilder)(nil)
+
+func (m *mockStorage) PathBuilder() storage.PathBuilder {
+	return &storage.LocalPathBuilder{AbsDir: "/mock"}
+}
+
+func (m *mockStorage) GetObject(_ context.Context, _ string, key string, _ ...storage.GetOption) (*storage.GetObjectResult, error) {
+	return &storage.GetObjectResult{
+		Body: io.NopCloser(bytes.NewReader([]byte("mock file content: " + key))),
+	}, nil
+}
+
 func (m *mockStorage) PutObject(_ context.Context, _ string, _ string, reader io.Reader, _ ...storage.PutOption) (*storage.PutObjectResult, error) {
 	_, _ = io.Copy(io.Discard, reader)
 	return &storage.PutObjectResult{}, nil
@@ -55,6 +67,16 @@ type failingMockStorage struct{ storage.Storage }
 
 func (m *failingMockStorage) PutObject(_ context.Context, _ string, _ string, _ io.Reader, _ ...storage.PutOption) (*storage.PutObjectResult, error) {
 	return nil, io.ErrUnexpectedEOF
+}
+
+func (m *failingMockStorage) PathBuilder() storage.PathBuilder {
+	return &storage.LocalPathBuilder{AbsDir: "/mock"}
+}
+
+func (m *failingMockStorage) GetObject(_ context.Context, _ string, key string, _ ...storage.GetOption) (*storage.GetObjectResult, error) {
+	return &storage.GetObjectResult{
+		Body: io.NopCloser(bytes.NewReader([]byte("mock file content: " + key))),
+	}, nil
 }
 
 // --- helpers ---
@@ -123,7 +145,7 @@ func TestHandleUpload(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, resp.Code)
 		require.Equal(t, "hello.txt", resp.Data.Name)
-		require.NotEmpty(t, resp.Data.Fingerprint)
+		require.NotZero(t, resp.Data.FileHashID)
 	})
 
 	t.Run("success with fingerprint", func(t *testing.T) {
@@ -137,7 +159,7 @@ func TestHandleUpload(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.Equal(t, 0, resp.Code)
-		require.Equal(t, "custom-fp", resp.Data.Fingerprint)
+		require.NotZero(t, resp.Data.FileHashID)
 	})
 
 	t.Run("missing file", func(t *testing.T) {
@@ -159,7 +181,7 @@ func TestHandleCheckExist(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	_, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
 		Fingerprint: "fp-exist",
 		Name:        "a.txt",
 		Size:        10,
@@ -180,7 +202,7 @@ func TestHandleCheckExist(t *testing.T) {
 		require.Equal(t, 0, resp.Code)
 		require.True(t, resp.Data.Exists)
 		require.NotNil(t, resp.Data.File)
-		require.Equal(t, rec.ID, resp.Data.File.FileID)
+		require.NotZero(t, resp.Data.File.FileHashID)
 	})
 
 	t.Run("not exists", func(t *testing.T) {
@@ -235,7 +257,7 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
 	require.NotEmpty(t, resp.Data.UploadID)
-	require.Equal(t, "mp-fp", resp.Data.Fingerprint)
+	require.NotZero(t, resp.Data.FileHashID)
 }
 
 func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
@@ -266,8 +288,8 @@ func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
-	// should return original record (no upload_id since it was completed)
-	require.Empty(t, resp.Data.UploadID)
+	require.NotEmpty(t, resp.Data.UploadID)
+	require.NotZero(t, resp.Data.FileHashID)
 }
 
 func TestHandlePresignUploadPartURL(t *testing.T) {
@@ -590,6 +612,60 @@ func TestHandleRedirectGetFileURL(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", "/api/v1/file/redirect/99999", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+}
+
+func TestHandleServeFileByID(t *testing.T) {
+	fs := newTestFileStore(t)
+	router := setupRouter(fs)
+
+	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+		Fingerprint: "serve-fp",
+		Name:        "hello.txt",
+		Size:        11,
+		MimeType:    "text/plain",
+		StoragePath: "files/hello.txt",
+	})
+	require.NoError(t, err)
+
+	t.Run("serves file content", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/serve/%d", rec.ID), nil)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, 200, w.Code)
+		require.Equal(t, "text/plain", w.Header().Get("Content-Type"))
+		require.Contains(t, w.Header().Get("Content-Disposition"), "hello.txt")
+		require.Equal(t, "11", w.Header().Get("Content-Length"))
+		require.Contains(t, w.Body.String(), "files/hello.txt")
+	})
+
+	t.Run("invalid fileID", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve/abc", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve/99999", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {

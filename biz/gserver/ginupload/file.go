@@ -2,6 +2,7 @@ package ginupload
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -110,6 +111,43 @@ func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		c.Redirect(http.StatusFound, url)
+	}
+}
+
+// @Tags 文件
+// @Summary 通过文件ID直接获取文件内容（仅 local storage 有效）
+// @Produce application/octet-stream
+// @Param fileID path uint true "文件ID"
+// @Success 200 {file} file "文件内容"
+// @Router /file/serve/{fileID} [get]
+func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		fileIDStr := c.Param("fileID")
+		fileID, err := strconv.ParseUint(fileIDStr, 10, 64)
+		if err != nil || fileID == 0 {
+			gincontext.Fail(c, fmt.Errorf("invalid fileID: %w", err))
+			return
+		}
+
+		rc, rec, err := fs.Open(c.Request.Context(), uint(fileID))
+		if err != nil {
+			gincontext.Fail(c, err)
+			return
+		}
+		defer rc.Close()
+
+		if rec.MimeType != "" {
+			c.Header("Content-Type", rec.MimeType)
+		}
+		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", rec.Name))
+		if rec.Size > 0 {
+			c.Header("Content-Length", strconv.FormatInt(rec.Size, 10))
+		}
+		c.Status(http.StatusOK)
+
+		if _, err := io.Copy(c.Writer, rc); err != nil {
+			_ = c.Error(err)
+		}
 	}
 }
 
