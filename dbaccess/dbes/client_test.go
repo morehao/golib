@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
-	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/internal/testkit"
 	"github.com/stretchr/testify/assert"

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/internal/testkit"
 	"github.com/stretchr/testify/assert"

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/joho/godotenv"
 )
 
