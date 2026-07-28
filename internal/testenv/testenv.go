@@ -7,7 +7,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-func init() {
+func Load() {
 	dir, _ := os.Getwd()
 	for {
 		envPath := filepath.Join(dir, ".env")

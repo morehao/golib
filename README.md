@@ -34,16 +34,27 @@ Some tests require real database connections (MySQL, PostgreSQL, Redis, Elastics
 ```bash
 cp .env.example .env
 # edit .env with your local credentials
+
+# Run all tests (auto-loads .env via env_test.go)
 go test ./...
+
+# Run sub-package tests (inject env manually)
+source .env && go test ./codegen/...
 ```
 
-The `.env` file is gitignored and will not be committed. If no `.env` file or environment variables are set, tests fall back to default values (`127.0.0.1` with password `123456`), so CI pipelines work without any extra setup.
+The `.env` file is gitignored and will not be committed. If no environment variables are set, tests fall back to default values (`127.0.0.1` with password `123456`), so CI pipelines work without any extra setup.
 
-Environment variables are loaded automatically in two ways:
-1. **`go test ./...` from project root**: `env_test.go`'s `TestMain` loads `.env`
-2. **Sub-package runs (VS Code, `go test ./codegen/...`, etc.)**: `internal/testenv` package's `init()` searches upward from the working directory to find `.env`
+For VS Code, configure `.vscode/settings.json` to inject environment variables:
 
-This means VS Code users can run individual tests without any extra configuration.
+```json
+{
+  "go.testEnvVars": {
+    "MYSQL_DSN": "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True",
+    "REDIS_ADDR": "127.0.0.1:6379",
+    "REDIS_PASSWORD": "123456"
+  }
+}
+```
 
 Test-specific environment variables:
 

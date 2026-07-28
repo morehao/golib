@@ -5,7 +5,6 @@ import (
 	"os"
 	"testing"
 
-	_ "github.com/morehao/golib/internal/testenv"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"

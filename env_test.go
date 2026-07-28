@@ -4,10 +4,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/joho/godotenv"
+	"github.com/morehao/golib/internal/testenv"
 )
 
 func TestMain(m *testing.M) {
-	_ = godotenv.Load(".env")
+	testenv.Load()
 	os.Exit(m.Run())
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
 	_ "github.com/morehao/golib/glog/driver/slog"
-	_ "github.com/morehao/golib/internal/testenv"
 	"github.com/morehao/golib/glog"
 	"github.com/stretchr/testify/assert"
 )
