@@ -7,13 +7,13 @@ import (
 
 	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/internal/testenv"
+	"github.com/morehao/golib/internal/testkit"
 	"github.com/stretchr/testify/assert"
 )
 
 func redisEnvConfig() (addr, password string) {
-	addr = testenv.GetEnv(testenv.RedisAddr, "127.0.0.1:6379")
-	password = testenv.GetEnv(testenv.RedisPassword, "123456")
+	addr = testkit.GetEnv(testkit.RedisAddr, "127.0.0.1:6379")
+	password = testkit.GetEnv(testkit.RedisPassword, "123456")
 	return
 }
 

@@ -1,4 +1,3 @@
-// Package testkit 提供各 driver 一致性测试套件和内存 mock。
 package testkit
 
 import (

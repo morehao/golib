@@ -41,6 +41,7 @@ func (m *mockStorage) newPath(bucket, key string) storage.StoragePath {
 func (m *mockStorage) PathBuilder() storage.PathBuilder {
 	return m.pb
 }
+
 // ---------- Base ----------
 
 func (m *mockStorage) PutObject(ctx context.Context, bucket, key string, body io.Reader, opts ...storage.PutOption) (*storage.PutObjectResult, error) {

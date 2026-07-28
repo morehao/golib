@@ -4,10 +4,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/morehao/golib/internal/testenv"
+	"github.com/morehao/golib/internal/testkit"
 )
 
 func TestMain(m *testing.M) {
-	testenv.Load()
+	testkit.Load()
 	os.Exit(m.Run())
 }
