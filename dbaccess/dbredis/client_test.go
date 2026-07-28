@@ -2,6 +2,7 @@ package dbredis
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -9,6 +10,18 @@ import (
 	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/stretchr/testify/assert"
 )
+
+func redisEnvConfig() (addr, password string) {
+	addr = os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:6379"
+	}
+	password = os.Getenv("REDIS_PASSWORD")
+	if password == "" {
+		password = "123456"
+	}
+	return
+}
 
 func TestNew(t *testing.T) {
 	defer func() {
@@ -25,10 +38,11 @@ func TestNew(t *testing.T) {
 	initLogErr := glog.InitLogger(logCfg)
 	assert.Nil(t, initLogErr)
 
+	addr, password := redisEnvConfig()
 	cfg := &RedisConfig{
 		Service:  "test",
-		Addr:     "127.0.0.1:6379",
-		Password: "123456",
+		Addr:     addr,
+		Password: password,
 		DB:       0,
 	}
 	redisClient, err := New(cfg)
@@ -73,9 +87,10 @@ func TestNewWithoutInitLog(t *testing.T) {
 			t.Logf("failed to close logger: %v", err)
 		}
 	}()
+	addr, _ := redisEnvConfig()
 	cfg := &RedisConfig{
 		Service:  "test",
-		Addr:     "127.0.0.1:6379",
+		Addr:     addr,
 		Password: "",
 		DB:       0,
 	}
@@ -116,9 +131,10 @@ func TestNewWithoutInitLog(t *testing.T) {
 
 func TestSetNX(t *testing.T) {
 	t.Skip("requires real Redis server")
+	addr, _ := redisEnvConfig()
 	cfg := &RedisConfig{
 		Service:  "test",
-		Addr:     "127.0.0.1:6379",
+		Addr:     addr,
 		Password: "",
 		DB:       0,
 	}
