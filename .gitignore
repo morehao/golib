@@ -28,3 +28,4 @@ codegen/tmp/*
 .history
 .worktrees/
 superpowers
+.env
