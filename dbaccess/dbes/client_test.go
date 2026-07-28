@@ -7,9 +7,13 @@ import (
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
 	"github.com/morehao/golib/glog"
-	_ "github.com/morehao/golib/glog/driver/slog"
+	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
 )
+
+func esEnvAddr() string {
+	return testutil.GetEnv(testutil.ElasticsearchAddr, "http://localhost:9200")
+}
 
 func TestNewTypedES(t *testing.T) {
 	t.Skip("requires real ES server")
@@ -28,7 +32,7 @@ func TestNewTypedES(t *testing.T) {
 	assert.Nil(t, initLogErr)
 	cfg := &ESConfig{
 		Service: "es",
-		Addr:    "http://localhost:9200",
+		Addr:    esEnvAddr(),
 	}
 	_, typedClient, initErr := New(cfg)
 	assert.Nil(t, initErr)
@@ -62,7 +66,7 @@ func TestNewSimpleES(t *testing.T) {
 	assert.Nil(t, initLogErr)
 	cfg := &ESConfig{
 		Service: "es",
-		Addr:    "http://localhost:9200",
+		Addr:    esEnvAddr(),
 	}
 	simpleClient, _, initErr := New(cfg)
 	assert.Nil(t, initErr)

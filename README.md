@@ -27,6 +27,45 @@ Components:
 go get github.com/morehao/golib
 ```
 
+## Running Tests
+
+Some tests require real database connections (MySQL, PostgreSQL, Redis, Elasticsearch). To avoid hardcoding credentials in test code, copy `.env.example` to `.env` and configure your local connection settings:
+
+```bash
+cp .env.example .env
+# edit .env with your local credentials
+
+# Run all tests (auto-loads .env via env_test.go)
+go test ./...
+
+# Run sub-package tests (inject env manually)
+source .env && go test ./codegen/...
+```
+
+The `.env` file is gitignored and will not be committed. If no environment variables are set, tests fall back to default values (`127.0.0.1` with password `123456`), so CI pipelines work without any extra setup.
+
+For VS Code, configure `.vscode/settings.json` to inject environment variables:
+
+```json
+{
+  "go.testEnvVars": {
+    "MYSQL_DSN": "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True",
+    "REDIS_ADDR": "127.0.0.1:6379",
+    "REDIS_PASSWORD": "123456"
+  }
+}
+```
+
+Test-specific environment variables:
+
+| Variable | Description | Default |
+|---|---|---|
+| `MYSQL_DSN` | MySQL DSN for codegen tests | `root:123456@tcp(127.0.0.1:3306)/demo?...` |
+| `POSTGRES_DSN` | PostgreSQL DSN for codegen tests | `host=127.0.0.1 user=postgres password=123456...` |
+| `REDIS_ADDR` | Redis address | `127.0.0.1:6379` |
+| `REDIS_PASSWORD` | Redis password | `123456` |
+| `ELASTICSEARCH_ADDR` | Elasticsearch address | `http://localhost:9200` |
+
 # Components
 
 ## biz
