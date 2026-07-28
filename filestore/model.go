@@ -7,8 +7,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const tableName = "core_file"
-
 type FileStatus string
 
 const (
@@ -18,22 +16,31 @@ const (
 	FileStatusMerging   FileStatus = "merging"
 )
 
+type FileHash struct {
+	ID          uint   `gorm:"primarykey"`
+	Fingerprint string `gorm:"column:fingerprint;type:varchar(64);uniqueIndex:uk_fingerprint"`
+	Size        int64  `gorm:"column:size"`
+	StorageURI  string `gorm:"column:storage_uri;type:varchar(512)"`
+}
+
+func (FileHash) TableName() string { return "core_file_hash" }
+
 type FileRecord struct {
 	gorm.Model
-	Fingerprint string     `gorm:"column:fingerprint;type:varchar(64);uniqueIndex:uk_fingerprint;comment:文件指纹(SHA256)，用于秒传去重"`
-	Name        string     `gorm:"column:name;type:varchar(256);comment:原始文件名"`
-	Size        int64      `gorm:"column:size;comment:文件大小(字节)"`
-	MimeType    string     `gorm:"column:mime_type;type:varchar(128);comment:MIME 类型"`
-	StoragePath string     `gorm:"column:storage_path;type:varchar(512);comment:存储对象路径"`
-	UploadID    string     `gorm:"column:upload_id;type:varchar(128);index;comment:S3 multipart upload session ID"`
-	Status      FileStatus `gorm:"column:status;type:varchar(32);default:uploading;comment:状态：uploading/completed/aborted/merging"`
+	FileHashID uint       `gorm:"column:file_hash_id;index"`
+	Name       string     `gorm:"column:name;type:varchar(256)"`
+	MimeType   string     `gorm:"column:mime_type;type:varchar(128)"`
+	UploadID   string     `gorm:"column:upload_id;type:varchar(128);index"`
+	Status     FileStatus `gorm:"column:status;type:varchar(32);default:uploading"`
+
+	// 关联查询填充字段（不入库）
+	Fingerprint string `gorm:"-:all"`
+	Size        int64  `gorm:"-:all"`
+	StorageURI  string `gorm:"-:all"`
 }
 
-func (FileRecord) TableName() string {
-	return tableName
-}
+func (FileRecord) TableName() string { return "core_file_record" }
 
-// RecordUploadRequest is used by RecordUpload to persist a completed file record.
 type RecordUploadRequest struct {
 	Fingerprint string
 	Name        string
@@ -44,6 +51,7 @@ type RecordUploadRequest struct {
 
 type fileCond struct {
 	ID          uint
+	FileHashID  uint
 	Fingerprint string
 	UploadID    string
 	Status      FileStatus
@@ -55,6 +63,9 @@ type fileCond struct {
 func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 	if c.ID > 0 {
 		db.Where(fmt.Sprintf("%s.id = ?", tableName), c.ID)
+	}
+	if c.FileHashID > 0 {
+		db.Where(fmt.Sprintf("%s.file_hash_id = ?", tableName), c.FileHashID)
 	}
 	if c.Fingerprint != "" {
 		db.Where(fmt.Sprintf("%s.fingerprint = ?", tableName), c.Fingerprint)
@@ -74,7 +85,6 @@ func (c *fileCond) GetPageInfo() (page int, pageSize int) {
 	return c.Page, c.PageSize
 }
 
-// UploadAndRecordRequest is used by UploadAndRecord to upload bytes and persist a record.
 type UploadAndRecordRequest struct {
 	Fingerprint string
 	Name        string
