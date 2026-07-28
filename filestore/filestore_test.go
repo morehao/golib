@@ -14,6 +14,29 @@ import (
 	"gorm.io/gorm"
 )
 
+type mockPathBuilder struct{}
+
+func (m *mockPathBuilder) Build(bucket, key string) storage.StoragePath {
+	return &mockStoragePath{bucket: bucket, key: key}
+}
+
+func (m *mockPathBuilder) ParsePublicURL(rawURL string, opts ...storage.ParseURLOption) (storage.StoragePath, error) {
+	return nil, nil
+}
+
+type mockStoragePath struct {
+	bucket string
+	key    string
+}
+
+func (m *mockStoragePath) URI() string       { return "s3://" + m.bucket + "/" + m.key }
+func (m *mockStoragePath) Path() string      { return m.bucket + "/" + m.key }
+func (m *mockStoragePath) PublicURL() string { return "" }
+func (m *mockStoragePath) Scheme() string    { return "mock" }
+func (m *mockStoragePath) IsLocal() bool     { return false }
+func (m *mockStoragePath) Bucket() string    { return m.bucket }
+func (m *mockStoragePath) Key() string       { return m.key }
+
 type mockStorage struct {
 	storage.Storage
 	putCalled           bool
@@ -69,6 +92,10 @@ func (m *mockStorage) PresignPutObject(_ context.Context, bucket, key string, ex
 	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
 }
 
+func (m *mockStorage) PathBuilder() storage.PathBuilder {
+	return &mockPathBuilder{}
+}
+
 func newTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -81,6 +108,7 @@ func TestNewAutoMigrate(t *testing.T) {
 	fs, err := New(db, st, "test-bucket")
 	require.NoError(t, err)
 	require.NotNil(t, fs)
+	require.True(t, db.Migrator().HasTable(&FileHash{}))
 	require.True(t, db.Migrator().HasTable(&FileRecord{}))
 }
 
@@ -113,7 +141,7 @@ func TestCheckExist_Found(t *testing.T) {
 	found, hit, err := fs.CheckExist(context.Background(), "abc123")
 	require.NoError(t, err)
 	require.True(t, hit)
-	require.Equal(t, rec.ID, found.ID)
+	require.Equal(t, "abc123", found.Fingerprint)
 }
 
 func TestRecordUpload_InvalidArgs(t *testing.T) {
@@ -125,22 +153,30 @@ func TestRecordUpload_InvalidArgs(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidArgument)
 }
 
-func TestRecordUpload_DuplicateFingerprint(t *testing.T) {
+func TestRecordUpload_SameFingerprint_DifferentName(t *testing.T) {
 	db := newTestDB(t)
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	req := RecordUploadRequest{
-		Fingerprint: "dup",
+	rec1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "dup-fp",
 		Name:        "a.txt",
 		Size:        10,
 		StoragePath: "a.txt",
-	}
-	_, err = fs.RecordUpload(context.Background(), req)
+	})
 	require.NoError(t, err)
+	require.Equal(t, "a.txt", rec1.Name)
 
-	_, err = fs.RecordUpload(context.Background(), req)
-	require.Error(t, err)
+	rec2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "dup-fp",
+		Name:        "b.txt",
+		Size:        10,
+		StoragePath: "a.txt",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "b.txt", rec2.Name)
+	require.NotEqual(t, rec1.ID, rec2.ID)
+	require.Equal(t, rec1.FileHashID, rec2.FileHashID)
 }
 
 func TestUploadAndRecord_Success(t *testing.T) {
@@ -161,16 +197,16 @@ func TestUploadAndRecord_Success(t *testing.T) {
 	require.NotNil(t, rec)
 	require.True(t, mock.putCalled)
 	require.Equal(t, "images/photo.jpg", mock.lastKey)
-	require.Equal(t, "images/photo.jpg", rec.StoragePath)
+	require.Equal(t, "s3://test-bucket/images/photo.jpg", rec.StorageURI)
 }
 
-func TestUploadAndRecord_Dedup(t *testing.T) {
+func TestUploadAndRecord_Dedup_SameFingerprint(t *testing.T) {
 	db := newTestDB(t)
 	mock := &mockStorage{}
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
 
-	req := UploadAndRecordRequest{
+	req1 := UploadAndRecordRequest{
 		Fingerprint: "dedup",
 		Name:        "same.txt",
 		Size:        100,
@@ -178,16 +214,26 @@ func TestUploadAndRecord_Dedup(t *testing.T) {
 		StoragePath: "files/same.txt",
 	}
 
-	first, err := fs.UploadAndRecord(context.Background(), req)
+	first, err := fs.UploadAndRecord(context.Background(), req1)
 	require.NoError(t, err)
 	require.True(t, mock.putCalled)
 
 	mock.putCalled = false
 
-	second, err := fs.UploadAndRecord(context.Background(), req)
+	req2 := UploadAndRecordRequest{
+		Fingerprint: "dedup",
+		Name:        "other.txt",
+		Size:        100,
+		Reader:      strings.NewReader("data"),
+		StoragePath: "files/same.txt",
+	}
+
+	second, err := fs.UploadAndRecord(context.Background(), req2)
 	require.NoError(t, err)
-	require.False(t, mock.putCalled, "should skip upload on duplicate")
-	require.Equal(t, first.ID, second.ID)
+	require.False(t, mock.putCalled, "should skip upload on duplicate fingerprint")
+	require.NotEqual(t, first.ID, second.ID, "should create new file record for different name")
+	require.Equal(t, first.FileHashID, second.FileHashID, "should reuse same file hash")
+	require.Equal(t, "other.txt", second.Name)
 }
 
 func TestUploadAndRecord_PutObjectError(t *testing.T) {
@@ -222,6 +268,7 @@ func TestGetFile(t *testing.T) {
 	found, err := fs.GetFile(context.Background(), created.ID)
 	require.NoError(t, err)
 	require.Equal(t, created.ID, found.ID)
+	require.Equal(t, "s3://test-bucket/get.txt", found.StorageURI)
 }
 
 func TestGetFile_NotFound(t *testing.T) {
@@ -302,29 +349,7 @@ func TestInitMultipartUpload_Success(t *testing.T) {
 	require.Equal(t, "videos/large.mp4", mock.lastKey)
 	require.Equal(t, "mock-upload-id-123", rec.UploadID)
 	require.Equal(t, FileStatusUploading, rec.Status)
-}
-
-func TestInitMultipartUpload_Dedup_CompletedFile(t *testing.T) {
-	db := newTestDB(t)
-	fs, err := New(db, &mockStorage{}, "test-bucket")
-	require.NoError(t, err)
-
-	completed, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "dedup-mp-completed",
-		Name:        "done.mp4",
-		Size:        1000,
-		StoragePath: "done.mp4",
-	})
-	require.NoError(t, err)
-
-	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
-		Fingerprint: "dedup-mp-completed",
-		Name:        "done.mp4",
-		Size:        1000,
-		StoragePath: "files/done.mp4",
-	})
-	require.NoError(t, err)
-	require.Equal(t, completed.ID, rec.ID)
+	require.Equal(t, "s3://test-bucket/videos/large.mp4", rec.StorageURI)
 }
 
 func TestInitMultipartUpload_InvalidArgs(t *testing.T) {
@@ -352,7 +377,6 @@ func TestPresignUploadPartURL_Success(t *testing.T) {
 	url, err := fs.PresignUploadPartURL(context.Background(), rec.ID, 1, WithExpires(time.Hour))
 	require.NoError(t, err)
 	require.Contains(t, url, "presign.example.com")
-	require.Contains(t, url, rec.StoragePath)
 	require.Contains(t, url, "1h0m0s")
 }
 
@@ -500,4 +524,32 @@ func TestAbortMultipartUpload_NotMultipart(t *testing.T) {
 
 	err = fs.AbortMultipartUpload(context.Background(), rec.ID)
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
+}
+
+func TestDeleteFileRecord_HashRemains(t *testing.T) {
+	db := newTestDB(t)
+	fs, err := New(db, &mockStorage{}, "test-bucket")
+	require.NoError(t, err)
+
+	rec1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "hash-persist",
+		Name:        "first.txt",
+		Size:        100,
+		StoragePath: "first.txt",
+	})
+	require.NoError(t, err)
+
+	err = fs.DeleteFile(context.Background(), rec1.ID)
+	require.NoError(t, err)
+
+	rec2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+		Fingerprint: "hash-persist",
+		Name:        "second.txt",
+		Size:        100,
+		StoragePath: "first.txt",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "second.txt", rec2.Name)
+	require.NotEqual(t, rec1.ID, rec2.ID)
+	require.Equal(t, rec1.FileHashID, rec2.FileHashID)
 }

@@ -46,9 +46,7 @@ func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileRecord, er
 	var rec FileRecord
 	result := s.db.WithContext(ctx).
 		Table(tableFileRecord).
-		Select("core_file_record.*, core_file_hash.fingerprint, core_file_hash.size, core_file_hash.storage_uri").
-		Joins("LEFT JOIN core_file_hash ON core_file_hash.id = core_file_record.file_hash_id").
-		Where("core_file_record.id = ?", id).
+		Where("id = ?", id).
 		Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
@@ -56,22 +54,39 @@ func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileRecord, er
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: id=%d", ErrFileNotFound, id)
 	}
+	if rec.FileHashID > 0 {
+		s.fillRecordHashInfo(ctx, &rec)
+	}
 	return &rec, nil
+}
+
+func (s *store) fillRecordHashInfo(ctx context.Context, rec *FileRecord) {
+	var fh FileHash
+	if err := s.db.WithContext(ctx).Where("id = ?", rec.FileHashID).Find(&fh).Error; err != nil {
+		return
+	}
+	if fh.ID == 0 {
+		return
+	}
+	rec.Fingerprint = fh.Fingerprint
+	rec.Size = fh.Size
+	rec.StorageURI = fh.StorageURI
 }
 
 func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*FileRecord, error) {
 	var rec FileRecord
 	result := s.db.WithContext(ctx).
 		Table(tableFileRecord).
-		Select("core_file_record.*, core_file_hash.fingerprint, core_file_hash.size, core_file_hash.storage_uri").
-		Joins("LEFT JOIN core_file_hash ON core_file_hash.id = core_file_record.file_hash_id").
-		Where("core_file_record.upload_id = ?", uploadID).
+		Where("upload_id = ?", uploadID).
 		Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: uploadID=%s", ErrFileNotFound, uploadID)
+	}
+	if rec.FileHashID > 0 {
+		s.fillRecordHashInfo(ctx, &rec)
 	}
 	return &rec, nil
 }
@@ -119,11 +134,7 @@ func (s *store) DeleteFileRecord(ctx context.Context, id uint) error {
 }
 
 func (s *store) ListFileRecords(ctx context.Context, cond *fileCond) ([]FileRecord, int64, error) {
-	db := s.db.WithContext(ctx).
-		Table(tableFileRecord).
-		Select("core_file_record.*, core_file_hash.fingerprint, core_file_hash.size, core_file_hash.storage_uri").
-		Joins("LEFT JOIN core_file_hash ON core_file_hash.id = core_file_record.file_hash_id")
-
+	db := s.db.WithContext(ctx).Table(tableFileRecord)
 	cond.BuildCondition(db, tableFileRecord)
 
 	var total int64
@@ -139,6 +150,11 @@ func (s *store) ListFileRecords(ctx context.Context, cond *fileCond) ([]FileReco
 	var list []FileRecord
 	if err := db.Find(&list).Error; err != nil {
 		return nil, 0, err
+	}
+	for i := range list {
+		if list[i].FileHashID > 0 {
+			s.fillRecordHashInfo(ctx, &list[i])
+		}
 	}
 	return list, total, nil
 }
