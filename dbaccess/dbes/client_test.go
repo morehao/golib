@@ -2,22 +2,18 @@ package dbes
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
 	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/internal/testenv"
 	"github.com/stretchr/testify/assert"
 )
 
 func esEnvAddr() string {
-	addr := os.Getenv("ELASTICSEARCH_ADDR")
-	if addr == "" {
-		addr = "http://localhost:9200"
-	}
-	return addr
+	return testenv.GetEnv(testenv.ElasticsearchAddr, "http://localhost:9200")
 }
 
 func TestNewTypedES(t *testing.T) {
