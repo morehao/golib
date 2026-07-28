@@ -14,7 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/filestore"
-	"github.com/morehao/golib/storage/spec"
+	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -24,46 +24,59 @@ import (
 
 var bg = context.Background()
 
-type mockMultipartUploader struct {
-	spec.MultipartUploader
-	uploadID string
+type mockStorage struct{ storage.Storage }
+
+var _ storage.PathBuilder = (*storage.LocalPathBuilder)(nil)
+
+func (m *mockStorage) PathBuilder() storage.PathBuilder {
+	return &storage.LocalPathBuilder{AbsDir: "/mock"}
 }
 
-func (m *mockMultipartUploader) UploadID() string { return m.uploadID }
-
-func (m *mockMultipartUploader) PresignUploadPartURL(_ context.Context, partNum int32, _ time.Duration) (string, error) {
-	return fmt.Sprintf("https://presign.example.com/%d?uploadId=%s", partNum, m.uploadID), nil
+func (m *mockStorage) GetObject(_ context.Context, _ string, key string, _ ...storage.GetOption) (*storage.GetObjectResult, error) {
+	return &storage.GetObjectResult{
+		Body: io.NopCloser(bytes.NewReader([]byte("mock file content: " + key))),
+	}, nil
 }
 
-func (m *mockMultipartUploader) Complete(_ context.Context, _ []spec.Part) error { return nil }
-
-func (m *mockMultipartUploader) Abort(_ context.Context) error { return nil }
-
-type mockStorage struct{ spec.Storage }
-
-func (m *mockStorage) PutObject(_ context.Context, _ string, reader io.Reader, _ int64, _ ...spec.PutOption) error {
+func (m *mockStorage) PutObject(_ context.Context, _ string, _ string, reader io.Reader, _ ...storage.PutOption) (*storage.PutObjectResult, error) {
 	_, _ = io.Copy(io.Discard, reader)
+	return &storage.PutObjectResult{}, nil
+}
+
+func (m *mockStorage) DeleteObject(_ context.Context, _ string, _ string) error { return nil }
+
+func (m *mockStorage) CreateMultipartUpload(_ context.Context, _ string, _ string, _ ...storage.PutOption) (string, error) {
+	return "mock-upload-id", nil
+}
+
+func (m *mockStorage) CompleteMultipartUpload(_ context.Context, _ string, _ string, _ string, _ []storage.CompletedPart) error {
 	return nil
 }
 
-func (m *mockStorage) DeleteObject(_ context.Context, _ string) error { return nil }
+func (m *mockStorage) AbortMultipartUpload(_ context.Context, _ string, _ string, _ string) error { return nil }
 
-func (m *mockStorage) NewMultipartUpload(_ context.Context, _ string, _ ...spec.MultipartOption) (spec.MultipartUploader, error) {
-	return &mockMultipartUploader{uploadID: "mock-upload-id"}, nil
-}
-
-func (m *mockStorage) GetMultipartUploader(_ context.Context, _ string, uploadID string) (spec.MultipartUploader, error) {
-	return &mockMultipartUploader{uploadID: uploadID}, nil
-}
-
-func (m *mockStorage) PresignGetURL(_ context.Context, key string, expires time.Duration) (string, error) {
+func (m *mockStorage) PresignGetObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.GetOption) (string, error) {
 	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
 }
 
-type failingMockStorage struct{ spec.Storage }
+func (m *mockStorage) PresignPutObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.PutOption) (string, error) {
+	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
+}
 
-func (m *failingMockStorage) PutObject(_ context.Context, _ string, _ io.Reader, _ int64, _ ...spec.PutOption) error {
-	return io.ErrUnexpectedEOF
+type failingMockStorage struct{ storage.Storage }
+
+func (m *failingMockStorage) PutObject(_ context.Context, _ string, _ string, _ io.Reader, _ ...storage.PutOption) (*storage.PutObjectResult, error) {
+	return nil, io.ErrUnexpectedEOF
+}
+
+func (m *failingMockStorage) PathBuilder() storage.PathBuilder {
+	return &storage.LocalPathBuilder{AbsDir: "/mock"}
+}
+
+func (m *failingMockStorage) GetObject(_ context.Context, _ string, key string, _ ...storage.GetOption) (*storage.GetObjectResult, error) {
+	return &storage.GetObjectResult{
+		Body: io.NopCloser(bytes.NewReader([]byte("mock file content: " + key))),
+	}, nil
 }
 
 // --- helpers ---
@@ -72,7 +85,7 @@ func newTestFileStore(t *testing.T) *filestore.FileStore {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	fs, err := filestore.New(db, &mockStorage{})
+	fs, err := filestore.New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 	return fs
 }
@@ -132,7 +145,7 @@ func TestHandleUpload(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, resp.Code)
 		require.Equal(t, "hello.txt", resp.Data.Name)
-		require.NotEmpty(t, resp.Data.Fingerprint)
+		require.NotZero(t, resp.Data.FileHashID)
 	})
 
 	t.Run("success with fingerprint", func(t *testing.T) {
@@ -146,7 +159,7 @@ func TestHandleUpload(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.Equal(t, 0, resp.Code)
-		require.Equal(t, "custom-fp", resp.Data.Fingerprint)
+		require.NotZero(t, resp.Data.FileHashID)
 	})
 
 	t.Run("missing file", func(t *testing.T) {
@@ -168,7 +181,7 @@ func TestHandleCheckExist(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	_, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
 		Fingerprint: "fp-exist",
 		Name:        "a.txt",
 		Size:        10,
@@ -189,7 +202,7 @@ func TestHandleCheckExist(t *testing.T) {
 		require.Equal(t, 0, resp.Code)
 		require.True(t, resp.Data.Exists)
 		require.NotNil(t, resp.Data.File)
-		require.Equal(t, rec.ID, resp.Data.File.FileID)
+		require.NotZero(t, resp.Data.File.FileHashID)
 	})
 
 	t.Run("not exists", func(t *testing.T) {
@@ -244,7 +257,7 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
 	require.NotEmpty(t, resp.Data.UploadID)
-	require.Equal(t, "mp-fp", resp.Data.Fingerprint)
+	require.NotZero(t, resp.Data.FileHashID)
 }
 
 func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
@@ -275,8 +288,8 @@ func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
-	// should return original record (no upload_id since it was completed)
-	require.Empty(t, resp.Data.UploadID)
+	require.NotEmpty(t, resp.Data.UploadID)
+	require.NotZero(t, resp.Data.FileHashID)
 }
 
 func TestHandlePresignUploadPartURL(t *testing.T) {
@@ -538,7 +551,7 @@ func TestHandleDeleteFile_NotFound(t *testing.T) {
 func TestHandleUpload_StorageFailure(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	fs, err := filestore.New(db, &failingMockStorage{})
+	fs, err := filestore.New(db, &failingMockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
 	gin.SetMode(gin.TestMode)
@@ -599,6 +612,60 @@ func TestHandleRedirectGetFileURL(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", "/api/v1/file/redirect/99999", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+}
+
+func TestHandleServeFileByID(t *testing.T) {
+	fs := newTestFileStore(t)
+	router := setupRouter(fs)
+
+	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+		Fingerprint: "serve-fp",
+		Name:        "hello.txt",
+		Size:        11,
+		MimeType:    "text/plain",
+		StoragePath: "files/hello.txt",
+	})
+	require.NoError(t, err)
+
+	t.Run("serves file content", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/serve/%d", rec.ID), nil)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, 200, w.Code)
+		require.Equal(t, "text/plain", w.Header().Get("Content-Type"))
+		require.Contains(t, w.Header().Get("Content-Disposition"), "hello.txt")
+		require.Equal(t, "11", w.Header().Get("Content-Length"))
+		require.Contains(t, w.Body.String(), "files/hello.txt")
+	})
+
+	t.Run("invalid fileID", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve/abc", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve/99999", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
