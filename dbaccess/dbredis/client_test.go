@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/internal/testkit"
+	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
 func redisEnvConfig() (addr, password string) {
-	addr = testkit.GetEnv(testkit.RedisAddr, "127.0.0.1:6379")
-	password = testkit.GetEnv(testkit.RedisPassword, "123456")
+	addr = testutil.GetEnv(testutil.RedisAddr, "127.0.0.1:6379")
+	password = testutil.GetEnv(testutil.RedisPassword, "123456")
 	return
 }
 

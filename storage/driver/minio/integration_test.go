@@ -1,7 +1,7 @@
 package minio
 
 import (
-	"github.com/morehao/golib/internal/testkit"
+	"github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/storage"
 
 	"strconv"
@@ -10,8 +10,8 @@ import (
 
 func TestIntegration(t *testing.T) {
 	skipIfMissingVars := func() bool {
-		endpoint := testkit.GetEnv(testkit.StorageMinioEndpoint, "")
-		accessKey := testkit.GetEnv(testkit.StorageMinioAccessKey, "")
+		endpoint := testutil.GetEnv(testutil.StorageMinioEndpoint, "")
+		accessKey := testutil.GetEnv(testutil.StorageMinioAccessKey, "")
 		if endpoint == "" || accessKey == "" {
 			t.Skip("STORAGE_MINIO_ENDPOINT or STORAGE_MINIO_ACCESS_KEY not set, skipping integration test")
 			return true
@@ -22,18 +22,18 @@ func TestIntegration(t *testing.T) {
 		return
 	}
 
-	useSSL, _ := strconv.ParseBool(testkit.GetEnv(testkit.StorageMinioUseSSL, "false"))
+	useSSL, _ := strconv.ParseBool(testutil.GetEnv(testutil.StorageMinioUseSSL, "false"))
 	cfg := storage.Config{
-		Endpoint:  testkit.GetEnv(testkit.StorageMinioEndpoint, ""),
-		Region:    testkit.GetEnv(testkit.StorageMinioRegion, "us-east-1"),
-		AccessKey: testkit.GetEnv(testkit.StorageMinioAccessKey, ""),
-		SecretKey: testkit.GetEnv(testkit.StorageMinioSecretKey, ""),
+		Endpoint:  testutil.GetEnv(testutil.StorageMinioEndpoint, ""),
+		Region:    testutil.GetEnv(testutil.StorageMinioRegion, "us-east-1"),
+		AccessKey: testutil.GetEnv(testutil.StorageMinioAccessKey, ""),
+		SecretKey: testutil.GetEnv(testutil.StorageMinioSecretKey, ""),
 		UseSSL:    useSSL,
-		BaseURL:   testkit.GetEnv(testkit.StorageMinioBaseURL, ""),
+		BaseURL:   testutil.GetEnv(testutil.StorageMinioBaseURL, ""),
 	}
 	s, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New minio driver: %v", err)
 	}
-	testkit.RunSuite(t, s, "testbucket")
+	testutil.RunStorageSuite(t, s, "testbucket")
 }

@@ -1,7 +1,7 @@
 package local
 
 import (
-	"github.com/morehao/golib/internal/testkit"
+	"github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/storage"
 
 	"os"
@@ -23,5 +23,5 @@ func TestIntegration(t *testing.T) {
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		t.Fatalf("create bucket dir: %v", err)
 	}
-	testkit.RunSuite(t, s, bucket)
+	testutil.RunStorageSuite(t, s, bucket)
 }

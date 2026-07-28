@@ -1,4 +1,4 @@
-package testkit
+package testutil
 
 import (
 	"bytes"
@@ -10,9 +10,9 @@ import (
 	"github.com/morehao/golib/storage"
 )
 
-// RunSuite 对一个 storage 实例跑通用一致性测试。
+// RunStorageSuite 对一个 storage 实例跑通用一致性测试。
 // bucket 参数指定测试用的 bucket 名称。
-func RunSuite(t *testing.T, s storage.Storage, bucket string) {
+func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 	t.Helper()
 	ctx := context.Background()
 

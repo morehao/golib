@@ -7,12 +7,12 @@ import (
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/internal/testkit"
+	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
 func esEnvAddr() string {
-	return testkit.GetEnv(testkit.ElasticsearchAddr, "http://localhost:9200")
+	return testutil.GetEnv(testutil.ElasticsearchAddr, "http://localhost:9200")
 }
 
 func TestNewTypedES(t *testing.T) {

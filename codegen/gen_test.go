@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/morehao/golib/internal/testkit"
+	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -14,7 +14,7 @@ import (
 
 func openMySQLForTest(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testkit.GetEnv(testkit.MySQLDSN, "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True")
+	dsn := testutil.GetEnv(testutil.MySQLDSN, "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True")
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip mysql-dependent test: %v", err)
@@ -24,7 +24,7 @@ func openMySQLForTest(t *testing.T) *gorm.DB {
 
 func openPostgresForTest(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testkit.GetEnv(testkit.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
+	dsn := testutil.GetEnv(testutil.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)
