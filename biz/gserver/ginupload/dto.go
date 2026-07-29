@@ -12,8 +12,8 @@ type presignURLResponse struct {
 }
 
 type uploadPart struct {
-	PartNumber int32  `json:"part_number"` // 分片编号
-	ETag       string `json:"etag"`        // 分片ETag
+	PartNumber int32  `json:"part_number" binding:"required,gt=0"` // 分片编号
+	ETag       string `json:"etag"`                                // 分片ETag
 }
 
 type fileRecordResponse struct {
@@ -26,8 +26,12 @@ type fileRecordResponse struct {
 
 // --- upload ---
 
+type uploadRequest struct {
+	ContentHash string `form:"content_hash" binding:"required"` // 内容哈希
+}
+
 type checkExistRequest struct {
-	Fingerprint string `json:"fingerprint" form:"fingerprint" binding:"required"` // 文件指纹
+	ContentHash string `json:"content_hash" form:"content_hash" binding:"required"` // 内容哈希
 }
 
 type checkExistResponse struct {
@@ -36,11 +40,11 @@ type checkExistResponse struct {
 }
 
 type createMultipartRequest struct {
-	Fingerprint string `json:"fingerprint" binding:"required"` // 文件指纹
-	Name        string `json:"name" binding:"required"`        // 文件名
-	Size        int64  `json:"size" binding:"required"`        // 文件大小(字节)
-	MimeType    string `json:"mime_type"`                      // MIME类型
-	StoragePath string `json:"storage_path"`                   // 存储路径
+	ContentHash string `json:"content_hash" binding:"required"` // 内容哈希
+	Name        string `json:"name" binding:"required"`
+	Size        int64  `json:"size" binding:"required"`
+	MimeType    string `json:"mime_type"`
+	StoragePath string `json:"storage_path"`
 }
 
 type createMultipartResponse struct {
@@ -64,7 +68,7 @@ type completeMultipartRequest struct {
 type fileDetailResponse struct {
 	FileID      uint   `json:"file_id"`
 	FileHashID  uint   `json:"file_hash_id"`
-	Fingerprint string `json:"fingerprint"`
+	ContentHash string `json:"content_hash"` // 内容哈希
 	Name        string `json:"name"`
 	Size        int64  `json:"size"`
 	MimeType    string `json:"mime_type"`
@@ -77,4 +81,10 @@ type fileDetailResponse struct {
 
 type presignDownloadRequest struct {
 	FileID uint `json:"file_id" form:"file_id" binding:"required"` // 文件ID
+}
+
+// --- presign ---
+
+type presignedPutResponse struct {
+	URI string `json:"uri"` // 存储 URI
 }

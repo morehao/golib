@@ -18,12 +18,12 @@ const (
 
 type FileHash struct {
 	ID          uint   `gorm:"primarykey"`
-	Fingerprint string `gorm:"column:fingerprint;type:varchar(64);uniqueIndex:uk_fingerprint"`
+	ContentHash string `gorm:"column:content_hash;type:varchar(64);uniqueIndex:uk_content_hash"`
 	Size        int64  `gorm:"column:size"`
 	StorageURI  string `gorm:"column:storage_uri;type:varchar(512)"`
 }
 
-func (FileHash) TableName() string { return "core_file_hash" }
+func (FileHash) TableName() string { return "core_file" }
 
 type FileRecord struct {
 	gorm.Model
@@ -34,15 +34,15 @@ type FileRecord struct {
 	Status     FileStatus `gorm:"column:status;type:varchar(32);default:uploading"`
 
 	// 关联查询填充字段（不入库）
-	Fingerprint string `gorm:"-:all"`
+	ContentHash string `gorm:"-:all"`
 	Size        int64  `gorm:"-:all"`
 	StorageURI  string `gorm:"-:all"`
 }
 
-func (FileRecord) TableName() string { return "core_file_record" }
+func (FileRecord) TableName() string { return "core_file_upload" }
 
 type RecordUploadRequest struct {
-	Fingerprint string
+	ContentHash string
 	Name        string
 	Size        int64
 	MimeType    string
@@ -52,7 +52,7 @@ type RecordUploadRequest struct {
 type fileCond struct {
 	ID          uint
 	FileHashID  uint
-	Fingerprint string
+	ContentHash string
 	UploadID    string
 	Status      FileStatus
 	Page        int
@@ -67,8 +67,8 @@ func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 	if c.FileHashID > 0 {
 		db.Where(fmt.Sprintf("%s.file_hash_id = ?", tableName), c.FileHashID)
 	}
-	if c.Fingerprint != "" {
-		db.Where(fmt.Sprintf("%s.fingerprint = ?", tableName), c.Fingerprint)
+	if c.ContentHash != "" {
+		db.Where(fmt.Sprintf("%s.content_hash = ?", tableName), c.ContentHash)
 	}
 	if c.UploadID != "" {
 		db.Where(fmt.Sprintf("%s.upload_id = ?", tableName), c.UploadID)
@@ -86,7 +86,7 @@ func (c *fileCond) GetPageInfo() (page int, pageSize int) {
 }
 
 type UploadAndRecordRequest struct {
-	Fingerprint string
+	ContentHash string
 	Name        string
 	Size        int64
 	MimeType    string

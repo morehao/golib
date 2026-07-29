@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	tableFileRecord = "core_file_record"
-	tableFileHash   = "core_file_hash"
+	tableFileRecord = "core_file_upload"
+	tableFileHash   = "core_file"
 )
 
 type store struct {
@@ -24,16 +24,16 @@ func (s *store) CreateFileHash(ctx context.Context, fh *FileHash) error {
 	return s.db.WithContext(ctx).Create(fh).Error
 }
 
-func (s *store) GetFileHashByFingerprint(ctx context.Context, fingerprint string) (*FileHash, error) {
+func (s *store) GetFileHashByContentHash(ctx context.Context, contentHash string) (*FileHash, error) {
 	var fh FileHash
 	result := s.db.WithContext(ctx).
-		Where("fingerprint = ?", fingerprint).
+		Where("content_hash = ?", contentHash).
 		Find(&fh)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected == 0 {
-		return nil, fmt.Errorf("%w: fingerprint=%s", ErrFileNotFound, fingerprint)
+		return nil, fmt.Errorf("%w: content_hash=%s", ErrFileNotFound, contentHash)
 	}
 	return &fh, nil
 }
@@ -68,7 +68,7 @@ func (s *store) fillRecordHashInfo(ctx context.Context, rec *FileRecord) {
 	if fh.ID == 0 {
 		return
 	}
-	rec.Fingerprint = fh.Fingerprint
+	rec.ContentHash = fh.ContentHash
 	rec.Size = fh.Size
 	rec.StorageURI = fh.StorageURI
 }

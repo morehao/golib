@@ -27,12 +27,21 @@ func WithExpires(d time.Duration) PresignOption {
 
 type FileStoreOption func(*fileStoreOptions)
 
-type fileStoreOptions struct{}
+type fileStoreOptions struct {
+	signSecret string
+}
+
+func WithSignSecret(secret string) FileStoreOption {
+	return func(o *fileStoreOptions) {
+		o.signSecret = secret
+	}
+}
 
 type FileStore struct {
-	store  *store
-	st     storage.Storage
-	bucket string
+	store      *store
+	st         storage.Storage
+	bucket     string
+	signSecret string
 }
 
 func New(db *gorm.DB, st storage.Storage, bucket string, opts ...FileStoreOption) (*FileStore, error) {
@@ -44,11 +53,15 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...FileStoreOption
 	if err := db.AutoMigrate(&FileHash{}, &FileRecord{}); err != nil {
 		return nil, fmt.Errorf("filestore.New: auto-migrate: %w", err)
 	}
-	return &FileStore{store: newStore(db), st: st, bucket: bucket}, nil
+	return &FileStore{store: newStore(db), st: st, bucket: bucket, signSecret: o.signSecret}, nil
 }
 
 func (s *FileStore) GetExpiry() time.Duration {
 	return defaultPresignExpiry
+}
+
+func (s *FileStore) SignSecret() string {
+	return s.signSecret
 }
 
 func (s *FileStore) IsLocal() bool {
@@ -103,8 +116,8 @@ func (s *FileStore) parseStorageURI(uri string) (scheme, bucket, key string, err
 	return scheme, bucket, key, nil
 }
 
-func (s *FileStore) findOrCreateFileHash(ctx context.Context, fingerprint string, size int64, storagePath string) (*FileHash, error) {
-	fh, err := s.store.GetFileHashByFingerprint(ctx, fingerprint)
+func (s *FileStore) findOrCreateFileHash(ctx context.Context, contentHash string, size int64, storagePath string) (*FileHash, error) {
+	fh, err := s.store.GetFileHashByContentHash(ctx, contentHash)
 	if err == nil {
 		return fh, nil
 	}
@@ -113,7 +126,7 @@ func (s *FileStore) findOrCreateFileHash(ctx context.Context, fingerprint string
 	}
 
 	fh = &FileHash{
-		Fingerprint: fingerprint,
+		ContentHash: contentHash,
 		Size:        size,
 		StorageURI:  s.buildStorageURI(storagePath),
 	}
@@ -123,8 +136,8 @@ func (s *FileStore) findOrCreateFileHash(ctx context.Context, fingerprint string
 	return fh, nil
 }
 
-func (s *FileStore) CheckExist(ctx context.Context, fingerprint string) (*FileRecord, bool, error) {
-	fh, err := s.store.GetFileHashByFingerprint(ctx, fingerprint)
+func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileRecord, bool, error) {
+	fh, err := s.store.GetFileHashByContentHash(ctx, contentHash)
 	if err != nil {
 		if errors.Is(err, ErrFileNotFound) {
 			return nil, false, nil
@@ -134,18 +147,18 @@ func (s *FileStore) CheckExist(ctx context.Context, fingerprint string) (*FileRe
 
 	return &FileRecord{
 		FileHashID:  fh.ID,
-		Fingerprint: fh.Fingerprint,
+		ContentHash: fh.ContentHash,
 		Size:        fh.Size,
 		StorageURI:  fh.StorageURI,
 	}, true, nil
 }
 
 func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (*FileRecord, error) {
-	if req.Fingerprint == "" || req.StoragePath == "" {
-		return nil, fmt.Errorf("%w: fingerprint and storage_path are required", ErrInvalidArgument)
+	if req.ContentHash == "" || req.StoragePath == "" {
+		return nil, fmt.Errorf("%w: content_hash and storage_path are required", ErrInvalidArgument)
 	}
 
-	fh, err := s.findOrCreateFileHash(ctx, req.Fingerprint, req.Size, req.StoragePath)
+	fh, err := s.findOrCreateFileHash(ctx, req.ContentHash, req.Size, req.StoragePath)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.RecordUpload: %w", err)
 	}
@@ -161,19 +174,19 @@ func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (
 		return nil, fmt.Errorf("filestore.RecordUpload: create record: %w", err)
 	}
 
-	rec.Fingerprint = fh.Fingerprint
+	rec.ContentHash = fh.ContentHash
 	rec.Size = fh.Size
 	rec.StorageURI = fh.StorageURI
 	return rec, nil
 }
 
 func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileRecord, error) {
-	if req.Fingerprint == "" || req.StoragePath == "" || req.Reader == nil {
-		return nil, fmt.Errorf("%w: fingerprint, storage_path and reader are required", ErrInvalidArgument)
+	if req.ContentHash == "" || req.StoragePath == "" || req.Reader == nil {
+		return nil, fmt.Errorf("%w: content_hash, storage_path and reader are required", ErrInvalidArgument)
 	}
 
 	fh, hit := func() (*FileHash, bool) {
-		fh, err := s.store.GetFileHashByFingerprint(ctx, req.Fingerprint)
+		fh, err := s.store.GetFileHashByContentHash(ctx, req.ContentHash)
 		if err != nil {
 			return nil, false
 		}
@@ -188,7 +201,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		var createErr error
 		fh, createErr = func() (*FileHash, error) {
 			fh := &FileHash{
-				Fingerprint: req.Fingerprint,
+				ContentHash: req.ContentHash,
 				Size:        req.Size,
 				StorageURI:  s.buildStorageURI(req.StoragePath),
 			}
@@ -198,7 +211,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 			return fh, nil
 		}()
 		if createErr != nil {
-			found, lookupErr := s.store.GetFileHashByFingerprint(ctx, req.Fingerprint)
+			found, lookupErr := s.store.GetFileHashByContentHash(ctx, req.ContentHash)
 			if lookupErr == nil {
 				_ = s.st.DeleteObject(ctx, s.bucket, req.StoragePath)
 				fh = found
@@ -219,7 +232,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		return nil, fmt.Errorf("filestore.UploadAndRecord: create record: %w", err)
 	}
 
-	rec.Fingerprint = fh.Fingerprint
+	rec.ContentHash = fh.ContentHash
 	rec.Size = fh.Size
 	rec.StorageURI = fh.StorageURI
 	return rec, nil
@@ -260,7 +273,7 @@ func (s *FileStore) DeleteFile(ctx context.Context, id uint) error {
 }
 
 type InitMultipartUploadRequest struct {
-	Fingerprint string
+	ContentHash string
 	Name        string
 	Size        int64
 	MimeType    string
@@ -273,8 +286,8 @@ type CompleteMultipartUploadRequest struct {
 }
 
 func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUploadRequest) (*FileRecord, error) {
-	if req.Fingerprint == "" || req.StoragePath == "" {
-		return nil, fmt.Errorf("%w: fingerprint and storage_path are required", ErrInvalidArgument)
+	if req.ContentHash == "" || req.StoragePath == "" {
+		return nil, fmt.Errorf("%w: content_hash and storage_path are required", ErrInvalidArgument)
 	}
 
 	uploadID, err := s.st.CreateMultipartUpload(ctx, s.bucket, req.StoragePath)
@@ -282,7 +295,7 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: create multipart upload: %w", err)
 	}
 
-	fh, fhErr := s.findOrCreateFileHash(ctx, req.Fingerprint, req.Size, req.StoragePath)
+	fh, fhErr := s.findOrCreateFileHash(ctx, req.ContentHash, req.Size, req.StoragePath)
 	if fhErr != nil {
 		_ = s.st.AbortMultipartUpload(ctx, s.bucket, req.StoragePath, uploadID)
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: %w", fhErr)
@@ -300,7 +313,7 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: create record: %w", err)
 	}
 
-	rec.Fingerprint = fh.Fingerprint
+	rec.ContentHash = fh.ContentHash
 	rec.Size = fh.Size
 	rec.StorageURI = fh.StorageURI
 	return rec, nil

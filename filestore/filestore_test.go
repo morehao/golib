@@ -129,7 +129,7 @@ func TestCheckExist_Found(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "abc123",
+		ContentHash: "abc123",
 		Name:        "test.txt",
 		Size:        100,
 		MimeType:    "text/plain",
@@ -141,7 +141,7 @@ func TestCheckExist_Found(t *testing.T) {
 	found, hit, err := fs.CheckExist(context.Background(), "abc123")
 	require.NoError(t, err)
 	require.True(t, hit)
-	require.Equal(t, "abc123", found.Fingerprint)
+	require.Equal(t, "abc123", found.ContentHash)
 }
 
 func TestRecordUpload_InvalidArgs(t *testing.T) {
@@ -153,13 +153,13 @@ func TestRecordUpload_InvalidArgs(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidArgument)
 }
 
-func TestRecordUpload_SameFingerprint_DifferentName(t *testing.T) {
+func TestRecordUpload_SameContentHash_DifferentName(t *testing.T) {
 	db := newTestDB(t)
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
 	rec1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "dup-fp",
+		ContentHash: "dup-fp",
 		Name:        "a.txt",
 		Size:        10,
 		StoragePath: "a.txt",
@@ -168,7 +168,7 @@ func TestRecordUpload_SameFingerprint_DifferentName(t *testing.T) {
 	require.Equal(t, "a.txt", rec1.Name)
 
 	rec2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "dup-fp",
+		ContentHash: "dup-fp",
 		Name:        "b.txt",
 		Size:        10,
 		StoragePath: "a.txt",
@@ -186,7 +186,7 @@ func TestUploadAndRecord_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.UploadAndRecord(context.Background(), UploadAndRecordRequest{
-		Fingerprint: "fp123",
+		ContentHash: "fp123",
 		Name:        "photo.jpg",
 		Size:        1024,
 		MimeType:    "image/jpeg",
@@ -200,14 +200,14 @@ func TestUploadAndRecord_Success(t *testing.T) {
 	require.Equal(t, "s3://test-bucket/images/photo.jpg", rec.StorageURI)
 }
 
-func TestUploadAndRecord_Dedup_SameFingerprint(t *testing.T) {
+func TestUploadAndRecord_Dedup_SameContentHash(t *testing.T) {
 	db := newTestDB(t)
 	mock := &mockStorage{}
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
 
 	req1 := UploadAndRecordRequest{
-		Fingerprint: "dedup",
+		ContentHash: "dedup",
 		Name:        "same.txt",
 		Size:        100,
 		Reader:      strings.NewReader("data"),
@@ -221,7 +221,7 @@ func TestUploadAndRecord_Dedup_SameFingerprint(t *testing.T) {
 	mock.putCalled = false
 
 	req2 := UploadAndRecordRequest{
-		Fingerprint: "dedup",
+		ContentHash: "dedup",
 		Name:        "other.txt",
 		Size:        100,
 		Reader:      strings.NewReader("data"),
@@ -230,7 +230,7 @@ func TestUploadAndRecord_Dedup_SameFingerprint(t *testing.T) {
 
 	second, err := fs.UploadAndRecord(context.Background(), req2)
 	require.NoError(t, err)
-	require.False(t, mock.putCalled, "should skip upload on duplicate fingerprint")
+	require.False(t, mock.putCalled, "should skip upload on duplicate content hash")
 	require.NotEqual(t, first.ID, second.ID, "should create new file record for different name")
 	require.Equal(t, first.FileHashID, second.FileHashID, "should reuse same file hash")
 	require.Equal(t, "other.txt", second.Name)
@@ -243,7 +243,7 @@ func TestUploadAndRecord_PutObjectError(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = fs.UploadAndRecord(context.Background(), UploadAndRecordRequest{
-		Fingerprint: "fail",
+		ContentHash: "fail",
 		Name:        "fail.txt",
 		Size:        100,
 		Reader:      strings.NewReader("data"),
@@ -258,7 +258,7 @@ func TestGetFile(t *testing.T) {
 	require.NoError(t, err)
 
 	created, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "gettest",
+		ContentHash: "gettest",
 		Name:        "get.txt",
 		Size:        1,
 		StoragePath: "get.txt",
@@ -287,7 +287,7 @@ func TestPresignGetFileURL_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "url-test",
+		ContentHash: "url-test",
 		Name:        "test.txt",
 		Size:        100,
 		MimeType:    "text/plain",
@@ -316,7 +316,7 @@ func TestDeleteFile(t *testing.T) {
 	require.NoError(t, err)
 
 	created, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "deltest",
+		ContentHash: "deltest",
 		Name:        "del.txt",
 		Size:        1,
 		StoragePath: "del.txt",
@@ -337,7 +337,7 @@ func TestInitMultipartUpload_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
-		Fingerprint: "mp-fp",
+		ContentHash: "mp-fp",
 		Name:        "large.mp4",
 		Size:        10485760,
 		MimeType:    "video/mp4",
@@ -367,7 +367,7 @@ func TestPresignUploadPartURL_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
-		Fingerprint: "presign-test",
+		ContentHash: "presign-test",
 		Name:        "test.mp4",
 		Size:        1000,
 		StoragePath: "test.mp4",
@@ -386,7 +386,7 @@ func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "non-mp",
+		ContentHash: "non-mp",
 		Name:        "small.txt",
 		Size:        100,
 		StoragePath: "small.txt",
@@ -413,7 +413,7 @@ func TestPresignGetFileURL_DefaultExpiry(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "default-expiry",
+		ContentHash: "default-expiry",
 		Name:        "test.txt",
 		Size:        100,
 		MimeType:    "text/plain",
@@ -433,7 +433,7 @@ func TestPresignUploadPartURL_WithExpires(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
-		Fingerprint: "presign-expires-test",
+		ContentHash: "presign-expires-test",
 		Name:        "test.mp4",
 		Size:        1000,
 		StoragePath: "test.mp4",
@@ -451,7 +451,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
-		Fingerprint: "complete-test",
+		ContentHash: "complete-test",
 		Name:        "test.mp4",
 		Size:        1000,
 		StoragePath: "test.mp4",
@@ -477,7 +477,7 @@ func TestCompleteMultipartUpload_NotMultipart(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "complete-non-mp",
+		ContentHash: "complete-non-mp",
 		Name:        "small.txt",
 		Size:        100,
 		StoragePath: "small.txt",
@@ -494,7 +494,7 @@ func TestAbortMultipartUpload_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
-		Fingerprint: "abort-test",
+		ContentHash: "abort-test",
 		Name:        "test.mp4",
 		Size:        1000,
 		StoragePath: "test.mp4",
@@ -515,7 +515,7 @@ func TestAbortMultipartUpload_NotMultipart(t *testing.T) {
 	require.NoError(t, err)
 
 	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "abort-non-mp",
+		ContentHash: "abort-non-mp",
 		Name:        "small.txt",
 		Size:        100,
 		StoragePath: "small.txt",
@@ -532,7 +532,7 @@ func TestDeleteFileRecord_HashRemains(t *testing.T) {
 	require.NoError(t, err)
 
 	rec1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "hash-persist",
+		ContentHash: "hash-persist",
 		Name:        "first.txt",
 		Size:        100,
 		StoragePath: "first.txt",
@@ -543,7 +543,7 @@ func TestDeleteFileRecord_HashRemains(t *testing.T) {
 	require.NoError(t, err)
 
 	rec2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		Fingerprint: "hash-persist",
+		ContentHash: "hash-persist",
 		Name:        "second.txt",
 		Size:        100,
 		StoragePath: "first.txt",

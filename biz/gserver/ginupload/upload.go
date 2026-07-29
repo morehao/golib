@@ -17,18 +17,22 @@ import (
 // @accept multipart/form-data
 // @Produce application/json
 // @Param file formData file true "上传文件"
-// @Param fingerprint formData string false "SHA256指纹，用于去重"
+// @Param content_hash formData string false "内容哈希(SHA256)，用于去重"
 // @Success 200 {object} gincontext.DtoRender{data=fileRecordResponse}
 // @Router /file/upload [post]
 func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		var req uploadRequest
+		if err := c.ShouldBind(&req); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+
 		fh, err := c.FormFile("file")
 		if err != nil {
 			gincontext.Fail(c, fmt.Errorf("file is required: %w", err))
 			return
 		}
-
-		fingerprint := c.PostForm("fingerprint")
 
 		f, err := fh.Open()
 		if err != nil {
@@ -37,26 +41,16 @@ func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 		defer f.Close()
 
-		if fingerprint == "" {
-			h := sha256.New()
-			if _, err := io.Copy(h, f); err != nil {
-				gincontext.Fail(c, fmt.Errorf("compute sha256: %w", err))
-				return
-			}
-			fingerprint = hex.EncodeToString(h.Sum(nil))
-			if _, err := f.Seek(0, io.SeekStart); err != nil {
-				gincontext.Fail(c, fmt.Errorf("seek file: %w", err))
-				return
-			}
-		}
+		h := sha256.New()
+		reader := io.TeeReader(f, h)
 
 		rec, err := fs.UploadAndRecord(c.Request.Context(), filestore.UploadAndRecordRequest{
-			Fingerprint: fingerprint,
+			ContentHash: req.ContentHash,
 			Name:        fh.Filename,
 			Size:        fh.Size,
 			MimeType:    fh.Header.Get("Content-Type"),
-			Reader:      f,
-			StoragePath: fingerprint,
+			Reader:      reader,
+			StoragePath: hex.EncodeToString(h.Sum(nil)),
 		})
 		if err != nil {
 			gincontext.Fail(c, fmt.Errorf("upload: %w", err))
@@ -71,7 +65,7 @@ func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 检查文件是否存在
 // @accept application/json
 // @Produce application/json
-// @Param req body checkExistRequest true "指纹"
+// @Param req body checkExistRequest true "内容哈希"
 // @Success 200 {object} gincontext.DtoRender{data=checkExistResponse}
 // @Router /file/checkExist [post]
 func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
@@ -81,7 +75,7 @@ func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		rec, exists, err := fs.CheckExist(c.Request.Context(), req.Fingerprint)
+		rec, exists, err := fs.CheckExist(c.Request.Context(), req.ContentHash)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -111,7 +105,7 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		rec, err := fs.InitMultipartUpload(c.Request.Context(), filestore.InitMultipartUploadRequest{
-			Fingerprint: req.Fingerprint,
+			ContentHash: req.ContentHash,
 			Name:        req.Name,
 			Size:        req.Size,
 			MimeType:    req.MimeType,

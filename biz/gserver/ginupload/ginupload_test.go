@@ -133,8 +133,8 @@ func TestHandleUpload(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	t.Run("success without fingerprint", func(t *testing.T) {
-		w := postForm(router, "/api/v1/file/upload", nil, "file", "hello.txt", "hello world")
+	t.Run("success with content hash", func(t *testing.T) {
+		w := postForm(router, "/api/v1/file/upload", map[string]string{"content_hash": "custom-fp"}, "file", "test.txt", "data")
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -144,22 +144,21 @@ func TestHandleUpload(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.Equal(t, 0, resp.Code)
-		require.Equal(t, "hello.txt", resp.Data.Name)
 		require.NotZero(t, resp.Data.FileHashID)
 	})
 
-	t.Run("success with fingerprint", func(t *testing.T) {
-		w := postForm(router, "/api/v1/file/upload", map[string]string{"fingerprint": "custom-fp"}, "file", "test.txt", "data")
+	t.Run("missing content hash", func(t *testing.T) {
+		w := postForm(router, "/api/v1/file/upload", nil, "file", "test.txt", "data")
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
-			Code int                `json:"code"`
-			Data fileRecordResponse `json:"data"`
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
 		}
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
-		require.Equal(t, 0, resp.Code)
-		require.NotZero(t, resp.Data.FileHashID)
+		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "required")
 	})
 
 	t.Run("missing file", func(t *testing.T) {
@@ -173,7 +172,7 @@ func TestHandleUpload(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "no such file")
+		require.Contains(t, resp.Msg, "required")
 	})
 }
 
@@ -182,7 +181,7 @@ func TestHandleCheckExist(t *testing.T) {
 	router := setupRouter(fs)
 
 	_, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		Fingerprint: "fp-exist",
+		ContentHash: "fp-exist",
 		Name:        "a.txt",
 		Size:        10,
 		StoragePath: "a.txt",
@@ -190,7 +189,7 @@ func TestHandleCheckExist(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("exists", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/checkExist", checkExistRequest{Fingerprint: "fp-exist"})
+		w := postJSON(router, "/api/v1/file/checkExist", checkExistRequest{ContentHash: "fp-exist"})
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -206,7 +205,7 @@ func TestHandleCheckExist(t *testing.T) {
 	})
 
 	t.Run("not exists", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/checkExist", checkExistRequest{Fingerprint: "fp-none"})
+		w := postJSON(router, "/api/v1/file/checkExist", checkExistRequest{ContentHash: "fp-none"})
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -220,7 +219,7 @@ func TestHandleCheckExist(t *testing.T) {
 		require.Nil(t, resp.Data.File)
 	})
 
-	t.Run("missing fingerprint", func(t *testing.T) {
+	t.Run("missing content hash", func(t *testing.T) {
 		w := postJSON(router, "/api/v1/file/checkExist", checkExistRequest{})
 		require.Equal(t, 200, w.Code)
 
@@ -240,7 +239,7 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 	router := setupRouter(fs)
 
 	req := createMultipartRequest{
-		Fingerprint: "mp-fp",
+		ContentHash: "mp-fp",
 		Name:        "large.mp4",
 		Size:        10485760,
 		MimeType:    "video/mp4",
@@ -262,9 +261,9 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 
 func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 	fs := newTestFileStore(t)
-	// pre-seed a completed file with same fingerprint
+	// pre-seed a completed file with same content hash
 	_, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		Fingerprint: "existing-fp",
+		ContentHash: "existing-fp",
 		Name:        "existing.txt",
 		Size:        100,
 		StoragePath: "existing.txt",
@@ -273,7 +272,7 @@ func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 
 	router := setupRouter(fs)
 	req := createMultipartRequest{
-		Fingerprint: "existing-fp",
+		ContentHash: "existing-fp",
 		Name:        "new.mp4",
 		Size:        999999,
 		StoragePath: "new.mp4",
@@ -298,7 +297,7 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 
 	// init first
 	rec, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
-		Fingerprint: "presign-fp",
+		ContentHash: "presign-fp",
 		Name:        "test.mp4",
 		Size:        1000,
 		StoragePath: "test.mp4",
@@ -346,7 +345,7 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 	router := setupRouter(fs)
 
 	rec, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
-		Fingerprint: "complete-fp",
+		ContentHash: "complete-fp",
 		Name:        "test.mp4",
 		Size:        1000,
 		StoragePath: "test.mp4",
@@ -395,7 +394,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	router := setupRouter(fs)
 
 	rec, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
-		Fingerprint: "abort-fp",
+		ContentHash: "abort-fp",
 		Name:        "test.mp4",
 		Size:        1000,
 		StoragePath: "test.mp4",
@@ -423,7 +422,7 @@ func TestHandleGetFileDetail(t *testing.T) {
 	router := setupRouter(fs)
 
 	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		Fingerprint: "detail-fp",
+		ContentHash: "detail-fp",
 		Name:        "detail.txt",
 		Size:        100,
 		MimeType:    "text/plain",
@@ -466,7 +465,7 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	router := setupRouter(fs)
 
 	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		Fingerprint: "dl-fp",
+		ContentHash: "dl-fp",
 		Name:        "download.txt",
 		Size:        100,
 		MimeType:    "text/plain",
@@ -510,7 +509,7 @@ func TestHandleDeleteFile(t *testing.T) {
 	router := setupRouter(fs)
 
 	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		Fingerprint: "del-fp",
+		ContentHash: "del-fp",
 		Name:        "del.txt",
 		Size:        10,
 		StoragePath: "del.txt",
@@ -559,7 +558,7 @@ func TestHandleUpload_StorageFailure(t *testing.T) {
 	group := r.Group("/api/v1")
 	Register(group, fs)
 
-	w := postForm(r, "/api/v1/file/upload", nil, "file", "test.txt", "data")
+	w := postForm(r, "/api/v1/file/upload", map[string]string{"content_hash": "fail-fp"}, "file", "test.txt", "data")
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -577,7 +576,7 @@ func TestHandleRedirectGetFileURL(t *testing.T) {
 	router := setupRouter(fs)
 
 	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		Fingerprint: "redirect-fp",
+		ContentHash: "redirect-fp",
 		Name:        "img.png",
 		Size:        1024,
 		MimeType:    "image/png",
@@ -629,7 +628,7 @@ func TestHandleServeFileByID(t *testing.T) {
 	router := setupRouter(fs)
 
 	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		Fingerprint: "serve-fp",
+		ContentHash: "serve-fp",
 		Name:        "hello.txt",
 		Size:        11,
 		MimeType:    "text/plain",

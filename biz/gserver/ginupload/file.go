@@ -100,7 +100,7 @@ func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 		fileIDStr := c.Param("fileID")
 		fileID, err := strconv.ParseUint(fileIDStr, 10, 64)
 		if err != nil || fileID == 0 {
-			gincontext.Fail(c, fmt.Errorf("invalid fileID: %w", err))
+			gincontext.Fail(c, fmt.Errorf("invalid fileID"))
 			return
 		}
 
@@ -125,7 +125,7 @@ func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 		fileIDStr := c.Param("fileID")
 		fileID, err := strconv.ParseUint(fileIDStr, 10, 64)
 		if err != nil || fileID == 0 {
-			gincontext.Fail(c, fmt.Errorf("invalid fileID: %w", err))
+			gincontext.Fail(c, fmt.Errorf("invalid fileID"))
 			return
 		}
 
@@ -138,6 +138,8 @@ func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 
 		if rec.MimeType != "" {
 			c.Header("Content-Type", rec.MimeType)
+		} else {
+			c.Header("Content-Type", "application/octet-stream")
 		}
 		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", rec.Name))
 		if rec.Size > 0 {
@@ -167,7 +169,7 @@ func toFileDetailResp(rec *filestore.FileRecord) *fileDetailResponse {
 	return &fileDetailResponse{
 		FileID:      rec.ID,
 		FileHashID:  rec.FileHashID,
-		Fingerprint: rec.Fingerprint,
+		ContentHash: rec.ContentHash,
 		Name:        rec.Name,
 		Size:        rec.Size,
 		MimeType:    rec.MimeType,
