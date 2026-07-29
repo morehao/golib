@@ -50,7 +50,7 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...FileStoreOption
 		fn(&o)
 	}
 
-	if err := db.AutoMigrate(&FileHash{}, &FileRecord{}); err != nil {
+	if err := db.AutoMigrate(&File{}, &FileUpload{}); err != nil {
 		return nil, fmt.Errorf("filestore.New: auto-migrate: %w", err)
 	}
 	return &FileStore{store: newStore(db), st: st, bucket: bucket, signSecret: o.signSecret}, nil
@@ -68,7 +68,7 @@ func (s *FileStore) IsLocal() bool {
 	return s.st.PathBuilder().Build(s.bucket, "").IsLocal()
 }
 
-func (s *FileStore) Open(ctx context.Context, id uint) (io.ReadCloser, *FileRecord, error) {
+func (s *FileStore) Open(ctx context.Context, id uint) (io.ReadCloser, *FileUpload, error) {
 	rec, err := s.GetFile(ctx, id)
 	if err != nil {
 		return nil, nil, fmt.Errorf("filestore.Open: %w", err)
@@ -116,27 +116,27 @@ func (s *FileStore) parseStorageURI(uri string) (scheme, bucket, key string, err
 	return scheme, bucket, key, nil
 }
 
-func (s *FileStore) findOrCreateFileHash(ctx context.Context, contentHash string, size int64, storagePath string) (*FileHash, error) {
+func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, size int64, storagePath string) (*File, error) {
 	fh, err := s.store.GetFileHashByContentHash(ctx, contentHash)
 	if err == nil {
 		return fh, nil
 	}
 	if !errors.Is(err, ErrFileNotFound) {
-		return nil, fmt.Errorf("findOrCreateFileHash: get hash: %w", err)
+		return nil, fmt.Errorf("findOrCreateFile: get hash: %w", err)
 	}
 
-	fh = &FileHash{
+	fh = &File{
 		ContentHash: contentHash,
 		Size:        size,
 		StorageURI:  s.buildStorageURI(storagePath),
 	}
 	if err := s.store.CreateFileHash(ctx, fh); err != nil {
-		return nil, fmt.Errorf("findOrCreateFileHash: create hash: %w", err)
+		return nil, fmt.Errorf("findOrCreateFile: create hash: %w", err)
 	}
 	return fh, nil
 }
 
-func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileRecord, bool, error) {
+func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileUpload, bool, error) {
 	fh, err := s.store.GetFileHashByContentHash(ctx, contentHash)
 	if err != nil {
 		if errors.Is(err, ErrFileNotFound) {
@@ -145,7 +145,7 @@ func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileRe
 		return nil, false, fmt.Errorf("filestore.CheckExist: %w", err)
 	}
 
-	return &FileRecord{
+	return &FileUpload{
 		FileHashID:  fh.ID,
 		ContentHash: fh.ContentHash,
 		Size:        fh.Size,
@@ -153,17 +153,17 @@ func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileRe
 	}, true, nil
 }
 
-func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (*FileRecord, error) {
+func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (*FileUpload, error) {
 	if req.ContentHash == "" || req.StoragePath == "" {
 		return nil, fmt.Errorf("%w: content_hash and storage_path are required", ErrInvalidArgument)
 	}
 
-	fh, err := s.findOrCreateFileHash(ctx, req.ContentHash, req.Size, req.StoragePath)
+	fh, err := s.findOrCreateFile(ctx, req.ContentHash, req.Size, req.StoragePath)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.RecordUpload: %w", err)
 	}
 
-	rec := &FileRecord{
+	rec := &FileUpload{
 		FileHashID: fh.ID,
 		Name:       req.Name,
 		MimeType:   req.MimeType,
@@ -180,12 +180,12 @@ func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (
 	return rec, nil
 }
 
-func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileRecord, error) {
+func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileUpload, error) {
 	if req.ContentHash == "" || req.StoragePath == "" || req.Reader == nil {
 		return nil, fmt.Errorf("%w: content_hash, storage_path and reader are required", ErrInvalidArgument)
 	}
 
-	fh, hit := func() (*FileHash, bool) {
+	fh, hit := func() (*File, bool) {
 		fh, err := s.store.GetFileHashByContentHash(ctx, req.ContentHash)
 		if err != nil {
 			return nil, false
@@ -199,8 +199,8 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		}
 
 		var createErr error
-		fh, createErr = func() (*FileHash, error) {
-			fh := &FileHash{
+		fh, createErr = func() (*File, error) {
+			fh := &File{
 				ContentHash: req.ContentHash,
 				Size:        req.Size,
 				StorageURI:  s.buildStorageURI(req.StoragePath),
@@ -222,7 +222,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		}
 	}
 
-	rec := &FileRecord{
+	rec := &FileUpload{
 		FileHashID: fh.ID,
 		Name:       req.Name,
 		MimeType:   req.MimeType,
@@ -238,7 +238,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 	return rec, nil
 }
 
-func (s *FileStore) GetFile(ctx context.Context, id uint) (*FileRecord, error) {
+func (s *FileStore) GetFile(ctx context.Context, id uint) (*FileUpload, error) {
 	rec, err := s.store.GetFileRecordByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.GetFile: %w", err)
@@ -285,7 +285,7 @@ type CompleteMultipartUploadRequest struct {
 	Parts []storage.CompletedPart
 }
 
-func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUploadRequest) (*FileRecord, error) {
+func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUploadRequest) (*FileUpload, error) {
 	if req.ContentHash == "" || req.StoragePath == "" {
 		return nil, fmt.Errorf("%w: content_hash and storage_path are required", ErrInvalidArgument)
 	}
@@ -295,13 +295,13 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: create multipart upload: %w", err)
 	}
 
-	fh, fhErr := s.findOrCreateFileHash(ctx, req.ContentHash, req.Size, req.StoragePath)
+	fh, fhErr := s.findOrCreateFile(ctx, req.ContentHash, req.Size, req.StoragePath)
 	if fhErr != nil {
 		_ = s.st.AbortMultipartUpload(ctx, s.bucket, req.StoragePath, uploadID)
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: %w", fhErr)
 	}
 
-	rec := &FileRecord{
+	rec := &FileUpload{
 		FileHashID: fh.ID,
 		Name:       req.Name,
 		MimeType:   req.MimeType,
@@ -341,7 +341,7 @@ func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum i
 	return url, nil
 }
 
-func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMultipartUploadRequest) (*FileRecord, error) {
+func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMultipartUploadRequest) (*FileUpload, error) {
 	rec, err := s.store.GetFileRecordByID(ctx, req.ID)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: %w", err)

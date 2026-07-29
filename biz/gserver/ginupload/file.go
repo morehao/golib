@@ -155,7 +155,7 @@ func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 
 // -- helpers --
 
-func toFileRecordResp(rec *filestore.FileRecord) *fileRecordResponse {
+func toFileRecordResp(rec *filestore.FileUpload) *fileRecordResponse {
 	return &fileRecordResponse{
 		FileID:     rec.ID,
 		FileHashID: rec.FileHashID,
@@ -165,7 +165,7 @@ func toFileRecordResp(rec *filestore.FileRecord) *fileRecordResponse {
 	}
 }
 
-func toFileDetailResp(rec *filestore.FileRecord) *fileDetailResponse {
+func toFileDetailResp(rec *filestore.FileUpload) *fileDetailResponse {
 	return &fileDetailResponse{
 		FileID:      rec.ID,
 		FileHashID:  rec.FileHashID,

@@ -16,16 +16,16 @@ const (
 	FileStatusMerging   FileStatus = "merging"
 )
 
-type FileHash struct {
+type File struct {
 	ID          uint   `gorm:"primarykey"`
 	ContentHash string `gorm:"column:content_hash;type:varchar(64);uniqueIndex:uk_content_hash"`
 	Size        int64  `gorm:"column:size"`
 	StorageURI  string `gorm:"column:storage_uri;type:varchar(512)"`
 }
 
-func (FileHash) TableName() string { return "core_file" }
+func (File) TableName() string { return "core_file" }
 
-type FileRecord struct {
+type FileUpload struct {
 	gorm.Model
 	FileHashID uint       `gorm:"column:file_hash_id;index"`
 	Name       string     `gorm:"column:name;type:varchar(256)"`
@@ -39,7 +39,7 @@ type FileRecord struct {
 	StorageURI  string `gorm:"-:all"`
 }
 
-func (FileRecord) TableName() string { return "core_file_upload" }
+func (FileUpload) TableName() string { return "core_file_upload" }
 
 type RecordUploadRequest struct {
 	ContentHash string
