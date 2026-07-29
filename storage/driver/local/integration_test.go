@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+func init() {
+	testutil.Load()
+}
+
 func TestIntegration(t *testing.T) {
 	dir := t.TempDir()
 	cfg := storage.Config{

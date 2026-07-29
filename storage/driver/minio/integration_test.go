@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+func init() {
+	testutil.Load()
+}
+
 func TestIntegration(t *testing.T) {
 	skipIfMissingVars := func() bool {
 		endpoint := testutil.GetEnv(testutil.StorageMinioEndpoint, "")

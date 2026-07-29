@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+func init() {
+	testutil.Load()
+}
+
 func TestIntegration(t *testing.T) {
 	endpoint := testutil.GetEnv(testutil.StorageTOSEndpoint, "")
 	accessKey := testutil.GetEnv(testutil.StorageTOSAccessKey, "")

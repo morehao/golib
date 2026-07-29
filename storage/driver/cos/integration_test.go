@@ -1,11 +1,15 @@
 package cos
 
 import (
+	"testing"
+
 	"github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/storage"
-
-	"testing"
 )
+
+func init() {
+	testutil.Load()
+}
 
 func TestIntegration(t *testing.T) {
 	endpoint := testutil.GetEnv(testutil.StorageCOSEndpoint, "")

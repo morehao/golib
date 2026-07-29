@@ -10,6 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func init() {
+	testutil.Load()
+}
+
 func redisEnvConfig() (addr, password string) {
 	addr = testutil.GetEnv(testutil.RedisAddr, "127.0.0.1:6379")
 	password = testutil.GetEnv(testutil.RedisPassword, "123456")
