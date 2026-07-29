@@ -27,13 +27,13 @@ func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		rec, err := fs.GetFile(c.Request.Context(), req.FileID)
+		detail, err := fs.GetFile(c.Request.Context(), req.FileID)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
 
-		gincontext.Success(c, toFileDetailResp(rec))
+		gincontext.Success(c, toFileDetailResp(detail))
 	}
 }
 
@@ -129,21 +129,21 @@ func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		rc, rec, err := fs.Open(c.Request.Context(), uint(fileID))
+		rc, detail, err := fs.Open(c.Request.Context(), uint(fileID))
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
 		defer rc.Close()
 
-		if rec.MimeType != "" {
-			c.Header("Content-Type", rec.MimeType)
+		if detail.MimeType != "" {
+			c.Header("Content-Type", detail.MimeType)
 		} else {
 			c.Header("Content-Type", "application/octet-stream")
 		}
-		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", rec.Name))
-		if rec.Size > 0 {
-			c.Header("Content-Length", strconv.FormatInt(rec.Size, 10))
+		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", detail.Name))
+		if detail.Size > 0 {
+			c.Header("Content-Length", strconv.FormatInt(detail.Size, 10))
 		}
 		c.Status(http.StatusOK)
 
@@ -155,26 +155,26 @@ func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 
 // -- helpers --
 
-func toFileRecordResp(rec *filestore.FileDetail) *fileRecordResponse {
+func toFileRecordResp(detail *filestore.FileDetail) *fileRecordResponse {
 	return &fileRecordResponse{
-		FileID:   rec.ID,
-		Name:     rec.Name,
-		MimeType: rec.MimeType,
-		Status:   string(rec.Status),
+		FileID:   detail.FileUploadID,
+		Name:     detail.Name,
+		MimeType: detail.MimeType,
+		Status:   string(detail.Status),
 	}
 }
 
-func toFileDetailResp(rec *filestore.FileDetail) *fileDetailResponse {
+func toFileDetailResp(detail *filestore.FileDetail) *fileDetailResponse {
 	return &fileDetailResponse{
-		FileID:      rec.ID,
-		ContentHash: rec.ContentHash,
-		Name:        rec.Name,
-		Size:        rec.Size,
-		MimeType:    rec.MimeType,
-		StorageURI:  rec.StorageURI,
-		UploadID:    rec.UploadID,
-		Status:      string(rec.Status),
-		CreatedAt:   rec.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   rec.UpdatedAt.Format(time.RFC3339),
+		FileID:      detail.FileUploadID,
+		ContentHash: detail.ContentHash,
+		Name:        detail.Name,
+		Size:        detail.Size,
+		MimeType:    detail.MimeType,
+		StorageURI:  detail.StorageURI,
+		UploadID:    detail.UploadID,
+		Status:      string(detail.Status),
+		CreatedAt:   detail.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:   detail.UpdatedAt.Format(time.RFC3339),
 	}
 }

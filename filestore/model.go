@@ -48,10 +48,20 @@ func (FileUpload) TableName() string { return "core_file_upload" }
 
 // FileDetail 组合返回 FileUpload 及其关联的 File（内容哈希/大小/存储路径）。
 type FileDetail struct {
-	FileUpload
-	ContentHash string
-	Size        int64
-	StorageURI  string
+	// FileUploadID 为 FileUpload 表主键，外部调用方通过该 ID 与 FileStore 继续交互
+	// （GetFile/DeleteFile/PresignGetFile/CompleteMultipart/AbortMultipart 等）。
+	FileUploadID uint
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	FileID       uint
+	UploadID     string
+	Name         string
+	MimeType     string
+	Status       FileStatus
+	Scene        string
+	ContentHash  string
+	Size         int64
+	StorageURI   string
 }
 
 type RecordUploadRequest struct {

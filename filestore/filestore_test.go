@@ -117,10 +117,10 @@ func TestCheckExist_NotFound(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, hit, err := fs.CheckExist(context.Background(), "nonexistent")
+	detail, hit, err := fs.CheckExist(context.Background(), "nonexistent")
 	require.NoError(t, err)
 	require.False(t, hit)
-	require.Nil(t, rec)
+	require.Nil(t, detail)
 }
 
 func TestCheckExist_Found(t *testing.T) {
@@ -128,7 +128,7 @@ func TestCheckExist_Found(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "abc123",
 		Name:        "test.txt",
 		Size:        100,
@@ -136,7 +136,7 @@ func TestCheckExist_Found(t *testing.T) {
 		StoragePath: "test.txt",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, rec)
+	require.NotNil(t, detail)
 
 	found, hit, err := fs.CheckExist(context.Background(), "abc123")
 	require.NoError(t, err)
@@ -158,25 +158,25 @@ func TestRecordUpload_SameContentHash_DifferentName(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "dup-fp",
 		Name:        "a.txt",
 		Size:        10,
 		StoragePath: "a.txt",
 	})
 	require.NoError(t, err)
-	require.Equal(t, "a.txt", rec1.Name)
+	require.Equal(t, "a.txt", detail1.Name)
 
-	rec2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "dup-fp",
 		Name:        "b.txt",
 		Size:        10,
 		StoragePath: "a.txt",
 	})
 	require.NoError(t, err)
-	require.Equal(t, "b.txt", rec2.Name)
-	require.NotEqual(t, rec1.ID, rec2.ID)
-	require.Equal(t, rec1.FileID, rec2.FileID)
+	require.Equal(t, "b.txt", detail2.Name)
+	require.NotEqual(t, detail1.FileUploadID, detail2.FileUploadID)
+	require.Equal(t, detail1.FileID, detail2.FileID)
 }
 
 func TestUploadAndRecord_Success(t *testing.T) {
@@ -185,7 +185,7 @@ func TestUploadAndRecord_Success(t *testing.T) {
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.UploadAndRecord(context.Background(), UploadAndRecordRequest{
+	detail, err := fs.UploadAndRecord(context.Background(), UploadAndRecordRequest{
 		ContentHash: "fp123",
 		Name:        "photo.jpg",
 		Size:        1024,
@@ -194,10 +194,10 @@ func TestUploadAndRecord_Success(t *testing.T) {
 		StoragePath: "images/photo.jpg",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, rec)
+	require.NotNil(t, detail)
 	require.True(t, mock.putCalled)
 	require.Equal(t, "images/photo.jpg", mock.lastKey)
-	require.Equal(t, "s3://test-bucket/images/photo.jpg", rec.StorageURI)
+	require.Equal(t, "s3://test-bucket/images/photo.jpg", detail.StorageURI)
 }
 
 func TestUploadAndRecord_Dedup_SameContentHash(t *testing.T) {
@@ -231,7 +231,7 @@ func TestUploadAndRecord_Dedup_SameContentHash(t *testing.T) {
 	second, err := fs.UploadAndRecord(context.Background(), req2)
 	require.NoError(t, err)
 	require.False(t, mock.putCalled, "should skip upload on duplicate content hash")
-	require.NotEqual(t, first.ID, second.ID, "should create new file record for different name")
+	require.NotEqual(t, first.FileUploadID, second.FileUploadID, "should create new file record for different name")
 	require.Equal(t, first.FileID, second.FileID, "should reuse same file hash")
 	require.Equal(t, "other.txt", second.Name)
 }
@@ -265,9 +265,9 @@ func TestGetFile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	found, err := fs.GetFile(context.Background(), created.ID)
+	found, err := fs.GetFile(context.Background(), created.FileUploadID)
 	require.NoError(t, err)
-	require.Equal(t, created.ID, found.ID)
+	require.Equal(t, created.FileUploadID, found.FileUploadID)
 	require.Equal(t, "s3://test-bucket/get.txt", found.StorageURI)
 }
 
@@ -286,7 +286,7 @@ func TestPresignGetFileURL_Success(t *testing.T) {
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "url-test",
 		Name:        "test.txt",
 		Size:        100,
@@ -295,7 +295,7 @@ func TestPresignGetFileURL_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	url, err := fs.PresignGetFileURL(context.Background(), rec.ID, WithExpires(time.Hour))
+	url, err := fs.PresignGetFileURL(context.Background(), detail.FileUploadID, WithExpires(time.Hour))
 	require.NoError(t, err)
 	require.True(t, mock.presignGetURLCalled)
 	require.Contains(t, url, "presign.example.com")
@@ -323,10 +323,10 @@ func TestDeleteFile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = fs.DeleteFile(context.Background(), created.ID)
+	err = fs.DeleteFile(context.Background(), created.FileUploadID)
 	require.NoError(t, err)
 
-	_, err = fs.GetFile(context.Background(), created.ID)
+	_, err = fs.GetFile(context.Background(), created.FileUploadID)
 	require.ErrorIs(t, err, ErrFileNotFound)
 }
 
@@ -336,7 +336,7 @@ func TestInitMultipartUpload_Success(t *testing.T) {
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
 		ContentHash: "mp-fp",
 		Name:        "large.mp4",
 		Size:        10485760,
@@ -344,12 +344,12 @@ func TestInitMultipartUpload_Success(t *testing.T) {
 		StoragePath: "videos/large.mp4",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, rec)
+	require.NotNil(t, detail)
 	require.True(t, mock.multipartCalled)
 	require.Equal(t, "videos/large.mp4", mock.lastKey)
-	require.Equal(t, "mock-upload-id-123", rec.UploadID)
-	require.Equal(t, FileStatusUploading, rec.Status)
-	require.Equal(t, "s3://test-bucket/videos/large.mp4", rec.StorageURI)
+	require.Equal(t, "mock-upload-id-123", detail.UploadID)
+	require.Equal(t, FileStatusUploading, detail.Status)
+	require.Equal(t, "s3://test-bucket/videos/large.mp4", detail.StorageURI)
 }
 
 func TestInitMultipartUpload_InvalidArgs(t *testing.T) {
@@ -366,7 +366,7 @@ func TestPresignUploadPartURL_Success(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
 		ContentHash: "presign-test",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -374,7 +374,7 @@ func TestPresignUploadPartURL_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	url, err := fs.PresignUploadPartURL(context.Background(), rec.ID, 1, WithExpires(time.Hour))
+	url, err := fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 1, WithExpires(time.Hour))
 	require.NoError(t, err)
 	require.Contains(t, url, "presign.example.com")
 	require.Contains(t, url, "1h0m0s")
@@ -385,7 +385,7 @@ func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "non-mp",
 		Name:        "small.txt",
 		Size:        100,
@@ -393,7 +393,7 @@ func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = fs.PresignUploadPartURL(context.Background(), rec.ID, 1, WithExpires(time.Hour))
+	_, err = fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 1, WithExpires(time.Hour))
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
 }
 
@@ -412,7 +412,7 @@ func TestPresignGetFileURL_DefaultExpiry(t *testing.T) {
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "default-expiry",
 		Name:        "test.txt",
 		Size:        100,
@@ -421,7 +421,7 @@ func TestPresignGetFileURL_DefaultExpiry(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	url, err := fs.PresignGetFileURL(context.Background(), rec.ID)
+	url, err := fs.PresignGetFileURL(context.Background(), detail.FileUploadID)
 	require.NoError(t, err)
 	require.True(t, mock.presignGetURLCalled)
 	require.Contains(t, url, defaultPresignExpiry.String())
@@ -432,7 +432,7 @@ func TestPresignUploadPartURL_WithExpires(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
 		ContentHash: "presign-expires-test",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -440,7 +440,7 @@ func TestPresignUploadPartURL_WithExpires(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	url, err := fs.PresignUploadPartURL(context.Background(), rec.ID, 1, WithExpires(5*time.Minute))
+	url, err := fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 1, WithExpires(5*time.Minute))
 	require.NoError(t, err)
 	require.Contains(t, url, "5m0s")
 }
@@ -450,7 +450,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
 		ContentHash: "complete-test",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -463,7 +463,7 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 		{PartNumber: 2, ETag: "etag-2"},
 	}
 	updated, err := fs.CompleteMultipartUpload(context.Background(), CompleteMultipartUploadRequest{
-		ID:    rec.ID,
+		ID:    detail.FileUploadID,
 		Parts: parts,
 	})
 	require.NoError(t, err)
@@ -476,7 +476,7 @@ func TestCompleteMultipartUpload_NotMultipart(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "complete-non-mp",
 		Name:        "small.txt",
 		Size:        100,
@@ -484,7 +484,7 @@ func TestCompleteMultipartUpload_NotMultipart(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = fs.CompleteMultipartUpload(context.Background(), CompleteMultipartUploadRequest{ID: rec.ID})
+	_, err = fs.CompleteMultipartUpload(context.Background(), CompleteMultipartUploadRequest{ID: detail.FileUploadID})
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
 }
 
@@ -493,7 +493,7 @@ func TestAbortMultipartUpload_Success(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
 		ContentHash: "abort-test",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -501,10 +501,10 @@ func TestAbortMultipartUpload_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = fs.AbortMultipartUpload(context.Background(), rec.ID)
+	err = fs.AbortMultipartUpload(context.Background(), detail.FileUploadID)
 	require.NoError(t, err)
 
-	aborted, err := fs.GetFile(context.Background(), rec.ID)
+	aborted, err := fs.GetFile(context.Background(), detail.FileUploadID)
 	require.NoError(t, err)
 	require.Equal(t, FileStatusAborted, aborted.Status)
 }
@@ -514,7 +514,7 @@ func TestAbortMultipartUpload_NotMultipart(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "abort-non-mp",
 		Name:        "small.txt",
 		Size:        100,
@@ -522,7 +522,7 @@ func TestAbortMultipartUpload_NotMultipart(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = fs.AbortMultipartUpload(context.Background(), rec.ID)
+	err = fs.AbortMultipartUpload(context.Background(), detail.FileUploadID)
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
 }
 
@@ -531,7 +531,7 @@ func TestDeleteFileRecord_HashRemains(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	rec1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "hash-persist",
 		Name:        "first.txt",
 		Size:        100,
@@ -539,17 +539,17 @@ func TestDeleteFileRecord_HashRemains(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = fs.DeleteFile(context.Background(), rec1.ID)
+	err = fs.DeleteFile(context.Background(), detail1.FileUploadID)
 	require.NoError(t, err)
 
-	rec2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
 		ContentHash: "hash-persist",
 		Name:        "second.txt",
 		Size:        100,
 		StoragePath: "first.txt",
 	})
 	require.NoError(t, err)
-	require.Equal(t, "second.txt", rec2.Name)
-	require.NotEqual(t, rec1.ID, rec2.ID)
-	require.Equal(t, rec1.FileID, rec2.FileID)
+	require.Equal(t, "second.txt", detail2.Name)
+	require.NotEqual(t, detail1.FileUploadID, detail2.FileUploadID)
+	require.Equal(t, detail1.FileID, detail2.FileID)
 }

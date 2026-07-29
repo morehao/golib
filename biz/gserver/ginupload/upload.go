@@ -44,7 +44,7 @@ func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		h := sha256.New()
 		reader := io.TeeReader(f, h)
 
-		rec, err := fs.UploadAndRecord(c.Request.Context(), filestore.UploadAndRecordRequest{
+		detail, err := fs.UploadAndRecord(c.Request.Context(), filestore.UploadAndRecordRequest{
 			ContentHash: req.ContentHash,
 			Name:        fh.Filename,
 			Size:        fh.Size,
@@ -57,7 +57,7 @@ func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		gincontext.Success(c, toFileRecordResp(rec))
+		gincontext.Success(c, toFileRecordResp(detail))
 	}
 }
 
@@ -75,15 +75,15 @@ func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		rec, exists, err := fs.CheckExist(c.Request.Context(), req.ContentHash)
+		detail, exists, err := fs.CheckExist(c.Request.Context(), req.ContentHash)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
 
 		resp := checkExistResponse{Exists: exists}
-		if exists && rec != nil {
-			resp.File = toFileRecordResp(rec)
+		if exists && detail != nil {
+			resp.File = toFileRecordResp(detail)
 		}
 		gincontext.Success(c, resp)
 	}
@@ -104,7 +104,7 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		rec, err := fs.InitMultipartUpload(c.Request.Context(), filestore.InitMultipartUploadRequest{
+		detail, err := fs.InitMultipartUpload(c.Request.Context(), filestore.InitMultipartUploadRequest{
 			ContentHash: req.ContentHash,
 			Name:        req.Name,
 			Size:        req.Size,
@@ -117,8 +117,8 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		gincontext.Success(c, createMultipartResponse{
-			FileID:   rec.ID,
-			UploadID: rec.UploadID,
+			FileID:   detail.FileUploadID,
+			UploadID: detail.UploadID,
 		})
 	}
 }
@@ -169,7 +169,7 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			parts[i] = storage.CompletedPart{PartNumber: int(p.PartNumber), ETag: p.ETag}
 		}
 
-		rec, err := fs.CompleteMultipartUpload(c.Request.Context(), filestore.CompleteMultipartUploadRequest{
+		detail, err := fs.CompleteMultipartUpload(c.Request.Context(), filestore.CompleteMultipartUploadRequest{
 			ID:    req.FileID,
 			Parts: parts,
 		})
@@ -178,7 +178,7 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		gincontext.Success(c, toFileRecordResp(rec))
+		gincontext.Success(c, toFileRecordResp(detail))
 	}
 }
 

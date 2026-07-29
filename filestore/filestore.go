@@ -116,20 +116,29 @@ func (s *FileStore) parseStorageURI(uri string) (scheme, bucket, key string, err
 	return scheme, bucket, key, nil
 }
 
-func (s *FileStore) fillFileDetail(ctx context.Context, rec *FileUpload) (*FileDetail, error) {
-	if rec.FileID == 0 {
-		return &FileDetail{FileUpload: *rec}, nil
+func (s *FileStore) fillFileDetail(ctx context.Context, upload *FileUpload) (*FileDetail, error) {
+	detail := &FileDetail{
+		FileUploadID: upload.ID,
+		CreatedAt:    upload.CreatedAt,
+		UpdatedAt:    upload.UpdatedAt,
+		FileID:       upload.FileID,
+		UploadID:     upload.UploadID,
+		Name:         upload.Name,
+		MimeType:     upload.MimeType,
+		Status:       upload.Status,
+		Scene:        upload.Scene,
 	}
-	fh, err := s.store.GetFileByID(ctx, rec.FileID)
+	if upload.FileID == 0 {
+		return detail, nil
+	}
+	fh, err := s.store.GetFileByID(ctx, upload.FileID)
 	if err != nil {
 		return nil, err
 	}
-	return &FileDetail{
-		FileUpload:  *rec,
-		ContentHash: fh.ContentHash,
-		Size:        fh.Size,
-		StorageURI:  fh.StorageURI,
-	}, nil
+	detail.ContentHash = fh.ContentHash
+	detail.Size = fh.Size
+	detail.StorageURI = fh.StorageURI
+	return detail, nil
 }
 
 func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, size int64, storagePath string) (*File, error) {
@@ -162,7 +171,7 @@ func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileDe
 	}
 
 	return &FileDetail{
-		FileUpload:  FileUpload{FileID: fh.ID},
+		FileID:      fh.ID,
 		ContentHash: fh.ContentHash,
 		Size:        fh.Size,
 		StorageURI:  fh.StorageURI,
@@ -179,7 +188,7 @@ func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (
 		return nil, fmt.Errorf("filestore.RecordUpload: %w", err)
 	}
 
-	rec := &FileUpload{
+	upload := &FileUpload{
 		FileID:   fh.ID,
 		Name:     req.Name,
 		MimeType: req.MimeType,
@@ -187,11 +196,11 @@ func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (
 		Status:   FileStatusCompleted,
 	}
 
-	if err := s.store.CreateFileRecord(ctx, rec); err != nil {
+	if err := s.store.CreateFileRecord(ctx, upload); err != nil {
 		return nil, fmt.Errorf("filestore.RecordUpload: create record: %w", err)
 	}
 
-	return s.fillFileDetail(ctx, rec)
+	return s.fillFileDetail(ctx, upload)
 }
 
 func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileDetail, error) {
@@ -236,26 +245,26 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		}
 	}
 
-	rec := &FileUpload{
+	upload := &FileUpload{
 		FileID:   fh.ID,
 		Name:     req.Name,
 		MimeType: req.MimeType,
 		Scene:    req.Scene,
 		Status:   FileStatusCompleted,
 	}
-	if err := s.store.CreateFileRecord(ctx, rec); err != nil {
+	if err := s.store.CreateFileRecord(ctx, upload); err != nil {
 		return nil, fmt.Errorf("filestore.UploadAndRecord: create record: %w", err)
 	}
 
-	return s.fillFileDetail(ctx, rec)
+	return s.fillFileDetail(ctx, upload)
 }
 
 func (s *FileStore) GetFile(ctx context.Context, id uint) (*FileDetail, error) {
-	rec, err := s.store.GetFileRecordByID(ctx, id)
+	upload, err := s.store.GetFileRecordByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.GetFile: %w", err)
 	}
-	return s.fillFileDetail(ctx, rec)
+	return s.fillFileDetail(ctx, upload)
 }
 
 func (s *FileStore) PresignGetFileURL(ctx context.Context, id uint, opts ...PresignOption) (string, error) {
@@ -314,7 +323,7 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: %w", fhErr)
 	}
 
-	rec := &FileUpload{
+	upload := &FileUpload{
 		FileID:   fh.ID,
 		Name:     req.Name,
 		MimeType: req.MimeType,
@@ -322,12 +331,12 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		UploadID: uploadID,
 		Status:   FileStatusUploading,
 	}
-	if err := s.store.CreateFileRecord(ctx, rec); err != nil {
+	if err := s.store.CreateFileRecord(ctx, upload); err != nil {
 		_ = s.st.AbortMultipartUpload(ctx, s.bucket, req.StoragePath, uploadID)
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: create record: %w", err)
 	}
 
-	return s.fillFileDetail(ctx, rec)
+	return s.fillFileDetail(ctx, upload)
 }
 
 func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum int32, opts ...PresignOption) (string, error) {

@@ -295,7 +295,7 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 	router := setupRouter(fs)
 
 	// init first
-	rec, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
 		ContentHash: "presign-fp",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -304,7 +304,7 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 	require.NoError(t, err)
 
 	w := postJSON(router, "/api/v1/file/presignUploadPartURL", presignPartRequest{
-		FileID: rec.ID,
+		FileID: detail.FileUploadID,
 		PartNumber: 1,
 	})
 	require.Equal(t, 200, w.Code)
@@ -343,7 +343,7 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
 		ContentHash: "complete-fp",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -352,7 +352,7 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 	require.NoError(t, err)
 
 	req := completeMultipartRequest{
-		FileID: rec.ID,
+		FileID: detail.FileUploadID,
 		Parts: []uploadPart{
 			{PartNumber: 1, ETag: "etag-1"},
 			{PartNumber: 2, ETag: "etag-2"},
@@ -392,7 +392,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
 		ContentHash: "abort-fp",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -400,7 +400,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/abortMultipartUpload", fileIDRequest{FileID: rec.ID})
+	w := postJSON(router, "/api/v1/file/abortMultipartUpload", fileIDRequest{FileID: detail.FileUploadID})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -411,7 +411,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	require.Equal(t, 0, resp.Code)
 
 	// verify status changed
-	updated, err := fs.GetFile(bg, rec.ID)
+	updated, err := fs.GetFile(bg, detail.FileUploadID)
 	require.NoError(t, err)
 	require.Equal(t, filestore.FileStatusAborted, updated.Status)
 }
@@ -420,17 +420,17 @@ func TestHandleGetFileDetail(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		ContentHash: "detail-fp",
-		Name:        "detail.txt",
+	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+		ContentHash: "rec-fp",
+		Name:        "rec.txt",
 		Size:        100,
 		MimeType:    "text/plain",
-		StoragePath: "detail.txt",
+		StoragePath: "rec.txt",
 	})
 	require.NoError(t, err)
 
 	t.Run("found", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/getFileDetail", fileIDRequest{FileID: rec.ID})
+		w := postJSON(router, "/api/v1/file/getFileDetail", fileIDRequest{FileID: detail.FileUploadID})
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -440,8 +440,8 @@ func TestHandleGetFileDetail(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.Equal(t, 0, resp.Code)
-		require.Equal(t, rec.ID, resp.Data.FileID)
-		require.Equal(t, "detail.txt", resp.Data.Name)
+		require.Equal(t, detail.FileUploadID, resp.Data.FileID)
+		require.Equal(t, "rec.txt", resp.Data.Name)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -463,7 +463,7 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
 		ContentHash: "dl-fp",
 		Name:        "download.txt",
 		Size:        100,
@@ -472,7 +472,7 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/presignGetFileURL", presignDownloadRequest{FileID: rec.ID})
+	w := postJSON(router, "/api/v1/file/presignGetFileURL", presignDownloadRequest{FileID: detail.FileUploadID})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -507,15 +507,15 @@ func TestHandleDeleteFile(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		ContentHash: "del-fp",
+	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+		ContentHash: "detail-fp",
 		Name:        "del.txt",
 		Size:        10,
 		StoragePath: "del.txt",
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/deleteFile", fileIDRequest{FileID: rec.ID})
+	w := postJSON(router, "/api/v1/file/deleteFile", fileIDRequest{FileID: detail.FileUploadID})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -526,7 +526,7 @@ func TestHandleDeleteFile(t *testing.T) {
 	require.Equal(t, 0, resp.Code)
 
 	// verify deleted
-	_, err = fs.GetFile(bg, rec.ID)
+	_, err = fs.GetFile(bg, detail.FileUploadID)
 	require.Error(t, err)
 }
 
@@ -570,11 +570,11 @@ func TestHandleUpload_StorageFailure(t *testing.T) {
 	require.Contains(t, resp.Msg, "unexpected EOF")
 }
 
-func TestHandleRedirectGetFileURL(t *testing.T) {
+func TestHandleRedidetailtGetFileURL(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
 		ContentHash: "redirect-fp",
 		Name:        "img.png",
 		Size:        1024,
@@ -585,7 +585,7 @@ func TestHandleRedirectGetFileURL(t *testing.T) {
 
 	t.Run("redirects to presigned URL", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/redirect/%d", rec.ID), nil)
+		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/redirect/%d", detail.FileUploadID), nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 302, w.Code)
@@ -626,7 +626,7 @@ func TestHandleServeFileByID(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	rec, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
 		ContentHash: "serve-fp",
 		Name:        "hello.txt",
 		Size:        11,
@@ -637,7 +637,7 @@ func TestHandleServeFileByID(t *testing.T) {
 
 	t.Run("serves file content", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/serve/%d", rec.ID), nil)
+		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/serve/%d", detail.FileUploadID), nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 200, w.Code)
