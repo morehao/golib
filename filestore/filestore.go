@@ -68,13 +68,13 @@ func (s *FileStore) IsLocal() bool {
 	return s.st.PathBuilder().Build(s.bucket, "").IsLocal()
 }
 
-func (s *FileStore) Open(ctx context.Context, id uint) (io.ReadCloser, *FileUpload, error) {
-	rec, err := s.GetFile(ctx, id)
+func (s *FileStore) Open(ctx context.Context, id uint) (io.ReadCloser, *FileDetail, error) {
+	detail, err := s.GetFile(ctx, id)
 	if err != nil {
 		return nil, nil, fmt.Errorf("filestore.Open: %w", err)
 	}
 
-	_, bucket, key, err := s.parseStorageURI(rec.StorageURI)
+	_, bucket, key, err := s.parseStorageURI(detail.StorageURI)
 	if err != nil {
 		return nil, nil, fmt.Errorf("filestore.Open: %w", err)
 	}
@@ -84,7 +84,7 @@ func (s *FileStore) Open(ctx context.Context, id uint) (io.ReadCloser, *FileUplo
 		return nil, nil, fmt.Errorf("filestore.Open: get object: %w", err)
 	}
 
-	return result.Body, rec, nil
+	return result.Body, detail, nil
 }
 
 func applyPresignOptions(opts ...PresignOption) time.Duration {
@@ -116,6 +116,22 @@ func (s *FileStore) parseStorageURI(uri string) (scheme, bucket, key string, err
 	return scheme, bucket, key, nil
 }
 
+func (s *FileStore) fillFileDetail(ctx context.Context, rec *FileUpload) (*FileDetail, error) {
+	if rec.FileID == 0 {
+		return &FileDetail{FileUpload: *rec}, nil
+	}
+	fh, err := s.store.GetFileByID(ctx, rec.FileID)
+	if err != nil {
+		return nil, err
+	}
+	return &FileDetail{
+		FileUpload:  *rec,
+		ContentHash: fh.ContentHash,
+		Size:        fh.Size,
+		StorageURI:  fh.StorageURI,
+	}, nil
+}
+
 func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, size int64, storagePath string) (*File, error) {
 	fh, err := s.store.GetFileHashByContentHash(ctx, contentHash)
 	if err == nil {
@@ -136,7 +152,7 @@ func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, si
 	return fh, nil
 }
 
-func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileUpload, bool, error) {
+func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileDetail, bool, error) {
 	fh, err := s.store.GetFileHashByContentHash(ctx, contentHash)
 	if err != nil {
 		if errors.Is(err, ErrFileNotFound) {
@@ -145,15 +161,15 @@ func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileUp
 		return nil, false, fmt.Errorf("filestore.CheckExist: %w", err)
 	}
 
-	return &FileUpload{
-		FileHashID:  fh.ID,
+	return &FileDetail{
+		FileUpload:  FileUpload{FileID: fh.ID},
 		ContentHash: fh.ContentHash,
 		Size:        fh.Size,
 		StorageURI:  fh.StorageURI,
 	}, true, nil
 }
 
-func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (*FileUpload, error) {
+func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (*FileDetail, error) {
 	if req.ContentHash == "" || req.StoragePath == "" {
 		return nil, fmt.Errorf("%w: content_hash and storage_path are required", ErrInvalidArgument)
 	}
@@ -164,23 +180,21 @@ func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (
 	}
 
 	rec := &FileUpload{
-		FileHashID: fh.ID,
-		Name:       req.Name,
-		MimeType:   req.MimeType,
-		Status:     FileStatusCompleted,
+		FileID:   fh.ID,
+		Name:     req.Name,
+		MimeType: req.MimeType,
+		Scene:    req.Scene,
+		Status:   FileStatusCompleted,
 	}
 
 	if err := s.store.CreateFileRecord(ctx, rec); err != nil {
 		return nil, fmt.Errorf("filestore.RecordUpload: create record: %w", err)
 	}
 
-	rec.ContentHash = fh.ContentHash
-	rec.Size = fh.Size
-	rec.StorageURI = fh.StorageURI
-	return rec, nil
+	return s.fillFileDetail(ctx, rec)
 }
 
-func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileUpload, error) {
+func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileDetail, error) {
 	if req.ContentHash == "" || req.StoragePath == "" || req.Reader == nil {
 		return nil, fmt.Errorf("%w: content_hash, storage_path and reader are required", ErrInvalidArgument)
 	}
@@ -223,36 +237,34 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 	}
 
 	rec := &FileUpload{
-		FileHashID: fh.ID,
-		Name:       req.Name,
-		MimeType:   req.MimeType,
-		Status:     FileStatusCompleted,
+		FileID:   fh.ID,
+		Name:     req.Name,
+		MimeType: req.MimeType,
+		Scene:    req.Scene,
+		Status:   FileStatusCompleted,
 	}
 	if err := s.store.CreateFileRecord(ctx, rec); err != nil {
 		return nil, fmt.Errorf("filestore.UploadAndRecord: create record: %w", err)
 	}
 
-	rec.ContentHash = fh.ContentHash
-	rec.Size = fh.Size
-	rec.StorageURI = fh.StorageURI
-	return rec, nil
+	return s.fillFileDetail(ctx, rec)
 }
 
-func (s *FileStore) GetFile(ctx context.Context, id uint) (*FileUpload, error) {
+func (s *FileStore) GetFile(ctx context.Context, id uint) (*FileDetail, error) {
 	rec, err := s.store.GetFileRecordByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.GetFile: %w", err)
 	}
-	return rec, nil
+	return s.fillFileDetail(ctx, rec)
 }
 
 func (s *FileStore) PresignGetFileURL(ctx context.Context, id uint, opts ...PresignOption) (string, error) {
-	rec, err := s.store.GetFileRecordByID(ctx, id)
+	detail, err := s.GetFile(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignGetFileURL: %w", err)
 	}
 
-	_, bucket, key, err := s.parseStorageURI(rec.StorageURI)
+	_, bucket, key, err := s.parseStorageURI(detail.StorageURI)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignGetFileURL: %w", err)
 	}
@@ -278,6 +290,7 @@ type InitMultipartUploadRequest struct {
 	Size        int64
 	MimeType    string
 	StoragePath string
+	Scene       string
 }
 
 type CompleteMultipartUploadRequest struct {
@@ -285,7 +298,7 @@ type CompleteMultipartUploadRequest struct {
 	Parts []storage.CompletedPart
 }
 
-func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUploadRequest) (*FileUpload, error) {
+func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUploadRequest) (*FileDetail, error) {
 	if req.ContentHash == "" || req.StoragePath == "" {
 		return nil, fmt.Errorf("%w: content_hash and storage_path are required", ErrInvalidArgument)
 	}
@@ -302,33 +315,31 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 	}
 
 	rec := &FileUpload{
-		FileHashID: fh.ID,
-		Name:       req.Name,
-		MimeType:   req.MimeType,
-		UploadID:   uploadID,
-		Status:     FileStatusUploading,
+		FileID:   fh.ID,
+		Name:     req.Name,
+		MimeType: req.MimeType,
+		Scene:    req.Scene,
+		UploadID: uploadID,
+		Status:   FileStatusUploading,
 	}
 	if err := s.store.CreateFileRecord(ctx, rec); err != nil {
 		_ = s.st.AbortMultipartUpload(ctx, s.bucket, req.StoragePath, uploadID)
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: create record: %w", err)
 	}
 
-	rec.ContentHash = fh.ContentHash
-	rec.Size = fh.Size
-	rec.StorageURI = fh.StorageURI
-	return rec, nil
+	return s.fillFileDetail(ctx, rec)
 }
 
 func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum int32, opts ...PresignOption) (string, error) {
-	rec, err := s.store.GetFileRecordByID(ctx, id)
+	detail, err := s.GetFile(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignUploadPartURL: %w", err)
 	}
-	if rec.UploadID == "" {
+	if detail.UploadID == "" {
 		return "", fmt.Errorf("%w: id=%d", ErrNotMultipartUpload, id)
 	}
 
-	_, bucket, key, err := s.parseStorageURI(rec.StorageURI)
+	_, bucket, key, err := s.parseStorageURI(detail.StorageURI)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignUploadPartURL: %w", err)
 	}
@@ -341,16 +352,16 @@ func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum i
 	return url, nil
 }
 
-func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMultipartUploadRequest) (*FileUpload, error) {
-	rec, err := s.store.GetFileRecordByID(ctx, req.ID)
+func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMultipartUploadRequest) (*FileDetail, error) {
+	detail, err := s.GetFile(ctx, req.ID)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: %w", err)
 	}
-	if rec.UploadID == "" {
+	if detail.UploadID == "" {
 		return nil, fmt.Errorf("%w: id=%d", ErrNotMultipartUpload, req.ID)
 	}
 
-	_, bucket, key, err := s.parseStorageURI(rec.StorageURI)
+	_, bucket, key, err := s.parseStorageURI(detail.StorageURI)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: %w", err)
 	}
@@ -359,7 +370,7 @@ func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMul
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: update status to merging: %w", err)
 	}
 
-	if err := s.st.CompleteMultipartUpload(ctx, bucket, key, rec.UploadID, req.Parts); err != nil {
+	if err := s.st.CompleteMultipartUpload(ctx, bucket, key, detail.UploadID, req.Parts); err != nil {
 		_ = s.store.UpdateFileRecordStatus(ctx, req.ID, FileStatusUploading)
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: complete: %w", err)
 	}
@@ -368,7 +379,7 @@ func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMul
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: clear upload id: %w", err)
 	}
 
-	updated, err := s.store.GetFileRecordByID(ctx, req.ID)
+	updated, err := s.GetFile(ctx, req.ID)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: get updated: %w", err)
 	}
@@ -376,20 +387,20 @@ func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMul
 }
 
 func (s *FileStore) AbortMultipartUpload(ctx context.Context, id uint) error {
-	rec, err := s.store.GetFileRecordByID(ctx, id)
+	detail, err := s.GetFile(ctx, id)
 	if err != nil {
 		return fmt.Errorf("filestore.AbortMultipartUpload: %w", err)
 	}
-	if rec.UploadID == "" {
+	if detail.UploadID == "" {
 		return fmt.Errorf("%w: id=%d", ErrNotMultipartUpload, id)
 	}
 
-	_, bucket, key, err := s.parseStorageURI(rec.StorageURI)
+	_, bucket, key, err := s.parseStorageURI(detail.StorageURI)
 	if err != nil {
 		return fmt.Errorf("filestore.AbortMultipartUpload: %w", err)
 	}
 
-	if err := s.st.AbortMultipartUpload(ctx, bucket, key, rec.UploadID); err != nil {
+	if err := s.st.AbortMultipartUpload(ctx, bucket, key, detail.UploadID); err != nil {
 		return fmt.Errorf("filestore.AbortMultipartUpload: abort: %w", err)
 	}
 

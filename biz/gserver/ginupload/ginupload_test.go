@@ -144,7 +144,7 @@ func TestHandleUpload(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		require.Equal(t, 0, resp.Code)
-		require.NotZero(t, resp.Data.FileHashID)
+		require.NotZero(t, resp.Data.FileID)
 	})
 
 	t.Run("missing content hash", func(t *testing.T) {
@@ -201,7 +201,6 @@ func TestHandleCheckExist(t *testing.T) {
 		require.Equal(t, 0, resp.Code)
 		require.True(t, resp.Data.Exists)
 		require.NotNil(t, resp.Data.File)
-		require.NotZero(t, resp.Data.File.FileHashID)
 	})
 
 	t.Run("not exists", func(t *testing.T) {
@@ -256,7 +255,7 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
 	require.NotEmpty(t, resp.Data.UploadID)
-	require.NotZero(t, resp.Data.FileHashID)
+	require.NotZero(t, resp.Data.FileID)
 }
 
 func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
@@ -288,7 +287,7 @@ func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
 	require.NotEmpty(t, resp.Data.UploadID)
-	require.NotZero(t, resp.Data.FileHashID)
+	require.NotZero(t, resp.Data.FileID)
 }
 
 func TestHandlePresignUploadPartURL(t *testing.T) {

@@ -38,6 +38,20 @@ func (s *store) GetFileHashByContentHash(ctx context.Context, contentHash string
 	return &fh, nil
 }
 
+func (s *store) GetFileByID(ctx context.Context, fileID uint) (*File, error) {
+	var fh File
+	result := s.db.WithContext(ctx).
+		Where("id = ?", fileID).
+		Find(&fh)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, fmt.Errorf("%w: file_id=%d", ErrFileNotFound, fileID)
+	}
+	return &fh, nil
+}
+
 func (s *store) CreateFileRecord(ctx context.Context, rec *FileUpload) error {
 	return s.db.WithContext(ctx).Create(rec).Error
 }
@@ -54,23 +68,7 @@ func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileUpload, er
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: id=%d", ErrFileNotFound, id)
 	}
-	if rec.FileHashID > 0 {
-		s.fillRecordHashInfo(ctx, &rec)
-	}
 	return &rec, nil
-}
-
-func (s *store) fillRecordHashInfo(ctx context.Context, rec *FileUpload) {
-	var fh File
-	if err := s.db.WithContext(ctx).Where("id = ?", rec.FileHashID).Find(&fh).Error; err != nil {
-		return
-	}
-	if fh.ID == 0 {
-		return
-	}
-	rec.ContentHash = fh.ContentHash
-	rec.Size = fh.Size
-	rec.StorageURI = fh.StorageURI
 }
 
 func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*FileUpload, error) {
@@ -84,9 +82,6 @@ func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*
 	}
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: uploadID=%s", ErrFileNotFound, uploadID)
-	}
-	if rec.FileHashID > 0 {
-		s.fillRecordHashInfo(ctx, &rec)
 	}
 	return &rec, nil
 }
@@ -150,11 +145,6 @@ func (s *store) ListFileRecords(ctx context.Context, cond *fileCond) ([]FileUplo
 	var list []FileUpload
 	if err := db.Find(&list).Error; err != nil {
 		return nil, 0, err
-	}
-	for i := range list {
-		if list[i].FileHashID > 0 {
-			s.fillRecordHashInfo(ctx, &list[i])
-		}
 	}
 	return list, total, nil
 }

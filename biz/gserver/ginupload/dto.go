@@ -3,7 +3,7 @@ package ginupload
 // --- common ---
 
 type fileIDRequest struct {
-	FileID uint `json:"file_id" form:"file_id" binding:"required"` // 文件ID
+	FileID uint `json:"file_id" form:"file_id" binding:"required"` // 文件ID(core_file_upload.id)
 }
 
 type presignURLResponse struct {
@@ -17,11 +17,10 @@ type uploadPart struct {
 }
 
 type fileRecordResponse struct {
-	FileID     uint   `json:"file_id"`
-	FileHashID uint   `json:"file_hash_id"`
-	Name       string `json:"name"`
-	MimeType   string `json:"mime_type"`
-	Status     string `json:"status"`
+	FileID   uint   `json:"file_id"`
+	Name     string `json:"name"`
+	MimeType string `json:"mime_type"`
+	Status   string `json:"status"`
 }
 
 // --- upload ---
@@ -48,9 +47,8 @@ type createMultipartRequest struct {
 }
 
 type createMultipartResponse struct {
-	FileID     uint   `json:"file_id"`
-	UploadID   string `json:"upload_id"`
-	FileHashID uint   `json:"file_hash_id"`
+	FileID   uint   `json:"file_id"`
+	UploadID string `json:"upload_id"`
 }
 
 type presignPartRequest struct {
@@ -67,7 +65,6 @@ type completeMultipartRequest struct {
 
 type fileDetailResponse struct {
 	FileID      uint   `json:"file_id"`
-	FileHashID  uint   `json:"file_hash_id"`
 	ContentHash string `json:"content_hash"` // 内容哈希
 	Name        string `json:"name"`
 	Size        int64  `json:"size"`

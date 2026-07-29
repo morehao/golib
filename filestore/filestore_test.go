@@ -176,7 +176,7 @@ func TestRecordUpload_SameContentHash_DifferentName(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "b.txt", rec2.Name)
 	require.NotEqual(t, rec1.ID, rec2.ID)
-	require.Equal(t, rec1.FileHashID, rec2.FileHashID)
+	require.Equal(t, rec1.FileID, rec2.FileID)
 }
 
 func TestUploadAndRecord_Success(t *testing.T) {
@@ -232,7 +232,7 @@ func TestUploadAndRecord_Dedup_SameContentHash(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, mock.putCalled, "should skip upload on duplicate content hash")
 	require.NotEqual(t, first.ID, second.ID, "should create new file record for different name")
-	require.Equal(t, first.FileHashID, second.FileHashID, "should reuse same file hash")
+	require.Equal(t, first.FileID, second.FileID, "should reuse same file hash")
 	require.Equal(t, "other.txt", second.Name)
 }
 
@@ -551,5 +551,5 @@ func TestDeleteFileRecord_HashRemains(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "second.txt", rec2.Name)
 	require.NotEqual(t, rec1.ID, rec2.ID)
-	require.Equal(t, rec1.FileHashID, rec2.FileHashID)
+	require.Equal(t, rec1.FileID, rec2.FileID)
 }
