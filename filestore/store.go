@@ -7,11 +7,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	tableFileRecord = "core_file_upload"
-	tableFileHash   = "core_file"
-)
-
 type store struct {
 	db *gorm.DB
 }
@@ -21,12 +16,13 @@ func newStore(db *gorm.DB) *store {
 }
 
 func (s *store) CreateFileHash(ctx context.Context, fh *File) error {
-	return s.db.WithContext(ctx).Create(fh).Error
+	return s.db.WithContext(ctx).Table(File{}.TableName()).Create(fh).Error
 }
 
 func (s *store) GetFileHashByContentHash(ctx context.Context, contentHash string) (*File, error) {
 	var fh File
 	result := s.db.WithContext(ctx).
+		Table(File{}.TableName()).
 		Where("content_hash = ?", contentHash).
 		Find(&fh)
 	if result.Error != nil {
@@ -41,6 +37,7 @@ func (s *store) GetFileHashByContentHash(ctx context.Context, contentHash string
 func (s *store) GetFileByID(ctx context.Context, fileID uint) (*File, error) {
 	var fh File
 	result := s.db.WithContext(ctx).
+		Table(File{}.TableName()).
 		Where("id = ?", fileID).
 		Find(&fh)
 	if result.Error != nil {
@@ -59,7 +56,7 @@ func (s *store) CreateFileRecord(ctx context.Context, rec *FileUpload) error {
 func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileUpload, error) {
 	var rec FileUpload
 	result := s.db.WithContext(ctx).
-		Table(tableFileRecord).
+		Table(FileUpload{}.TableName()).
 		Where("id = ?", id).
 		Find(&rec)
 	if result.Error != nil {
@@ -74,7 +71,7 @@ func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileUpload, er
 func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*FileUpload, error) {
 	var rec FileUpload
 	result := s.db.WithContext(ctx).
-		Table(tableFileRecord).
+		Table(FileUpload{}.TableName()).
 		Where("upload_id = ?", uploadID).
 		Find(&rec)
 	if result.Error != nil {
@@ -129,8 +126,8 @@ func (s *store) DeleteFileRecord(ctx context.Context, id uint) error {
 }
 
 func (s *store) ListFileRecords(ctx context.Context, cond *fileCond) ([]FileUpload, int64, error) {
-	db := s.db.WithContext(ctx).Table(tableFileRecord)
-	cond.BuildCondition(db, tableFileRecord)
+	db := s.db.WithContext(ctx).Table(FileUpload{}.TableName())
+	cond.BuildCondition(db, FileUpload{}.TableName())
 
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
