@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/morehao/golib/biz/gconstant"
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 )
