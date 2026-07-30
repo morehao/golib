@@ -19,9 +19,10 @@ const (
 )
 
 // RegisterPresignedRoutes 注册 local 模式下的预签名 URL 消费路由。
-func RegisterPresignedRoutes(engine *gin.Engine, fs *filestore.FileStore) {
-	engine.PUT("/:bucket/*key", handlePresignedPut(fs))
-	engine.GET("/:bucket/*key", handlePresignedGet(fs))
+func RegisterPresignedRoutes(group *gin.RouterGroup, fs *filestore.FileStore) {
+	r := group.Group("/object")
+	r.PUT("/:bucket/*key", handlePresignedPut(fs))
+	r.GET("/:bucket/*key", handlePresignedGet(fs))
 }
 
 // handlePresignedPut 消费预签名 PUT URL，验证 token 后将文件内容写入存储

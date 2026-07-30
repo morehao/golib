@@ -3,12 +3,17 @@ package ginupload
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +45,13 @@ func (m *mockStorage) GetObject(_ context.Context, _ string, key string, _ ...st
 
 func (m *mockStorage) PutObject(_ context.Context, _ string, _ string, reader io.Reader, _ ...storage.PutOption) (*storage.PutObjectResult, error) {
 	_, _ = io.Copy(io.Discard, reader)
-	return &storage.PutObjectResult{}, nil
+	return &storage.PutObjectResult{
+		ObjectInfo: storage.ObjectInfo{
+			Path:        (&storage.LocalPathBuilder{AbsDir: "/mock"}).Build("test-bucket", "uploads/file.txt"),
+			Size:        100,
+			ContentType: "text/plain",
+		},
+	}, nil
 }
 
 func (m *mockStorage) DeleteObject(_ context.Context, _ string, _ string) error { return nil }
@@ -77,6 +88,24 @@ func (m *failingMockStorage) GetObject(_ context.Context, _ string, key string, 
 	return &storage.GetObjectResult{
 		Body: io.NopCloser(bytes.NewReader([]byte("mock file content: " + key))),
 	}, nil
+}
+
+type failingPutMockStorage struct{ storage.Storage }
+
+var _ storage.PathBuilder = (*storage.LocalPathBuilder)(nil)
+
+func (m *failingPutMockStorage) PutObject(_ context.Context, _ string, _ string, _ io.Reader, _ ...storage.PutOption) (*storage.PutObjectResult, error) {
+	return nil, io.ErrUnexpectedEOF
+}
+
+func (m *failingPutMockStorage) GetObject(_ context.Context, _ string, key string, _ ...storage.GetOption) (*storage.GetObjectResult, error) {
+	return &storage.GetObjectResult{
+		Body: io.NopCloser(bytes.NewReader([]byte("mock file content: " + key))),
+	}, nil
+}
+
+func (m *failingPutMockStorage) PathBuilder() storage.PathBuilder {
+	return &storage.LocalPathBuilder{AbsDir: "/mock"}
 }
 
 // --- helpers ---
@@ -709,4 +738,341 @@ func TestHandleIDValidation(t *testing.T) {
 			require.Contains(t, resp.Msg, tt.wantMsg)
 		})
 	}
+}
+
+// --- presign token helpers ---
+
+func buildPresignToken(signSecret, bucket, key, op string, expires int64) string {
+	payloadBytes, _ := json.Marshal(map[string]interface{}{
+		"key": bucket + "/" + key,
+		"op":  op,
+		"exp": expires,
+	})
+	payloadB64 := base64.URLEncoding.EncodeToString(payloadBytes)
+	mac := hmac.New(sha256.New, []byte(signSecret))
+	mac.Write([]byte(payloadB64))
+	sigB64 := base64.URLEncoding.EncodeToString(mac.Sum(nil))
+	return payloadB64 + "." + sigB64
+}
+
+const testSignSecret = "test-sign-secret"
+
+func newTestFileStoreWithSignSecret(t *testing.T) *filestore.FileStore {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	fs, err := filestore.New(db, &mockStorage{}, "test-bucket", filestore.WithSignSecret(testSignSecret))
+	require.NoError(t, err)
+	return fs
+}
+
+func presignPut(router *gin.Engine, bucket, key string, token, expires string, body io.Reader, contentType string) *httptest.ResponseRecorder {
+	path := "/object/" + bucket + "/" + key
+	req, _ := http.NewRequest("PUT", path, body)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	q := req.URL.Query()
+	if token != "" {
+		q.Set("token", token)
+	}
+	if expires != "" {
+		q.Set("expires", expires)
+	}
+	req.URL.RawQuery = q.Encode()
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func presignGet(router *gin.Engine, bucket, key string, token, expires string) *httptest.ResponseRecorder {
+	path := "/object/" + bucket + "/" + key
+	req, _ := http.NewRequest("GET", path, nil)
+	q := req.URL.Query()
+	if token != "" {
+		q.Set("token", token)
+	}
+	if expires != "" {
+		q.Set("expires", expires)
+	}
+	req.URL.RawQuery = q.Encode()
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func setupPresignRouter(fs *filestore.FileStore) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	RegisterPresignedRoutes(&r.RouterGroup, fs)
+	return r
+}
+
+// --- presign put tests ---
+
+func TestHandlePresignedPut(t *testing.T) {
+	bucket := "test-bucket"
+	key := "uploads/file.txt"
+	fileContent := "hello presigned upload"
+
+	t.Run("success", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+		token := buildPresignToken(testSignSecret, bucket, key, "put", future)
+
+		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "text/plain")
+		require.Equal(t, 200, w.Code)
+
+		var resp struct {
+			Code int                  `json:"code"`
+			Data presignedPutResponse `json:"data"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.Equal(t, 0, resp.Code)
+		require.NotEmpty(t, resp.Data.URI)
+	})
+
+	t.Run("missing token and expires", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+
+		w := presignPut(router, bucket, key, "", "", strings.NewReader(fileContent), "")
+		require.Equal(t, 200, w.Code)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "missing token or expires")
+	})
+
+	t.Run("empty bucket or key", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+		token := buildPresignToken(testSignSecret, bucket, key, "put", future)
+
+		w := presignPut(router, "", key, token, expiresStr, strings.NewReader(fileContent), "")
+		require.Equal(t, 200, w.Code)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "bucket and key are required")
+	})
+
+	t.Run("expired token", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		past := time.Now().UTC().Unix() - 3600
+		expiresStr := strconv.FormatInt(past, 10)
+		token := buildPresignToken(testSignSecret, bucket, key, "put", past)
+
+		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "")
+		require.Equal(t, 200, w.Code)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "expired")
+	})
+
+	t.Run("operation mismatch", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+		token := buildPresignToken(testSignSecret, bucket, key, "get", future)
+
+		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "")
+		require.Equal(t, 200, w.Code)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "operation mismatch")
+	})
+
+	t.Run("key mismatch", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+		token := buildPresignToken(testSignSecret, bucket, "other/key.txt", "put", future)
+
+		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "")
+		require.Equal(t, 200, w.Code)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "key mismatch")
+	})
+
+	t.Run("invalid token format", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+
+		w := presignPut(router, bucket, key, "not.a.valid.token", expiresStr, strings.NewReader(fileContent), "")
+		require.Equal(t, 200, w.Code)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "invalid")
+	})
+
+	t.Run("storage put failure", func(t *testing.T) {
+		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+		require.NoError(t, err)
+		fs, err := filestore.New(db, &failingPutMockStorage{}, "test-bucket", filestore.WithSignSecret(testSignSecret))
+		require.NoError(t, err)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+		token := buildPresignToken(testSignSecret, bucket, key, "put", future)
+
+		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "")
+		require.Equal(t, 200, w.Code)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err = json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+		require.Contains(t, resp.Msg, "unexpected EOF")
+	})
+}
+
+// --- presign get tests ---
+
+func TestHandlePresignedGet(t *testing.T) {
+	bucket := "test-bucket"
+	key := "uploads/file.txt"
+
+	t.Run("public access without token", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+
+		w := presignGet(router, bucket, key, "", "")
+		require.Equal(t, 200, w.Code)
+		require.Contains(t, w.Body.String(), "mock file content: "+key)
+	})
+
+	t.Run("with valid token", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+		token := buildPresignToken(testSignSecret, bucket, key, "get", future)
+
+		w := presignGet(router, bucket, key, token, expiresStr)
+		require.Equal(t, 200, w.Code)
+		require.Contains(t, w.Body.String(), "mock file content: "+key)
+	})
+
+	t.Run("token without expires", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+
+		w := presignGet(router, bucket, key, "some-token", "")
+		require.Equal(t, 400, w.Code)
+		require.Contains(t, w.Body.String(), "missing token or expires query parameter")
+	})
+
+	t.Run("expires without token", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+
+		w := presignGet(router, bucket, key, "", "12345")
+		require.Equal(t, 400, w.Code)
+		require.Contains(t, w.Body.String(), "missing token or expires query parameter")
+	})
+
+	t.Run("empty bucket or key", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+
+		w := presignGet(router, "", key, "", "")
+		require.Equal(t, 400, w.Code)
+		require.Contains(t, w.Body.String(), "bucket and key are required")
+	})
+
+	t.Run("expired token", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		past := time.Now().UTC().Unix() - 3600
+		expiresStr := strconv.FormatInt(past, 10)
+		token := buildPresignToken(testSignSecret, bucket, key, "get", past)
+
+		w := presignGet(router, bucket, key, token, expiresStr)
+		require.Equal(t, 403, w.Code)
+		require.Contains(t, w.Body.String(), "presigned url expired")
+	})
+
+	t.Run("operation mismatch", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+		token := buildPresignToken(testSignSecret, bucket, key, "put", future)
+
+		w := presignGet(router, bucket, key, token, expiresStr)
+		require.Equal(t, 403, w.Code)
+		require.Contains(t, w.Body.String(), "operation mismatch")
+	})
+
+	t.Run("key mismatch", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+		token := buildPresignToken(testSignSecret, bucket, "other/key.txt", "get", future)
+
+		w := presignGet(router, bucket, key, token, expiresStr)
+		require.Equal(t, 403, w.Code)
+		require.Contains(t, w.Body.String(), "key mismatch")
+	})
+
+	t.Run("invalid token format", func(t *testing.T) {
+		fs := newTestFileStoreWithSignSecret(t)
+		router := setupPresignRouter(fs)
+		future := time.Now().UTC().Unix() + 3600
+		expiresStr := strconv.FormatInt(future, 10)
+
+		w := presignGet(router, bucket, key, "garbage", expiresStr)
+		require.Equal(t, 403, w.Code)
+		require.Contains(t, w.Body.String(), "invalid")
+	})
 }
