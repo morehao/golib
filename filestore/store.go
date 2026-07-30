@@ -7,11 +7,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const (
-	tableFileRecord = "core_file_record"
-	tableFileHash   = "core_file_hash"
-)
-
 type store struct {
 	db *gorm.DB
 }
@@ -20,80 +15,104 @@ func newStore(db *gorm.DB) *store {
 	return &store{db: db}
 }
 
-func (s *store) CreateFileHash(ctx context.Context, fh *FileHash) error {
-	return s.db.WithContext(ctx).Create(fh).Error
+func (s *store) CreateFileHash(ctx context.Context, fh *File) error {
+	return s.db.WithContext(ctx).Table(File{}.TableName()).Create(fh).Error
 }
 
-func (s *store) GetFileHashByFingerprint(ctx context.Context, fingerprint string) (*FileHash, error) {
-	var fh FileHash
-	result := s.db.WithContext(ctx).
-		Where("fingerprint = ?", fingerprint).
-		Find(&fh)
+func (s *store) GetFileHashByContentHash(ctx context.Context, contentHash string) (*File, error) {
+	var fh File
+	db := s.db.WithContext(ctx).Table(File{}.TableName())
+	(&fileCond{ContentHash: contentHash}).BuildCondition(db, File{}.TableName())
+
+	result := db.Find(&fh)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected == 0 {
-		return nil, fmt.Errorf("%w: fingerprint=%s", ErrFileNotFound, fingerprint)
+		return nil, fmt.Errorf("%w: content_hash=%s", ErrFileNotFound, contentHash)
 	}
 	return &fh, nil
 }
 
-func (s *store) CreateFileRecord(ctx context.Context, rec *FileRecord) error {
+func (s *store) GetFileByID(ctx context.Context, fileID uint) (*File, error) {
+	var fh File
+	db := s.db.WithContext(ctx).Table(File{}.TableName())
+	(&fileCond{ID: fileID}).BuildCondition(db, File{}.TableName())
+
+	result := db.Find(&fh)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, fmt.Errorf("%w: file_id=%d", ErrFileNotFound, fileID)
+	}
+	return &fh, nil
+}
+
+func (s *store) CreateFileRecord(ctx context.Context, rec *FileUpload) error {
 	return s.db.WithContext(ctx).Create(rec).Error
 }
 
-func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileRecord, error) {
-	var rec FileRecord
-	result := s.db.WithContext(ctx).
-		Table(tableFileRecord).
-		Where("id = ?", id).
-		Find(&rec)
+func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileUpload, error) {
+	var rec FileUpload
+	db := s.db.WithContext(ctx).Table(FileUpload{}.TableName())
+	(&fileCond{ID: id}).BuildCondition(db, FileUpload{}.TableName())
+
+	result := db.Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: id=%d", ErrFileNotFound, id)
 	}
-	if rec.FileHashID > 0 {
-		s.fillRecordHashInfo(ctx, &rec)
-	}
 	return &rec, nil
 }
 
-func (s *store) fillRecordHashInfo(ctx context.Context, rec *FileRecord) {
-	var fh FileHash
-	if err := s.db.WithContext(ctx).Where("id = ?", rec.FileHashID).Find(&fh).Error; err != nil {
-		return
-	}
-	if fh.ID == 0 {
-		return
-	}
-	rec.Fingerprint = fh.Fingerprint
-	rec.Size = fh.Size
-	rec.StorageURI = fh.StorageURI
-}
+func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*FileUpload, error) {
+	var rec FileUpload
+	db := s.db.WithContext(ctx).Table(FileUpload{}.TableName())
+	(&fileCond{UploadID: uploadID}).BuildCondition(db, FileUpload{}.TableName())
 
-func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*FileRecord, error) {
-	var rec FileRecord
-	result := s.db.WithContext(ctx).
-		Table(tableFileRecord).
-		Where("upload_id = ?", uploadID).
-		Find(&rec)
+	result := db.Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("%w: uploadID=%s", ErrFileNotFound, uploadID)
 	}
-	if rec.FileHashID > 0 {
-		s.fillRecordHashInfo(ctx, &rec)
-	}
 	return &rec, nil
+}
+
+func (s *store) GetFileUploadIDByStorageURI(ctx context.Context, storageURI string) (uint, error) {
+	var file File
+	db := s.db.WithContext(ctx).Table(File{}.TableName())
+	(&fileCond{StorageURI: storageURI}).BuildCondition(db, File{}.TableName())
+
+	result := db.Find(&file)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return 0, fmt.Errorf("%w: storage_uri=%s", ErrFileNotFound, storageURI)
+	}
+
+	var upload FileUpload
+	db2 := s.db.WithContext(ctx).Table(FileUpload{}.TableName())
+	(&fileCond{FileID: file.ID, Status: FileStatusCompleted, OrderField: "id DESC"}).BuildCondition(db2, FileUpload{}.TableName())
+
+	result = db2.Find(&upload)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return 0, fmt.Errorf("%w: file_id=%d from storage_uri=%s", ErrFileNotFound, file.ID, storageURI)
+	}
+	return upload.ID, nil
 }
 
 func (s *store) UpdateFileRecordStatus(ctx context.Context, id uint, status FileStatus) error {
 	result := s.db.WithContext(ctx).
-		Model(&FileRecord{}).
+		Model(&FileUpload{}).
 		Where("id = ?", id).
 		Update("status", status)
 	if result.Error != nil {
@@ -107,7 +126,7 @@ func (s *store) UpdateFileRecordStatus(ctx context.Context, id uint, status File
 
 func (s *store) ClearFileRecordUploadID(ctx context.Context, id uint) error {
 	result := s.db.WithContext(ctx).
-		Model(&FileRecord{}).
+		Model(&FileUpload{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"upload_id": "",
@@ -123,7 +142,7 @@ func (s *store) ClearFileRecordUploadID(ctx context.Context, id uint) error {
 }
 
 func (s *store) DeleteFileRecord(ctx context.Context, id uint) error {
-	result := s.db.WithContext(ctx).Delete(&FileRecord{}, id)
+	result := s.db.WithContext(ctx).Delete(&FileUpload{}, id)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -133,9 +152,9 @@ func (s *store) DeleteFileRecord(ctx context.Context, id uint) error {
 	return nil
 }
 
-func (s *store) ListFileRecords(ctx context.Context, cond *fileCond) ([]FileRecord, int64, error) {
-	db := s.db.WithContext(ctx).Table(tableFileRecord)
-	cond.BuildCondition(db, tableFileRecord)
+func (s *store) ListFileRecords(ctx context.Context, cond *fileCond) ([]FileUpload, int64, error) {
+	db := s.db.WithContext(ctx).Table(FileUpload{}.TableName())
+	cond.BuildCondition(db, FileUpload{}.TableName())
 
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
@@ -147,14 +166,9 @@ func (s *store) ListFileRecords(ctx context.Context, cond *fileCond) ([]FileReco
 		db.Offset((page - 1) * pageSize).Limit(pageSize)
 	}
 
-	var list []FileRecord
+	var list []FileUpload
 	if err := db.Find(&list).Error; err != nil {
 		return nil, 0, err
-	}
-	for i := range list {
-		if list[i].FileHashID > 0 {
-			s.fillRecordHashInfo(ctx, &list[i])
-		}
 	}
 	return list, total, nil
 }

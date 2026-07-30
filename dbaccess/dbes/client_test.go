@@ -11,6 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func init() {
+	testutil.Load()
+}
+
 func esEnvAddr() string {
 	return testutil.GetEnv(testutil.ElasticsearchAddr, "http://localhost:9200")
 }

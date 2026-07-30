@@ -5,10 +5,8 @@ import (
 	"github.com/morehao/golib/filestore"
 )
 
-const defaultFilePrefix = "/file"
-
 func Register(group *gin.RouterGroup, fs *filestore.FileStore) {
-	r := group.Group(defaultFilePrefix)
+	r := group.Group("/file")
 	{
 		r.POST("/upload", handleUpload(fs))
 		r.POST("/checkExist", handleCheckExist(fs))
@@ -19,7 +17,13 @@ func Register(group *gin.RouterGroup, fs *filestore.FileStore) {
 		r.POST("/getFileDetail", handleGetFileDetail(fs))
 		r.POST("/presignGetFileURL", handlePresignGetFileURL(fs))
 		r.POST("/deleteFile", handleDeleteFile(fs))
-		r.GET("/redirect/:fileID", handleRedirectGetFileURL(fs))
-		r.GET("/serve/:fileID", handleServeFileByID(fs))
+		r.GET("/redirect", handleRedirectGetFileURL(fs))
+		r.GET("/serve", handleServeFileByID(fs))
+	}
+
+	if fs.IsLocal() {
+		o := group.Group("/object")
+		o.PUT("/:bucket/*key", handlePresignedPut(fs))
+		o.GET("/:bucket/*key", handlePresignedGet(fs))
 	}
 }

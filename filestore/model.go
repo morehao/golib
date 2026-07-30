@@ -3,75 +3,113 @@ package filestore
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"gorm.io/gorm"
 )
 
+// FileStatus 上传状态机: uploading -> merging -> completed
+//
+//	\-> aborted
 type FileStatus string
 
 const (
 	FileStatusUploading FileStatus = "uploading"
+	FileStatusMerging   FileStatus = "merging"
 	FileStatusCompleted FileStatus = "completed"
 	FileStatusAborted   FileStatus = "aborted"
-	FileStatusMerging   FileStatus = "merging"
 )
 
-type FileHash struct {
-	ID          uint   `gorm:"primarykey"`
-	Fingerprint string `gorm:"column:fingerprint;type:varchar(64);uniqueIndex:uk_fingerprint"`
-	Size        int64  `gorm:"column:size"`
-	StorageURI  string `gorm:"column:storage_uri;type:varchar(512)"`
+// File 物理文件的元数据记录，按内容哈希去重。
+type File struct {
+	ID          uint      `gorm:"primarykey"`
+	CreatedAt   time.Time `gorm:"column:created_at;not null;autoCreateTime"`
+	UpdatedAt   time.Time `gorm:"column:updated_at;not null;autoUpdateTime"`
+	ContentHash string    `gorm:"column:content_hash;type:varchar(64);not null;default:'';uniqueIndex:uk_content_hash"`
+	Size        int64     `gorm:"column:size;not null;default:0"`
+	StorageURI  string    `gorm:"column:storage_uri;type:varchar(512);not null;default:''"`
 }
 
-func (FileHash) TableName() string { return "core_file_hash" }
+func (File) TableName() string { return "core_file" }
 
-type FileRecord struct {
+// FileUpload 一次上传行为的记录，只存跟"这次上传"相关的信息。
+// 内容相关信息（哈希/大小/存储路径）不冗余存储，需要时按 FileID 查 File 表。
+type FileUpload struct {
 	gorm.Model
-	FileHashID uint       `gorm:"column:file_hash_id;index"`
-	Name       string     `gorm:"column:name;type:varchar(256)"`
-	MimeType   string     `gorm:"column:mime_type;type:varchar(128)"`
-	UploadID   string     `gorm:"column:upload_id;type:varchar(128);index"`
-	Status     FileStatus `gorm:"column:status;type:varchar(32);default:uploading"`
-
-	// 关联查询填充字段（不入库）
-	Fingerprint string `gorm:"-:all"`
-	Size        int64  `gorm:"-:all"`
-	StorageURI  string `gorm:"-:all"`
+	FileID   uint       `gorm:"column:file_id;not null;default:0;index"`
+	UploadID string     `gorm:"column:upload_id;type:varchar(128);not null;default:'';index"`
+	Name     string     `gorm:"column:name;type:varchar(256);not null;default:''"`
+	MimeType string     `gorm:"column:mime_type;type:varchar(128);not null;default:''"`
+	Status   FileStatus `gorm:"column:status;type:varchar(32);not null;default:uploading;index"`
+	Scene    string     `gorm:"column:scene;type:varchar(64);not null;default:'';index"`
 }
 
-func (FileRecord) TableName() string { return "core_file_record" }
+func (FileUpload) TableName() string { return "core_file_upload" }
+
+// FileDetail 组合返回 FileUpload 及其关联的 File（内容哈希/大小/存储路径）。
+type FileDetail struct {
+	// FileUploadID 为 FileUpload 表主键，外部调用方通过该 ID 与 FileStore 继续交互
+	// （GetFile/DeleteFile/PresignGetFile/CompleteMultipart/AbortMultipart 等）。
+	FileUploadID uint
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	FileID       uint
+	UploadID     string
+	Name         string
+	MimeType     string
+	Status       FileStatus
+	Scene        string
+	ContentHash  string
+	Size         int64
+	StorageURI   string
+}
 
 type RecordUploadRequest struct {
-	Fingerprint string
+	ContentHash string
 	Name        string
 	Size        int64
 	MimeType    string
 	StoragePath string
+	Scene       string
+}
+
+type UploadAndRecordRequest struct {
+	ContentHash string
+	Name        string
+	Size        int64
+	MimeType    string
+	Reader      io.Reader
+	StoragePath string
+	Scene       string
 }
 
 type fileCond struct {
-	ID          uint
-	FileHashID  uint
-	Fingerprint string
-	UploadID    string
-	Status      FileStatus
-	Page        int
-	PageSize    int
-	OrderField  string
+	ID         uint
+	FileID       uint
+	ContentHash  string
+	UploadID     string
+	StorageURI   string
+	Status       FileStatus
+	Page       int
+	PageSize   int
+	OrderField string
 }
 
 func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 	if c.ID > 0 {
 		db.Where(fmt.Sprintf("%s.id = ?", tableName), c.ID)
 	}
-	if c.FileHashID > 0 {
-		db.Where(fmt.Sprintf("%s.file_hash_id = ?", tableName), c.FileHashID)
+	if c.FileID > 0 {
+		db.Where(fmt.Sprintf("%s.file_id = ?", tableName), c.FileID)
 	}
-	if c.Fingerprint != "" {
-		db.Where(fmt.Sprintf("%s.fingerprint = ?", tableName), c.Fingerprint)
+	if c.ContentHash != "" {
+		db.Where(fmt.Sprintf("%s.content_hash = ?", tableName), c.ContentHash)
 	}
 	if c.UploadID != "" {
 		db.Where(fmt.Sprintf("%s.upload_id = ?", tableName), c.UploadID)
+	}
+	if c.StorageURI != "" {
+		db.Where(fmt.Sprintf("%s.storage_uri = ?", tableName), c.StorageURI)
 	}
 	if c.Status != "" {
 		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)
@@ -83,13 +121,4 @@ func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 
 func (c *fileCond) GetPageInfo() (page int, pageSize int) {
 	return c.Page, c.PageSize
-}
-
-type UploadAndRecordRequest struct {
-	Fingerprint string
-	Name        string
-	Size        int64
-	MimeType    string
-	Reader      io.Reader
-	StoragePath string
 }

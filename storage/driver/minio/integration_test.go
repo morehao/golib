@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+func init() {
+	testutil.Load()
+}
+
 func TestIntegration(t *testing.T) {
 	skipIfMissingVars := func() bool {
 		endpoint := testutil.GetEnv(testutil.StorageMinioEndpoint, "")
@@ -35,5 +39,5 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New minio driver: %v", err)
 	}
-	testutil.RunStorageSuite(t, s, "testbucket")
+	testutil.RunStorageSuite(t, s, testutil.GetEnv(testutil.StorageMinioBucket, "testbucket"))
 }

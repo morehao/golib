@@ -12,6 +12,10 @@ import (
 	"gorm.io/gorm"
 )
 
+func init() {
+	testutil.Load()
+}
+
 func openMySQLForTest(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := testutil.GetEnv(testutil.MySQLDSN, "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True")

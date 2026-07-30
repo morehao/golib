@@ -1,11 +1,15 @@
 package cos
 
 import (
+	"testing"
+
 	"github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/storage"
-
-	"testing"
 )
+
+func init() {
+	testutil.Load()
+}
 
 func TestIntegration(t *testing.T) {
 	endpoint := testutil.GetEnv(testutil.StorageCOSEndpoint, "")
@@ -24,5 +28,5 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New cos driver: %v", err)
 	}
-	testutil.RunStorageSuite(t, s, "testbucket")
+	testutil.RunStorageSuite(t, s, testutil.GetEnv(testutil.StorageCOSBucket, "testbucket"))
 }

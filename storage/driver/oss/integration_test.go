@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+func init() {
+	testutil.Load()
+}
+
 func TestIntegration(t *testing.T) {
 	endpoint := testutil.GetEnv(testutil.StorageOSSEndpoint, "")
 	accessKey := testutil.GetEnv(testutil.StorageOSSAccessKey, "")
@@ -24,5 +28,5 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New oss driver: %v", err)
 	}
-	testutil.RunStorageSuite(t, s, "testbucket")
+	testutil.RunStorageSuite(t, s, testutil.GetEnv(testutil.StorageOSSBucket, "testbucket"))
 }

@@ -16,6 +16,8 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 	t.Helper()
 	ctx := context.Background()
 
+	t.Logf("Running storage suite for bucket=%s", bucket)
+
 	t.Run("PutGet", func(t *testing.T) {
 		data := []byte("hello storagetest")
 		res, err := s.PutObject(ctx, bucket, "k1", bytes.NewReader(data), storage.WithContentType("text/plain"))
@@ -28,6 +30,7 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		if res.Path.Path() == "" {
 			t.Error("Path.Path() is empty")
 		}
+		t.Logf("PutObject OK, path=%s, uri=%s", res.Path.Path(), res.Path.URI())
 
 		obj, err := s.GetObject(ctx, bucket, "k1")
 		if err != nil {
@@ -38,21 +41,26 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		if !bytes.Equal(got, data) {
 			t.Errorf("body mismatch")
 		}
+		t.Logf("GetObject OK, data=%s (%d bytes)", string(got), len(got))
 	})
 
 	t.Run("HeadDelete", func(t *testing.T) {
 		if _, err := s.PutObject(ctx, bucket, "hd1", bytes.NewReader([]byte("x"))); err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("PutObject OK for HeadDelete, key=hd1")
 		if _, err := s.HeadObject(ctx, bucket, "hd1"); err != nil {
 			t.Fatalf("HeadObject = %v", err)
 		}
+		t.Logf("HeadObject OK, key=hd1 exists")
 		if err := s.DeleteObject(ctx, bucket, "hd1"); err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("DeleteObject OK, key=hd1 removed")
 		if _, err := s.HeadObject(ctx, bucket, "hd1"); !errors.Is(err, storage.ErrNotFound) {
 			t.Errorf("HeadObject after delete = %v, want ErrNotFound", err)
 		}
+		t.Logf("HeadObject after delete OK: correctly returns ErrNotFound")
 	})
 
 	t.Run("ListPaging", func(t *testing.T) {
@@ -68,6 +76,7 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		if len(out.Contents) == 0 && len(out.CommonPrefixes) == 0 {
 			t.Error("expected at least one entry")
 		}
+		t.Logf("ListObjects OK: %d contents, %d common_prefixes", len(out.Contents), len(out.CommonPrefixes))
 	})
 
 	t.Run("PathScheme", func(t *testing.T) {
@@ -85,18 +94,22 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		if h.Path.URI() == "" {
 			t.Error("Path.URI() is empty")
 		}
+		t.Logf("HeadObject OK, Path()=%s, URI()=%s", h.Path.Path(), h.Path.URI())
 	})
 
 	t.Run("Errors", func(t *testing.T) {
 		if _, err := s.HeadObject(ctx, bucket, "nonexistent-xyz"); !errors.Is(err, storage.ErrNotFound) {
 			t.Errorf("HeadObject(missing) = %v, want ErrNotFound", err)
 		}
+		t.Logf("HeadObject(missing) OK: correctly returns ErrNotFound")
 		if _, err := s.PutObject(ctx, bucket, "/bad-key", bytes.NewReader([]byte("x"))); !errors.Is(err, storage.ErrInvalidPath) {
 			t.Errorf("PutObject(bad-key) = %v, want ErrInvalidPath", err)
 		}
+		t.Logf("PutObject(bad-key) OK: correctly returns ErrInvalidPath")
 		// 重复删除应该幂等
 		if err := s.DeleteObject(ctx, bucket, "nonexistent"); err != nil {
 			t.Errorf("DeleteObject(nonexistent) = %v, want nil (idempotent)", err)
 		}
+		t.Logf("DeleteObject(nonexistent) OK: idempotent delete returns nil")
 	})
 }
