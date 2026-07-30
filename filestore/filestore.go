@@ -293,6 +293,10 @@ func (s *FileStore) DeleteFile(ctx context.Context, id uint) error {
 	return nil
 }
 
+func (s *FileStore) GetFileUploadIDByStorageURI(ctx context.Context, storageURI string) (uint, error) {
+	return s.store.GetFileUploadIDByStorageURI(ctx, storageURI)
+}
+
 type InitMultipartUploadRequest struct {
 	ContentHash string
 	Name        string

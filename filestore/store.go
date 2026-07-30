@@ -83,6 +83,34 @@ func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*
 	return &rec, nil
 }
 
+func (s *store) GetFileUploadIDByStorageURI(ctx context.Context, storageURI string) (uint, error) {
+	var file File
+	result := s.db.WithContext(ctx).
+		Table(File{}.TableName()).
+		Where("storage_uri = ?", storageURI).
+		Find(&file)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return 0, fmt.Errorf("%w: storage_uri=%s", ErrFileNotFound, storageURI)
+	}
+
+	var upload FileUpload
+	result = s.db.WithContext(ctx).
+		Table(FileUpload{}.TableName()).
+		Where("file_id = ? AND status = ?", file.ID, FileStatusCompleted).
+		Order("id DESC").
+		Find(&upload)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return 0, fmt.Errorf("%w: file_id=%d from storage_uri=%s", ErrFileNotFound, file.ID, storageURI)
+	}
+	return upload.ID, nil
+}
+
 func (s *store) UpdateFileRecordStatus(ctx context.Context, id uint, status FileStatus) error {
 	result := s.db.WithContext(ctx).
 		Model(&FileUpload{}).

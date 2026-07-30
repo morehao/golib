@@ -47,7 +47,7 @@ func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req presignDownloadRequest
-		if err := c.ShouldBind(&req); err != nil {
+		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
@@ -92,19 +92,25 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 // @Tags 文件
 // @Summary 重定向获取文件URL
 // @Produce application/json
-// @Param fileID path uint true "文件ID"
+// @Param file_id query uint false "文件ID"
+// @Param storage_uri query string false "存储URI"
 // @Success 302 {string} string "重定向到文件URL"
-// @Router /file/redirect/{fileID} [get]
+// @Router /file/redirect [get]
 func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		fileIDStr := c.Param("fileID")
-		fileID, err := strconv.ParseUint(fileIDStr, 10, 64)
-		if err != nil || fileID == 0 {
-			gincontext.Fail(c, fmt.Errorf("invalid fileID"))
+		var req getFileQueryRequest
+		if err := c.ShouldBindQuery(&req); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
 
-		url, err := fs.PresignGetFileURL(c.Request.Context(), uint(fileID))
+		fileID, err := resolveFileID(c, fs, req)
+		if err != nil {
+			gincontext.Fail(c, err)
+			return
+		}
+
+		url, err := fs.PresignGetFileURL(c.Request.Context(), fileID)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -117,19 +123,25 @@ func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 // @Tags 文件
 // @Summary 通过文件ID直接获取文件内容（仅 local storage 有效）
 // @Produce application/octet-stream
-// @Param fileID path uint true "文件ID"
+// @Param file_id query uint false "文件ID"
+// @Param storage_uri query string false "存储URI"
 // @Success 200 {file} file "文件内容"
-// @Router /file/serve/{fileID} [get]
+// @Router /file/serve [get]
 func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		fileIDStr := c.Param("fileID")
-		fileID, err := strconv.ParseUint(fileIDStr, 10, 64)
-		if err != nil || fileID == 0 {
-			gincontext.Fail(c, fmt.Errorf("invalid fileID"))
+		var req getFileQueryRequest
+		if err := c.ShouldBindQuery(&req); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
 
-		rc, detail, err := fs.Open(c.Request.Context(), uint(fileID))
+		fileID, err := resolveFileID(c, fs, req)
+		if err != nil {
+			gincontext.Fail(c, err)
+			return
+		}
+
+		rc, detail, err := fs.Open(c.Request.Context(), fileID)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -154,6 +166,16 @@ func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 }
 
 // -- helpers --
+
+func resolveFileID(c *gin.Context, fs *filestore.FileStore, req getFileQueryRequest) (uint, error) {
+	if req.FileID > 0 {
+		return req.FileID, nil
+	}
+	if req.StorageURI != "" {
+		return fs.GetFileUploadIDByStorageURI(c.Request.Context(), req.StorageURI)
+	}
+	return 0, fmt.Errorf("file_id or storage_uri is required")
+}
 
 func toFileRecordResp(detail *filestore.FileDetail) *fileRecordResponse {
 	return &fileRecordResponse{

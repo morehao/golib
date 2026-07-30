@@ -71,7 +71,7 @@ func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req checkExistRequest
-		if err := c.ShouldBind(&req); err != nil {
+		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
@@ -133,7 +133,7 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req presignPartRequest
-		if err := c.ShouldBind(&req); err != nil {
+		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}

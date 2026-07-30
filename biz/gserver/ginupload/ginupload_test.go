@@ -612,9 +612,9 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	t.Run("redirects to presigned URL", func(t *testing.T) {
+	t.Run("redirects to presigned URL with file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/redirect/%d", detail.FileUploadID), nil)
+		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/redirect?file_id=%d", detail.FileUploadID), nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 302, w.Code)
@@ -622,9 +622,20 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 		require.Contains(t, w.Header().Get("Location"), "images/img.png")
 	})
 
-	t.Run("invalid fileID", func(t *testing.T) {
+	t.Run("redirects to presigned URL with storage_uri", func(t *testing.T) {
+		storageURI := "file:///test-bucket/images/img.png"
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/redirect/abc", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/file/redirect?storage_uri="+storageURI, nil)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, 302, w.Code)
+		require.Contains(t, w.Header().Get("Location"), "presign.example.com")
+		require.Contains(t, w.Header().Get("Location"), "images/img.png")
+	})
+
+	t.Run("invalid file_id", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/redirect?file_id=abc", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -636,9 +647,37 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 		require.NotEqual(t, 0, resp.Code)
 	})
 
-	t.Run("not found", func(t *testing.T) {
+	t.Run("not found by file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/redirect/99999", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/file/redirect?file_id=99999", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+
+	t.Run("not found by storage_uri", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/redirect?storage_uri=file:///nonexistent/path", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+
+	t.Run("missing both params", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/redirect", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -664,9 +703,9 @@ func TestHandleServeFileByID(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	t.Run("serves file content", func(t *testing.T) {
+	t.Run("serves file content with file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/serve/%d", detail.FileUploadID), nil)
+		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/serve?file_id=%d", detail.FileUploadID), nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 200, w.Code)
@@ -676,9 +715,21 @@ func TestHandleServeFileByID(t *testing.T) {
 		require.Contains(t, w.Body.String(), "files/hello.txt")
 	})
 
-	t.Run("invalid fileID", func(t *testing.T) {
+	t.Run("serves file content with storage_uri", func(t *testing.T) {
+		storageURI := "file:///test-bucket/files/hello.txt"
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/serve/abc", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve?storage_uri="+storageURI, nil)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, 200, w.Code)
+		require.Equal(t, "text/plain", w.Header().Get("Content-Type"))
+		require.Contains(t, w.Header().Get("Content-Disposition"), "hello.txt")
+		require.Equal(t, "11", w.Header().Get("Content-Length"))
+	})
+
+	t.Run("invalid file_id", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve?file_id=abc", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -690,9 +741,37 @@ func TestHandleServeFileByID(t *testing.T) {
 		require.NotEqual(t, 0, resp.Code)
 	})
 
-	t.Run("not found", func(t *testing.T) {
+	t.Run("not found by file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/serve/99999", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve?file_id=99999", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+
+	t.Run("not found by storage_uri", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve?storage_uri=file:///nonexistent/path", nil)
+		router.ServeHTTP(w, req)
+
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, resp.Code)
+	})
+
+	t.Run("missing both params", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/api/v1/file/serve", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -804,7 +883,7 @@ func presignGet(router *gin.Engine, bucket, key string, token, expires string) *
 func setupPresignRouter(fs *filestore.FileStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	RegisterPresignedRoutes(&r.RouterGroup, fs)
+	Register(&r.RouterGroup, fs)
 	return r
 }
 

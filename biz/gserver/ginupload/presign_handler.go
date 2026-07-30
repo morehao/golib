@@ -18,13 +18,6 @@ const (
 	presignExpiresQuery = "expires"
 )
 
-// RegisterPresignedRoutes 注册 local 模式下的预签名 URL 消费路由。
-func RegisterPresignedRoutes(group *gin.RouterGroup, fs *filestore.FileStore) {
-	r := group.Group("/object")
-	r.PUT("/:bucket/*key", handlePresignedPut(fs))
-	r.GET("/:bucket/*key", handlePresignedGet(fs))
-}
-
 // handlePresignedPut 消费预签名 PUT URL，验证 token 后将文件内容写入存储
 func handlePresignedPut(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {

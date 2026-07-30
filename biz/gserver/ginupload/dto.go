@@ -17,10 +17,10 @@ type uploadPart struct {
 }
 
 type fileRecordResponse struct {
-	FileID   uint   `json:"file_id"`
-	Name     string `json:"name"`
-	MimeType string `json:"mime_type"`
-	Status   string `json:"status"`
+	FileID   uint   `json:"file_id"`   // 文件ID
+	Name     string `json:"name"`      // 文件名
+	MimeType string `json:"mime_type"` // MIME类型
+	Status   string `json:"status"`    // 文件状态(pending/uploading/completed/failed/aborted)
 }
 
 // --- upload ---
@@ -40,15 +40,15 @@ type checkExistResponse struct {
 
 type createMultipartRequest struct {
 	ContentHash string `json:"content_hash" binding:"required"` // 内容哈希
-	Name        string `json:"name" binding:"required"`
-	Size        int64  `json:"size" binding:"required"`
-	MimeType    string `json:"mime_type"`
-	StoragePath string `json:"storage_path"`
+	Name        string `json:"name" binding:"required"`         // 文件名
+	Size        int64  `json:"size" binding:"required"`         // 文件大小(字节)
+	MimeType    string `json:"mime_type"`                       // MIME类型
+	StoragePath string `json:"storage_path"`                    // 存储路径
 }
 
 type createMultipartResponse struct {
-	FileID   uint   `json:"file_id"`
-	UploadID string `json:"upload_id"`
+	FileID   uint   `json:"file_id"`   // 文件ID
+	UploadID string `json:"upload_id"` // 上传会话ID
 }
 
 type presignPartRequest struct {
@@ -63,17 +63,22 @@ type completeMultipartRequest struct {
 
 // --- file ---
 
+type getFileQueryRequest struct {
+	FileID     uint   `form:"file_id"`     // 文件ID
+	StorageURI string `form:"storage_uri"` // 存储URI
+}
+
 type fileDetailResponse struct {
-	FileID      uint   `json:"file_id"`
-	ContentHash string `json:"content_hash"` // 内容哈希
-	Name        string `json:"name"`
-	Size        int64  `json:"size"`
-	MimeType    string `json:"mime_type"`
-	StorageURI  string `json:"storage_uri"`
-	UploadID    string `json:"upload_id,omitempty"`
-	Status      string `json:"status"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	FileID      uint   `json:"file_id"`                 // 文件ID
+	ContentHash string `json:"content_hash"`            // 内容哈希
+	Name        string `json:"name"`                    // 文件名
+	Size        int64  `json:"size"`                    // 文件大小(字节)
+	MimeType    string `json:"mime_type"`               // MIME类型
+	StorageURI  string `json:"storage_uri"`             // 存储URI
+	UploadID    string `json:"upload_id,omitempty"`     // 上传会话ID(仅分片上传时有值)
+	Status      string `json:"status"`                  // 文件状态
+	CreatedAt   string `json:"created_at"`              // 创建时间(RFC3339)
+	UpdatedAt   string `json:"updated_at"`              // 更新时间(RFC3339)
 }
 
 type presignDownloadRequest struct {
