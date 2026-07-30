@@ -13,29 +13,29 @@ type Entity interface {
 	TableName() string
 }
 
-type GenericDao[T Entity, L ~[]T] struct {
+type Dao[T Entity, L ~[]T] struct {
 	base
 	TableName string
 	daoName   string
 }
 
-func NewGenericDao[T Entity, L ~[]T](tableName string, daoName string, getDB DBGetter) *GenericDao[T, L] {
-	return &GenericDao[T, L]{
+func NewDao[T Entity, L ~[]T](tableName string, daoName string, getDB DBGetter) *Dao[T, L] {
+	return &Dao[T, L]{
 		base:      newBase(getDB),
 		TableName: tableName,
 		daoName:   daoName,
 	}
 }
 
-func (d *GenericDao[T, L]) WithTx(tx *gorm.DB) *GenericDao[T, L] {
-	return &GenericDao[T, L]{
+func (d *Dao[T, L]) WithTx(tx *gorm.DB) *Dao[T, L] {
+	return &Dao[T, L]{
 		base:      d.base.withTx(tx),
 		TableName: d.TableName,
 		daoName:   d.daoName,
 	}
 }
 
-func (d *GenericDao[T, L]) Insert(ctx context.Context, entity *T) error {
+func (d *Dao[T, L]) Insert(ctx context.Context, entity *T) error {
 	db := d.DB(ctx).Table(d.TableName)
 	if err := db.Create(entity).Error; err != nil {
 		return getDBError(gconstant.DBInsertErr).Wrapf(err, "[%s] Insert fail, entity:%s", d.daoName, gutil.ToJsonString(entity))
@@ -43,7 +43,7 @@ func (d *GenericDao[T, L]) Insert(ctx context.Context, entity *T) error {
 	return nil
 }
 
-func (d *GenericDao[T, L]) BatchInsert(ctx context.Context, entityList L) error {
+func (d *Dao[T, L]) BatchInsert(ctx context.Context, entityList L) error {
 	if len(entityList) == 0 {
 		return getDBError(gconstant.DBInsertErr).Wrapf(nil, "[%s] BatchInsert fail, entityList is empty", d.daoName)
 	}
@@ -55,7 +55,7 @@ func (d *GenericDao[T, L]) BatchInsert(ctx context.Context, entityList L) error 
 	return nil
 }
 
-func (d *GenericDao[T, L]) UpdateByID(ctx context.Context, id uint, entity *T) error {
+func (d *Dao[T, L]) UpdateByID(ctx context.Context, id uint, entity *T) error {
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	if err := db.Where("id = ?", id).Updates(entity).Error; err != nil {
 		return getDBError(gconstant.DBUpdateErr).Wrapf(err, "[%s] UpdateByID fail, id:%d entity:%s", d.daoName, id, gutil.ToJsonString(entity))
@@ -63,7 +63,7 @@ func (d *GenericDao[T, L]) UpdateByID(ctx context.Context, id uint, entity *T) e
 	return nil
 }
 
-func (d *GenericDao[T, L]) UpdateMap(ctx context.Context, id uint, updateMap map[string]any) error {
+func (d *Dao[T, L]) UpdateMap(ctx context.Context, id uint, updateMap map[string]any) error {
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	if err := db.Where("id = ?", id).Updates(updateMap).Error; err != nil {
 		return getDBError(gconstant.DBUpdateErr).Wrapf(err, "[%s] UpdateMap fail, id:%d, updateMap:%s", d.daoName, id, gutil.ToJsonString(updateMap))
@@ -71,7 +71,7 @@ func (d *GenericDao[T, L]) UpdateMap(ctx context.Context, id uint, updateMap map
 	return nil
 }
 
-func (d *GenericDao[T, L]) Delete(ctx context.Context, id, deletedBy uint) error {
+func (d *Dao[T, L]) Delete(ctx context.Context, id, deletedBy uint) error {
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	updatedField := map[string]any{
 		"deleted_time": time.Now(),
@@ -83,7 +83,7 @@ func (d *GenericDao[T, L]) Delete(ctx context.Context, id, deletedBy uint) error
 	return nil
 }
 
-func (d *GenericDao[T, L]) GetByID(ctx context.Context, id uint) (*T, error) {
+func (d *Dao[T, L]) GetByID(ctx context.Context, id uint) (*T, error) {
 	var entity T
 	db := d.DB(ctx).Table(d.TableName)
 	if err := db.Where("id = ?", id).Find(&entity).Error; err != nil {
@@ -92,7 +92,7 @@ func (d *GenericDao[T, L]) GetByID(ctx context.Context, id uint) (*T, error) {
 	return &entity, nil
 }
 
-func (d *GenericDao[T, L]) GetByCond(ctx context.Context, cond Cond) (*T, error) {
+func (d *Dao[T, L]) GetByCond(ctx context.Context, cond Cond) (*T, error) {
 	var entity T
 	db := d.DB(ctx).Table(d.TableName)
 	cond.BuildCondition(db, d.TableName)
@@ -102,7 +102,7 @@ func (d *GenericDao[T, L]) GetByCond(ctx context.Context, cond Cond) (*T, error)
 	return &entity, nil
 }
 
-func (d *GenericDao[T, L]) GetListByCond(ctx context.Context, cond Cond) (L, error) {
+func (d *Dao[T, L]) GetListByCond(ctx context.Context, cond Cond) (L, error) {
 	var entityList L
 	db := d.DB(ctx).Table(d.TableName)
 	cond.BuildCondition(db, d.TableName)
@@ -112,7 +112,7 @@ func (d *GenericDao[T, L]) GetListByCond(ctx context.Context, cond Cond) (L, err
 	return entityList, nil
 }
 
-func (d *GenericDao[T, L]) GetPageListByCond(ctx context.Context, cond Cond) (L, int64, error) {
+func (d *Dao[T, L]) GetPageListByCond(ctx context.Context, cond Cond) (L, int64, error) {
 	page, pageSize := cond.GetPageInfo()
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	cond.BuildCondition(db, d.TableName)
@@ -133,7 +133,7 @@ func (d *GenericDao[T, L]) GetPageListByCond(ctx context.Context, cond Cond) (L,
 	return entityList, count, nil
 }
 
-func (d *GenericDao[T, L]) CountByCond(ctx context.Context, cond Cond) (int64, error) {
+func (d *Dao[T, L]) CountByCond(ctx context.Context, cond Cond) (int64, error) {
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	cond.BuildCondition(db, d.TableName)
 
