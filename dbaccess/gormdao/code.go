@@ -1,4 +1,4 @@
-package genericdao
+package gormdao
 
 import (
 	"github.com/morehao/golib/gerror"
