@@ -85,10 +85,11 @@ type UploadAndRecordRequest struct {
 
 type fileCond struct {
 	ID         uint
-	FileID     uint
-	ContentHash string
-	UploadID   string
-	Status     FileStatus
+	FileID       uint
+	ContentHash  string
+	UploadID     string
+	StorageURI   string
+	Status       FileStatus
 	Page       int
 	PageSize   int
 	OrderField string
@@ -106,6 +107,9 @@ func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 	}
 	if c.UploadID != "" {
 		db.Where(fmt.Sprintf("%s.upload_id = ?", tableName), c.UploadID)
+	}
+	if c.StorageURI != "" {
+		db.Where(fmt.Sprintf("%s.storage_uri = ?", tableName), c.StorageURI)
 	}
 	if c.Status != "" {
 		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)

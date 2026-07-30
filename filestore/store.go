@@ -21,10 +21,10 @@ func (s *store) CreateFileHash(ctx context.Context, fh *File) error {
 
 func (s *store) GetFileHashByContentHash(ctx context.Context, contentHash string) (*File, error) {
 	var fh File
-	result := s.db.WithContext(ctx).
-		Table(File{}.TableName()).
-		Where("content_hash = ?", contentHash).
-		Find(&fh)
+	db := s.db.WithContext(ctx).Table(File{}.TableName())
+	(&fileCond{ContentHash: contentHash}).BuildCondition(db, File{}.TableName())
+
+	result := db.Find(&fh)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -36,10 +36,10 @@ func (s *store) GetFileHashByContentHash(ctx context.Context, contentHash string
 
 func (s *store) GetFileByID(ctx context.Context, fileID uint) (*File, error) {
 	var fh File
-	result := s.db.WithContext(ctx).
-		Table(File{}.TableName()).
-		Where("id = ?", fileID).
-		Find(&fh)
+	db := s.db.WithContext(ctx).Table(File{}.TableName())
+	(&fileCond{ID: fileID}).BuildCondition(db, File{}.TableName())
+
+	result := db.Find(&fh)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -55,10 +55,10 @@ func (s *store) CreateFileRecord(ctx context.Context, rec *FileUpload) error {
 
 func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileUpload, error) {
 	var rec FileUpload
-	result := s.db.WithContext(ctx).
-		Table(FileUpload{}.TableName()).
-		Where("id = ?", id).
-		Find(&rec)
+	db := s.db.WithContext(ctx).Table(FileUpload{}.TableName())
+	(&fileCond{ID: id}).BuildCondition(db, FileUpload{}.TableName())
+
+	result := db.Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -70,10 +70,10 @@ func (s *store) GetFileRecordByID(ctx context.Context, id uint) (*FileUpload, er
 
 func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*FileUpload, error) {
 	var rec FileUpload
-	result := s.db.WithContext(ctx).
-		Table(FileUpload{}.TableName()).
-		Where("upload_id = ?", uploadID).
-		Find(&rec)
+	db := s.db.WithContext(ctx).Table(FileUpload{}.TableName())
+	(&fileCond{UploadID: uploadID}).BuildCondition(db, FileUpload{}.TableName())
+
+	result := db.Find(&rec)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -85,10 +85,10 @@ func (s *store) GetFileRecordByUploadID(ctx context.Context, uploadID string) (*
 
 func (s *store) GetFileUploadIDByStorageURI(ctx context.Context, storageURI string) (uint, error) {
 	var file File
-	result := s.db.WithContext(ctx).
-		Table(File{}.TableName()).
-		Where("storage_uri = ?", storageURI).
-		Find(&file)
+	db := s.db.WithContext(ctx).Table(File{}.TableName())
+	(&fileCond{StorageURI: storageURI}).BuildCondition(db, File{}.TableName())
+
+	result := db.Find(&file)
 	if result.Error != nil {
 		return 0, result.Error
 	}
@@ -97,11 +97,10 @@ func (s *store) GetFileUploadIDByStorageURI(ctx context.Context, storageURI stri
 	}
 
 	var upload FileUpload
-	result = s.db.WithContext(ctx).
-		Table(FileUpload{}.TableName()).
-		Where("file_id = ? AND status = ?", file.ID, FileStatusCompleted).
-		Order("id DESC").
-		Find(&upload)
+	db2 := s.db.WithContext(ctx).Table(FileUpload{}.TableName())
+	(&fileCond{FileID: file.ID, Status: FileStatusCompleted, OrderField: "id DESC"}).BuildCondition(db2, FileUpload{}.TableName())
+
+	result = db2.Find(&upload)
 	if result.Error != nil {
 		return 0, result.Error
 	}
