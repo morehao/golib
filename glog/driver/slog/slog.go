@@ -36,7 +36,9 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 			return nil, err
 		}
 		fileWriter = fw
-		handler := newSlogHandler(cfg, o, fw)
+		fileHandler := newSlogHandler(cfg, o, fw)
+		consoleHandler := newSlogHandler(cfg, o, os.Stdout)
+		handler := newMultiHandler(fileHandler, consoleHandler)
 		logger = slog.New(handler)
 	}
 
