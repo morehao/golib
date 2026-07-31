@@ -5,14 +5,22 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
+	"time"
 
 	"github.com/morehao/golib/glog"
 )
+
+// 从 slogLogger.log() 到业务代码的固定栈帧数
+// runtime.Callers(0) 首帧为 runtime.Callers 自身
+// 调用链: runtime.Callers → slogLogger.log → slogLogger.Debugw → glog.Debugw → 业务代码
+const slogBaseCallerSkip = 4
 
 type slogLogger struct {
 	logger      *slog.Logger
 	cfg         *glog.LogConfig
 	fileWriters []*gSlogFileWriter
+	callerSkip  int
 }
 
 func wrapHandler(inner slog.Handler, cfg *glog.LogConfig, o *glog.LoggerOptions) *gSlogHandler {
@@ -57,7 +65,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 		handlerOpts := &slog.HandlerOptions{
 			AddSource:   true,
 			Level:       logLevelToSlog(effectiveLevel),
-			ReplaceAttr: replaceLevel,
+			ReplaceAttr: replaceAttr,
 		}
 
 		switch wc.Type {
@@ -92,7 +100,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 		handlerOpts := &slog.HandlerOptions{
 			AddSource:   true,
 			Level:       logLevelToSlog(cfg.Level),
-			ReplaceAttr: replaceLevel,
+			ReplaceAttr: replaceAttr,
 		}
 		innerHandler := slog.NewJSONHandler(os.Stdout, handlerOpts)
 		h := wrapHandler(innerHandler, cfg, o)
@@ -100,14 +108,14 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 	}
 
 	logger := slog.New(newMultiHandler(handlers...)).With(
-		slog.String("service", serviceName),
-		slog.String("module", moduleName),
+		slog.String("module", serviceName+"/"+moduleName),
 	)
 
 	return &slogLogger{
 		logger:      logger,
 		cfg:         cfg,
 		fileWriters: fileWriters,
+		callerSkip:  slogBaseCallerSkip + o.CallerSkip,
 	}, nil
 }
 
@@ -124,6 +132,7 @@ func (l *slogLogger) With(kvs ...any) glog.Logger {
 		logger:      l.logger.With(kvs...),
 		cfg:         l.cfg,
 		fileWriters: l.fileWriters,
+		callerSkip:  l.callerSkip,
 	}
 }
 
@@ -226,23 +235,14 @@ func (l *slogLogger) log(ctx context.Context, level glog.Level, msg string, kvs 
 	if glog.SkipLog(ctx) {
 		return
 	}
-
 	kvs = normalizeKVs(kvs)
 
-	switch level {
-	case glog.DebugLevel:
-		l.logger.DebugContext(ctx, msg, kvs...)
-	case glog.InfoLevel:
-		l.logger.InfoContext(ctx, msg, kvs...)
-	case glog.WarnLevel:
-		l.logger.WarnContext(ctx, msg, kvs...)
-	case glog.ErrorLevel:
-		l.logger.ErrorContext(ctx, msg, kvs...)
-	case glog.PanicLevel:
-		l.logger.Log(ctx, slogLevelPanic, msg, kvs...)
-	case glog.FatalLevel:
-		l.logger.Log(ctx, slogLevelFatal, msg, kvs...)
-	}
+	var pc [1]uintptr
+	runtime.Callers(l.callerSkip, pc[:])
+	r := slog.NewRecord(time.Now(), logLevelToSlog(level), msg, pc[0])
+	r.Add(kvs...)
+
+	_ = l.logger.Handler().Handle(ctx, r)
 }
 
 func normalizeKVs(kvs []any) []any {

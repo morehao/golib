@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,21 +27,48 @@ type gSlogHandler struct {
 	cfg             *glog.LogConfig
 }
 
-func replaceLevel(groups []string, a slog.Attr) slog.Attr {
-	if len(groups) != 0 || a.Key != slog.LevelKey {
+func replaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) > 0 {
 		return a
 	}
-	level, ok := a.Value.Any().(slog.Level)
-	if !ok {
-		return a
-	}
-	switch level {
-	case slogLevelPanic:
-		return slog.String(slog.LevelKey, "PANIC")
-	case slogLevelFatal:
-		return slog.String(slog.LevelKey, "FATAL")
+	switch a.Key {
+	case slog.TimeKey:
+		if t, ok := a.Value.Any().(time.Time); ok {
+			return slog.String(slog.TimeKey, t.Format("2006-01-02 15:04:05.000000"))
+		}
+	case slog.LevelKey:
+		level, ok := a.Value.Any().(slog.Level)
+		if !ok {
+			return a
+		}
+		switch level {
+		case slogLevelPanic:
+			return slog.String(slog.LevelKey, "panic")
+		case slogLevelFatal:
+			return slog.String(slog.LevelKey, "fatal")
+		}
+		return slog.String(slog.LevelKey, level.String())
+	case slog.SourceKey:
+		src, ok := a.Value.Any().(*slog.Source)
+		if !ok || src == nil {
+			return slog.Attr{}
+		}
+		return slog.String("caller", trimSourceFile(src.File)+":"+strconv.Itoa(src.Line))
 	}
 	return a
+}
+
+func trimSourceFile(absPath string) string {
+	if idx := strings.Index(absPath, "/pkg/mod/"); idx != -1 {
+		return absPath[idx+len("/pkg/mod/"):]
+	}
+	dir, file := path.Split(absPath)
+	if dir == "" {
+		return absPath
+	}
+	dir = dir[:len(dir)-1]
+	parent := path.Base(dir)
+	return parent + "/" + file
 }
 
 func (h *gSlogHandler) Enabled(ctx context.Context, level slog.Level) bool {
