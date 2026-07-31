@@ -5,9 +5,17 @@ import (
 	"time"
 
 	"github.com/morehao/golib/gconstant"
+	"github.com/morehao/golib/gerror"
 	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 )
+
+func getDBError(code int) *gerror.Error {
+	return &gerror.Error{
+		Code: code,
+		Msg:  gconstant.DBErrorMsgMap[code],
+	}
+}
 
 type Entity interface {
 	TableName() string
