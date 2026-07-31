@@ -12,8 +12,8 @@ import (
 )
 
 type FileStore struct {
-	fileDao    *gormdao.Dao[File, []File]
-	uploadDao  *gormdao.Dao[FileUpload, []FileUpload]
+	fileDao    *gormdao.Dao[FileEntity, []FileEntity]
+	uploadDao  *gormdao.Dao[FileUploadEntity, []FileUploadEntity]
 	st         storage.Storage
 	bucket     string
 	signSecret string
@@ -25,14 +25,14 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...StoreOption) (*
 		fn(&o)
 	}
 
-	if err := db.AutoMigrate(&File{}, &FileUpload{}); err != nil {
+	if err := db.AutoMigrate(&FileEntity{}, &FileUploadEntity{}); err != nil {
 		return nil, fmt.Errorf("filestore.New: auto-migrate: %w", err)
 	}
 
 	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
 	return &FileStore{
-		fileDao:    gormdao.NewDao[File, []File](File{}.TableName(), "filestore.file", getDB, gormdao.WithoutSoftDelete()),
-		uploadDao:  gormdao.NewDao[FileUpload, []FileUpload](FileUpload{}.TableName(), "filestore.upload", getDB, gormdao.WithoutSoftDelete()),
+		fileDao:    gormdao.NewDao[FileEntity, []FileEntity](FileEntity{}.TableName(), "filestore.file", getDB, gormdao.WithoutSoftDelete()),
+		uploadDao:  gormdao.NewDao[FileUploadEntity, []FileUploadEntity](FileUploadEntity{}.TableName(), "filestore.upload", getDB, gormdao.WithoutSoftDelete()),
 		st:         st,
 		bucket:     bucket,
 		signSecret: o.signSecret,
@@ -69,7 +69,7 @@ func (s *FileStore) parseStorageURI(uri string) (scheme, bucket, key string, err
 	return scheme, bucket, key, nil
 }
 
-func (s *FileStore) fillFileDetail(ctx context.Context, upload *FileUpload) (*FileDetail, error) {
+func (s *FileStore) fillFileDetail(ctx context.Context, upload *FileUploadEntity) (*FileDetail, error) {
 	detail := &FileDetail{
 		FileUploadID: upload.ID,
 		CreatedAt:    upload.CreatedAt,
@@ -97,7 +97,7 @@ func (s *FileStore) fillFileDetail(ctx context.Context, upload *FileUpload) (*Fi
 	return detail, nil
 }
 
-func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, size int64, storagePath string) (*File, error) {
+func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, size int64, storagePath string) (*FileEntity, error) {
 	fh, err := s.fileDao.GetByCond(ctx, &fileCond{ContentHash: contentHash})
 	if err != nil {
 		return nil, fmt.Errorf("findOrCreateFile: get hash: %w", err)
@@ -106,7 +106,7 @@ func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, si
 		return fh, nil
 	}
 
-	fh = &File{
+	fh = &FileEntity{
 		ContentHash: contentHash,
 		Size:        size,
 		StorageURI:  s.buildStorageURI(storagePath),
@@ -163,7 +163,7 @@ func (s *FileStore) RecordUpload(ctx context.Context, req RecordUploadRequest) (
 		return nil, fmt.Errorf("filestore.RecordUpload: %w", err)
 	}
 
-	upload := &FileUpload{
+	upload := &FileUploadEntity{
 		FileID:   fh.ID,
 		Name:     req.Name,
 		MimeType: req.MimeType,
@@ -191,7 +191,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 			return nil, fmt.Errorf("filestore.UploadAndRecord: put object: %w", err)
 		}
 
-		fh = &File{
+		fh = &FileEntity{
 			ContentHash: req.ContentHash,
 			Size:        req.Size,
 			StorageURI:  s.buildStorageURI(req.StoragePath),
@@ -209,7 +209,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		}
 	}
 
-	upload := &FileUpload{
+	upload := &FileUploadEntity{
 		FileID:   fh.ID,
 		Name:     req.Name,
 		MimeType: req.MimeType,
@@ -298,7 +298,7 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: %w", fhErr)
 	}
 
-	upload := &FileUpload{
+	upload := &FileUploadEntity{
 		FileID:   fh.ID,
 		Name:     req.Name,
 		MimeType: req.MimeType,

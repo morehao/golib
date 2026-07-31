@@ -30,7 +30,11 @@ func New(db *gorm.DB) *kv {
 	if err != nil {
 		panic("init configkv crypto failed: " + err.Error())
 	}
-	s := newStore(db, registry, c)
+
+	getDB := func(ctx context.Context) *gorm.DB {
+		return db.WithContext(ctx)
+	}
+	s := newStore(getDB, registry, c)
 	adminAPI = newAdmin(s)
 	return &kv{store: s}
 }
@@ -103,7 +107,11 @@ func Init(db *gorm.DB) {
 		if err != nil {
 			panic("init configkv crypto failed: " + err.Error())
 		}
-		s := newStore(db, registry, c)
+
+		getDB := func(ctx context.Context) *gorm.DB {
+			return db.WithContext(ctx)
+		}
+		s := newStore(getDB, registry, c)
 		adminAPI = newAdmin(s)
 		instance = &kv{store: s}
 	})

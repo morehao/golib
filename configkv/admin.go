@@ -33,26 +33,36 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 		status = Status(req.Status)
 	}
 
+	encryptionMode := EncryptionModePlain
 	if req.Encrypted {
-		return a.store.SetEncrypted(ctx, req.Group, req.Key, valueType, req.Value)
+		encryptionMode = EncryptionModeEncrypted
+	}
+
+	value := req.Value
+	if req.Encrypted {
+		ciphertext, err := a.store.crypto.Encrypt(req.Value)
+		if err != nil {
+			return err
+		}
+		value = ciphertext
 	}
 
 	entity := &ConfigEntity{
 		GroupName:      req.Group,
 		Key:            req.Key,
 		ValueType:      valueType,
-		Value:          req.Value,
-		EncryptionMode: EncryptionModePlain,
+		Value:          value,
+		EncryptionMode: encryptionMode,
 		Status:         status,
 		Description:    req.Description,
 	}
 
-	return a.store.db.WithContext(ctx).Save(entity).Error
+	return a.store.Set(ctx, entity)
 }
 
 func (a *AdminAPI) Update(ctx context.Context, id uint, req *UpdateReq) error {
-	var entity ConfigEntity
-	if err := a.store.db.WithContext(ctx).Where("id = ?", id).First(&entity).Error; err != nil {
+	entity, err := a.store.GetByID(ctx, id)
+	if err != nil {
 		return err
 	}
 
@@ -89,21 +99,20 @@ func (a *AdminAPI) Update(ctx context.Context, id uint, req *UpdateReq) error {
 		return nil
 	}
 
-	return a.store.db.WithContext(ctx).Model(&ConfigEntity{}).Where("id = ?", id).Updates(updateMap).Error
+	return a.store.UpdateByID(ctx, id, updateMap)
 }
 
 func (a *AdminAPI) Delete(ctx context.Context, id uint) error {
-	return a.store.db.WithContext(ctx).Where("id = ?", id).Delete(&ConfigEntity{}).Error
+	return a.store.DeleteByID(ctx, id)
 }
 
 func (a *AdminAPI) GetByID(ctx context.Context, id uint) (*ConfigInfo, error) {
-	var entity ConfigEntity
-	err := a.store.db.WithContext(ctx).Where("id = ?", id).First(&entity).Error
+	entity, err := a.store.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg, err := a.store.Get(ctx, entity.GroupName, entity.Key)
+	decrypted, err := a.store.Get(ctx, entity.GroupName, entity.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +122,7 @@ func (a *AdminAPI) GetByID(ctx context.Context, id uint) (*ConfigInfo, error) {
 		GroupName:      entity.GroupName,
 		Key:            entity.Key,
 		ValueType:      entity.ValueType,
-		Value:          cfg.Value,
+		Value:          decrypted.Value,
 		EncryptionMode: entity.EncryptionMode,
 		Description:    entity.Description,
 		Status:         entity.Status,
@@ -123,26 +132,9 @@ func (a *AdminAPI) GetByID(ctx context.Context, id uint) (*ConfigInfo, error) {
 }
 
 func (a *AdminAPI) ListPage(ctx context.Context, cond *ConfigCond) (*ConfigListResp, error) {
-	var list []*ConfigEntity
-	db := a.store.db.WithContext(ctx).Model(&ConfigEntity{})
-	cond.BuildCondition(db, tableName)
-
-	var count int64
-	if err := db.Count(&count).Error; err != nil {
+	list, count, err := a.store.ListPage(ctx, cond)
+	if err != nil {
 		return nil, err
-	}
-
-	page, pageSize := cond.GetPageInfo()
-	if pageSize > 0 && page > 0 {
-		db.Offset((page - 1) * pageSize).Limit(pageSize)
-	}
-
-	if err := db.Find(&list).Error; err != nil {
-		return nil, err
-	}
-
-	for _, entity := range list {
-		a.store.decryptEntity(entity)
 	}
 
 	items := make([]*ConfigInfo, 0, len(list))
@@ -152,6 +144,7 @@ func (a *AdminAPI) ListPage(ctx context.Context, cond *ConfigCond) (*ConfigListR
 			GroupName:      entity.GroupName,
 			Key:            entity.Key,
 			ValueType:      entity.ValueType,
+			Value:          entity.Value,
 			EncryptionMode: entity.EncryptionMode,
 			Description:    entity.Description,
 			Status:         entity.Status,

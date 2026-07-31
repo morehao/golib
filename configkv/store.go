@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"gorm.io/gorm"
+	"github.com/morehao/golib/dbaccess/gormdao"
 )
 
 const (
@@ -12,107 +12,84 @@ const (
 )
 
 type store struct {
-	db            *gorm.DB
+	dbGetter      gormdao.DBGetter
+	dao           *gormdao.Dao[*ConfigEntity, []*ConfigEntity]
 	codecRegistry map[ValueType]Codec
 	crypto        *aesCrypto
 }
 
-func newStore(db *gorm.DB, codecRegistry map[ValueType]Codec, crypto *aesCrypto) *store {
+func newStore(dbGetter gormdao.DBGetter, codecRegistry map[ValueType]Codec, crypto *aesCrypto) *store {
 	return &store{
-		db:            db,
+		dbGetter:      dbGetter,
+		dao:           gormdao.NewDao[*ConfigEntity, []*ConfigEntity](tableName, "configkv", dbGetter, gormdao.WithoutSoftDelete()),
 		codecRegistry: codecRegistry,
 		crypto:        crypto,
 	}
 }
 
-func (s *store) marshalValue(valueType ValueType, val any) (string, bool, error) {
+func (s *store) marshalValue(valueType ValueType, val any) (string, error) {
 	switch valueType {
 	case ValueTypeString:
 		if v, ok := val.(string); ok {
-			return v, false, nil
+			return v, nil
 		}
-		return fmt.Sprintf("%v", val), false, nil
+		return fmt.Sprintf("%v", val), nil
 
 	case ValueTypeInt:
 		switch v := val.(type) {
 		case int:
-			return fmt.Sprintf("%d", v), false, nil
+			return fmt.Sprintf("%d", v), nil
 		case int64:
-			return fmt.Sprintf("%d", v), false, nil
+			return fmt.Sprintf("%d", v), nil
 		case int32:
-			return fmt.Sprintf("%d", v), false, nil
+			return fmt.Sprintf("%d", v), nil
 		default:
-			return "", false, fmt.Errorf("cannot convert %T to int", val)
+			return "", fmt.Errorf("cannot convert %T to int", val)
 		}
 
 	case ValueTypeBool:
 		switch v := val.(type) {
 		case bool:
-			return fmt.Sprintf("%t", v), false, nil
+			return fmt.Sprintf("%t", v), nil
 		default:
-			return "", false, fmt.Errorf("cannot convert %T to bool", val)
+			return "", fmt.Errorf("cannot convert %T to bool", val)
 		}
 
 	case ValueTypeJson, ValueTypeToml, ValueTypeYaml:
 		codec := s.codecRegistry[valueType]
 		if codec == nil {
-			return "", false, fmt.Errorf("%w: %s", errNoCodecRegistered, valueType)
+			return "", fmt.Errorf("%w: %s", errNoCodecRegistered, valueType)
 		}
 		data, err := codec.Marshal(val)
 		if err != nil {
-			return "", false, fmt.Errorf("marshal failed: %w", err)
+			return "", fmt.Errorf("marshal failed: %w", err)
 		}
-		return string(data), false, nil
+		return string(data), nil
 
 	default:
-		return "", false, errUnsupportedValueType
+		return "", errUnsupportedValueType
 	}
 }
 
-func (s *store) Set(ctx context.Context, group, key string, valueType ValueType, val any) error {
-	if group == "" || key == "" {
+func (s *store) Set(ctx context.Context, entity *ConfigEntity) error {
+	if entity.GroupName == "" || entity.Key == "" {
 		return errGroupAndKeyRequired
 	}
 
-	value, _, err := s.marshalValue(valueType, val)
-	if err != nil {
-		return err
-	}
-
-	config := ConfigEntity{
-		GroupName:      group,
-		Key:            key,
-		ValueType:      valueType,
-		Value:          value,
-		EncryptionMode: EncryptionModePlain,
-	}
-
-	err = s.db.WithContext(ctx).Save(&config).Error
-	return err
-}
-
-func (s *store) Delete(ctx context.Context, group, key string) error {
-	if group == "" || key == "" {
-		return errGroupAndKeyRequired
-	}
-	cond := &ConfigCond{Group: group, Key: key, ExactKey: true}
-	db := s.db.WithContext(ctx).Model(&ConfigEntity{})
-	cond.BuildCondition(db, tableName)
-	return db.Delete(&ConfigEntity{}).Error
+	return s.dbGetter(ctx).Table(tableName).Save(entity).Error
 }
 
 func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType ValueType, val any) error {
 	if group == "" || key == "" {
 		return errGroupAndKeyRequired
 	}
-
-	value, _, err := s.marshalValue(valueType, val)
-	if err != nil {
-		return err
-	}
-
 	if s.crypto == nil {
 		return errCryptoNotConfigured
+	}
+
+	value, err := s.marshalValue(valueType, val)
+	if err != nil {
+		return err
 	}
 
 	ciphertext, err := s.crypto.Encrypt(value)
@@ -120,15 +97,15 @@ func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType V
 		return fmt.Errorf("encrypt failed: %w", err)
 	}
 
-	config := ConfigEntity{
+	entity := &ConfigEntity{
 		GroupName:      group,
 		Key:            key,
 		ValueType:      valueType,
 		Value:          ciphertext,
 		EncryptionMode: EncryptionModeEncrypted,
+		Status:         StatusEnabled,
 	}
-
-	return s.db.WithContext(ctx).Save(&config).Error
+	return s.Set(ctx, entity)
 }
 
 func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, error) {
@@ -137,16 +114,61 @@ func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, erro
 	}
 
 	cond := &ConfigCond{Group: group, Key: key, ExactKey: true}
-	db := s.db.WithContext(ctx).Model(&ConfigEntity{})
-	cond.BuildCondition(db, tableName)
-
-	var config ConfigEntity
-	err := db.First(&config).Error
+	entity, err := s.dao.GetByCond(ctx, cond)
 	if err != nil {
+		return nil, err
+	}
+	if entity == nil || (*entity).ID == 0 {
 		return &ConfigEntity{}, nil
 	}
 
-	return s.decryptEntity(&config), nil
+	return s.decryptEntity(*entity), nil
+}
+
+func (s *store) GetByID(ctx context.Context, id uint) (*ConfigEntity, error) {
+	entity, err := s.dao.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.decryptEntity(*entity), nil
+}
+
+func (s *store) DeleteByGroupKey(ctx context.Context, group, key string) error {
+	if group == "" || key == "" {
+		return errGroupAndKeyRequired
+	}
+
+	cond := &ConfigCond{Group: group, Key: key, ExactKey: true}
+	entity, err := s.dao.GetByCond(ctx, cond)
+	if err != nil {
+		return err
+	}
+	if entity == nil || (*entity).ID == 0 {
+		return nil
+	}
+
+	return s.dao.Delete(ctx, (*entity).ID, 0)
+}
+
+func (s *store) DeleteByID(ctx context.Context, id uint) error {
+	return s.dao.Delete(ctx, id, 0)
+}
+
+func (s *store) UpdateByID(ctx context.Context, id uint, updateMap map[string]any) error {
+	return s.dao.UpdateMap(ctx, id, updateMap)
+}
+
+func (s *store) ListPage(ctx context.Context, cond *ConfigCond) ([]*ConfigEntity, int64, error) {
+	list, count, err := s.dao.GetPageListByCond(ctx, cond)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	for _, entity := range list {
+		s.decryptEntity(entity)
+	}
+
+	return list, count, nil
 }
 
 func (s *store) decryptEntity(config *ConfigEntity) *ConfigEntity {

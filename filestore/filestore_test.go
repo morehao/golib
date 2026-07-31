@@ -108,8 +108,8 @@ func TestNewAutoMigrate(t *testing.T) {
 	fs, err := New(db, st, "test-bucket")
 	require.NoError(t, err)
 	require.NotNil(t, fs)
-	require.True(t, db.Migrator().HasTable(&File{}))
-	require.True(t, db.Migrator().HasTable(&FileUpload{}))
+	require.True(t, db.Migrator().HasTable(&FileEntity{}))
+	require.True(t, db.Migrator().HasTable(&FileUploadEntity{}))
 }
 
 func TestCheckExist_NotFound(t *testing.T) {
