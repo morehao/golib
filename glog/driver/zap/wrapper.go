@@ -56,19 +56,19 @@ func getZapStandoutWriter() zapcore.WriteSyncer {
 }
 
 type dailyRotateWriter struct {
-	mu         sync.Mutex
-	cfg        *glog.LogConfig
-	fileSuffix string
+	mu          sync.Mutex
+	wc          glog.WriterConfig
+	serviceName string
 
 	current  *lumberjack.Logger
 	today    string
 	buffered *zapcore.BufferedWriteSyncer
 }
 
-func newDailyRotateWriter(cfg *glog.LogConfig, fileSuffix string) (*dailyRotateWriter, error) {
+func newDailyRotateWriter(wc glog.WriterConfig, serviceName string) (*dailyRotateWriter, error) {
 	w := &dailyRotateWriter{
-		cfg:        cfg,
-		fileSuffix: fileSuffix,
+		wc:          wc,
+		serviceName: serviceName,
 	}
 	if err := w.rotate(time.Now().Format("20060102")); err != nil {
 		return nil, err
@@ -81,32 +81,22 @@ func (w *dailyRotateWriter) rotate(today string) error {
 		_ = w.buffered.Stop()
 	}
 
-	dir := strings.TrimSuffix(w.cfg.Dir, "/") + "/" + today
+	dir := strings.TrimSuffix(w.wc.EffectiveDir(), "/") + "/" + today
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		return fmt.Errorf("glog: mkdir %s: %w", dir, err)
 	}
 
-	logFilepath := path.Join(dir, fmt.Sprintf("%s_%s.log", w.cfg.Service, w.fileSuffix))
+	fileName := w.wc.EffectiveFileName(w.serviceName)
+	logFilepath := path.Join(dir, fileName)
 
-	maxSize := w.cfg.MaxSize
-	if maxSize <= 0 {
-		maxSize = 100
-	}
-	maxBackups := w.cfg.MaxBackups
-	if maxBackups <= 0 {
-		maxBackups = 10
-	}
-	maxAge := w.cfg.MaxAge
-	if maxAge <= 0 {
-		maxAge = 7
-	}
+	maxSize, maxBackups, maxAge := w.wc.EffectiveRotateConfig()
 
 	lj := &lumberjack.Logger{
 		Filename:   logFilepath,
 		MaxSize:    maxSize,
 		MaxBackups: maxBackups,
 		MaxAge:     maxAge,
-		Compress:   w.cfg.Compress,
+		Compress:   w.wc.Compress,
 		LocalTime:  true,
 	}
 
@@ -146,6 +136,4 @@ func (w *dailyRotateWriter) Sync() error {
 	return nil
 }
 
-func getZapFileWriter(cfg *glog.LogConfig, fileSuffix string) (zapcore.WriteSyncer, error) {
-	return newDailyRotateWriter(cfg, fileSuffix)
-}
+

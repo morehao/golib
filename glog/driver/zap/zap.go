@@ -68,36 +68,6 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, erro
 		zapCfg.enableOTELTrace = *o.EnableOTELTrace
 	}
 
-	encoder := getZapEncoder(zapCfg)
-
-	consoleCore := zapcore.NewCore(
-		encoder,
-		getZapStandoutWriter(),
-		logLevelMap[cfg.Level],
-	)
-
-	var cores []zapcore.Core
-
-	switch cfg.Writer {
-	case glog.WriterConsole:
-		cores = append(cores, consoleCore)
-	case glog.WriterFile:
-		defaultWriter, err := getZapFileWriter(cfg, "full")
-		if err != nil {
-			return nil, err
-		}
-		wfWriter, err := getZapFileWriter(cfg, "wf")
-		if err != nil {
-			return nil, err
-		}
-		defaultCore := zapcore.NewCore(encoder, defaultWriter, logLevelMap[cfg.Level])
-		wfCore := zapcore.NewCore(encoder, wfWriter, zapcore.WarnLevel)
-		cores = append(cores, consoleCore, defaultCore, wfCore)
-	}
-
-	core := zapcore.NewTee(cores...)
-	logger := zap.New(core, zap.Development(), zap.AddCaller(), zap.AddStacktrace(zapcore.PanicLevel))
-
 	serviceName := cfg.Service
 	if serviceName == "" {
 		serviceName = glog.DefaultServiceName
@@ -106,6 +76,50 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, erro
 	if moduleName == "" {
 		moduleName = glog.DefaultModuleName
 	}
+
+	encoder := getZapEncoder(zapCfg)
+
+	var cores []zapcore.Core
+
+	for _, wc := range cfg.Writers {
+		effectiveLevel := wc.EffectiveLevel(cfg.Level)
+
+		switch wc.Type {
+		case glog.WriterConsole:
+			consoleCore := zapcore.NewCore(
+				encoder,
+				getZapStandoutWriter(),
+				logLevelMap[effectiveLevel],
+			)
+			cores = append(cores, consoleCore)
+		case glog.WriterFile:
+			dw, err := newDailyRotateWriter(wc, serviceName)
+			if err != nil {
+				return nil, err
+			}
+
+			if wc.WfOnly {
+				wfCore := zapcore.NewCore(encoder, dw, zapcore.WarnLevel)
+				cores = append(cores, wfCore)
+			} else {
+				fileCore := zapcore.NewCore(encoder, dw, logLevelMap[effectiveLevel])
+				cores = append(cores, fileCore)
+			}
+		}
+	}
+
+	if len(cores) == 0 {
+		consoleCore := zapcore.NewCore(
+			encoder,
+			getZapStandoutWriter(),
+			logLevelMap[cfg.Level],
+		)
+		cores = append(cores, consoleCore)
+	}
+
+	core := zapcore.NewTee(cores...)
+	logger := zap.New(core, zap.Development(), zap.AddCaller(), zap.AddStacktrace(zapcore.PanicLevel))
+
 	logger = logger.Named(serviceName).Named(moduleName)
 
 	callerSkip := glog.DefaultLogCallerSkip

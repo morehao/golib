@@ -26,8 +26,7 @@ func TestInit(t *testing.T) {
 			Service:    "test-service",
 			Module:     "test-module",
 			Level:      glog.InfoLevel,
-			Writer:     glog.WriterFile,
-			Dir:        tempDir,
+			Writers:    []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 			LoggerType: glog.LoggerTypeZap,
 		}
 
@@ -38,7 +37,7 @@ func TestInit(t *testing.T) {
 		glog.Close()
 
 		expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
-		expectedFile := filepath.Join(expectedDir, "test-service_full.log")
+		expectedFile := filepath.Join(expectedDir, "test-service.log")
 		if !glog.FileExists(expectedFile) {
 			t.Errorf("Log file not created: %s", expectedFile)
 		}
@@ -49,8 +48,7 @@ func TestInit(t *testing.T) {
 			Service:    "test-service",
 			Module:     "test-module",
 			Level:      glog.InfoLevel,
-			Writer:     glog.WriterConsole,
-			Dir:        tempDir,
+			Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 			LoggerType: glog.LoggerTypeZap,
 		}
 
@@ -76,8 +74,7 @@ func TestHook(t *testing.T) {
 	config := &glog.LogConfig{
 		Service:    "test",
 		Level:      glog.DebugLevel,
-		Writer:     glog.WriterConsole,
-		Dir:        tempDir,
+		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 		LoggerType: glog.LoggerTypeZap,
 	}
 
@@ -126,8 +123,7 @@ func TestExtraKeys(t *testing.T) {
 		Service:    "test",
 		Module:     "test",
 		Level:      glog.DebugLevel,
-		Writer:     glog.WriterConsole,
-		Dir:        tempDir,
+		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 		ExtraKeys:  []string{glog.KeyTraceID, "user_id", glog.KeyAppRequestID},
 		LoggerType: glog.LoggerTypeZap,
 	}
@@ -158,12 +154,7 @@ func TestLogRotation(t *testing.T) {
 	config := &glog.LogConfig{
 		Service:    "rotation-test",
 		Level:      glog.InfoLevel,
-		Writer:     glog.WriterFile,
-		Dir:        tempDir,
-		MaxSize:    1,
-		MaxBackups: 5,
-		MaxAge:     7,
-		Compress:   false,
+		Writers:    []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir, MaxSize: 1, MaxBackups: 5, MaxAge: 7, Compress: false}},
 		LoggerType: glog.LoggerTypeZap,
 	}
 
@@ -180,7 +171,7 @@ func TestLogRotation(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
-	baseFile := filepath.Join(expectedDir, "rotation-test_full.log")
+	baseFile := filepath.Join(expectedDir, "rotation-test.log")
 
 	assert.True(t, glog.FileExists(baseFile), "Current log file should exist")
 
@@ -189,7 +180,7 @@ func TestLogRotation(t *testing.T) {
 
 	rotated := false
 	for _, file := range files {
-		if strings.Contains(file.Name(), "rotation-test_full-") && strings.HasSuffix(file.Name(), ".log") {
+		if strings.Contains(file.Name(), "rotation-test-") && strings.HasSuffix(file.Name(), ".log") {
 			rotated = true
 			break
 		}
@@ -208,8 +199,7 @@ func TestOTELTraceFieldsInjected(t *testing.T) {
 		Service:         "otel-test",
 		Module:          "test",
 		Level:           glog.InfoLevel,
-		Writer:          glog.WriterFile,
-		Dir:             tempDir,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 		EnableOTELTrace: true,
 		LoggerType:      glog.LoggerTypeZap,
 	}
@@ -227,7 +217,7 @@ func TestOTELTraceFieldsInjected(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-test_full.log")
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-test.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -245,8 +235,7 @@ func TestOTELTraceFieldsDisabled(t *testing.T) {
 		Service:         "otel-disabled",
 		Module:          "test",
 		Level:           glog.InfoLevel,
-		Writer:          glog.WriterFile,
-		Dir:             tempDir,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 		EnableOTELTrace: false,
 		LoggerType:      glog.LoggerTypeZap,
 	}
@@ -264,7 +253,7 @@ func TestOTELTraceFieldsDisabled(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-disabled_full.log")
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-disabled.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -282,8 +271,7 @@ func TestOTELTraceOptionOverridesConfig(t *testing.T) {
 		Service:         "otel-option",
 		Module:          "test",
 		Level:           glog.InfoLevel,
-		Writer:          glog.WriterFile,
-		Dir:             tempDir,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 		EnableOTELTrace: true,
 		LoggerType:      glog.LoggerTypeZap,
 	}
@@ -301,7 +289,7 @@ func TestOTELTraceOptionOverridesConfig(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-option_full.log")
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-option.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -319,8 +307,7 @@ func TestOTELTraceWithoutSpanContext(t *testing.T) {
 		Service:         "otel-nospan",
 		Module:          "test",
 		Level:           glog.InfoLevel,
-		Writer:          glog.WriterFile,
-		Dir:             tempDir,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 		EnableOTELTrace: true,
 		LoggerType:      glog.LoggerTypeZap,
 	}
@@ -331,7 +318,7 @@ func TestOTELTraceWithoutSpanContext(t *testing.T) {
 	logger.Infow(context.Background(), "without span context", "key", "value")
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-nospan_full.log")
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-nospan.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -339,4 +326,58 @@ func TestOTELTraceWithoutSpanContext(t *testing.T) {
 	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
 	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
 	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
+}
+
+func TestZapMultiWritersFileAndConsole(t *testing.T) {
+	tempDir := t.TempDir()
+	config := &glog.LogConfig{
+		Service:    "zap-multi",
+		Module:     "test",
+		Level:      glog.InfoLevel,
+		LoggerType: glog.LoggerTypeZap,
+		Writers: []glog.WriterConfig{
+			{Type: glog.WriterConsole, Level: glog.DebugLevel},
+			{Type: glog.WriterFile, Dir: tempDir, MaxSize: 100, MaxBackups: 3, MaxAge: 7},
+		},
+	}
+	logger, err := glog.NewLogger(config)
+	assert.Nil(t, err)
+	ctx := context.Background()
+	logger.Info(ctx, "multi writer test")
+	logger.Close()
+	dateStr := time.Now().Format("20060102")
+	expectedFile := filepath.Join(tempDir, dateStr, "zap-multi.log")
+	assert.True(t, glog.FileExists(expectedFile), expectedFile)
+}
+
+func TestZapMultiWritersLevelSplit(t *testing.T) {
+	tempDir := t.TempDir()
+	config := &glog.LogConfig{
+		Service:    "zap-split",
+		Module:     "test",
+		Level:      glog.InfoLevel,
+		LoggerType: glog.LoggerTypeZap,
+		Writers: []glog.WriterConfig{
+			{Type: glog.WriterConsole, Level: glog.DebugLevel},
+			{Type: glog.WriterFile, Dir: tempDir, MaxSize: 100, MaxBackups: 3, MaxAge: 7},
+			{Type: glog.WriterFile, Dir: tempDir, FileName: "error.log", WfOnly: true},
+		},
+	}
+	logger, err := glog.NewLogger(config)
+	assert.Nil(t, err)
+	ctx := context.Background()
+	logger.Info(ctx, "info message")
+	logger.Error(ctx, "error message")
+	logger.Close()
+	dateStr := time.Now().Format("20060102")
+	fullFile := filepath.Join(tempDir, dateStr, "zap-split.log")
+	b, _ := os.ReadFile(fullFile)
+	content := string(b)
+	assert.Contains(t, content, "info message")
+	assert.Contains(t, content, "error message")
+	errorFile := filepath.Join(tempDir, dateStr, "error.log")
+	b2, _ := os.ReadFile(errorFile)
+	content2 := string(b2)
+	assert.NotContains(t, content2, "info message")
+	assert.Contains(t, content2, "error message")
 }
