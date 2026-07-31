@@ -427,11 +427,35 @@ func TestSlogMultiWritersLevelSplit(t *testing.T) {
 	content := string(b)
 	assert.Contains(t, content, "info message")
 	assert.Contains(t, content, "error message")
-	errorFile := filepath.Join(tempDir, dateStr, "slog-split_wf.log")
+	errorFile := filepath.Join(tempDir, dateStr, "error_wf.log")
 	b2, _ := os.ReadFile(errorFile)
 	content2 := string(b2)
 	assert.NotContains(t, content2, "info message")
 	assert.Contains(t, content2, "error message")
+}
+
+func TestSlogWfOnlyNoExtraFullFile(t *testing.T) {
+	tempDir := t.TempDir()
+	config := &glog.LogConfig{
+		Service:    "slog-wfonly",
+		Module:     "test",
+		Level:      glog.InfoLevel,
+		LoggerType: glog.LoggerTypeSlog,
+		Writers: []glog.WriterConfig{
+			{Type: glog.WriterFile, Dir: tempDir, WfOnly: true},
+		},
+	}
+	logger, err := glog.NewLogger(config)
+	assert.Nil(t, err)
+	logger.Info(context.Background(), "info msg")
+	logger.Error(context.Background(), "error msg")
+	logger.Close()
+	dateStr := time.Now().Format("20060102")
+	assert.True(t, glog.FileExists(filepath.Join(tempDir, dateStr, "slog-wfonly_wf.log")))
+	assert.False(t, glog.FileExists(filepath.Join(tempDir, dateStr, "slog-wfonly_full.log")))
+	wf, _ := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-wfonly_wf.log"))
+	assert.NotContains(t, string(wf), "info msg")
+	assert.Contains(t, string(wf), "error msg")
 }
 
 func TestSlogWriterConfigDefaults(t *testing.T) {

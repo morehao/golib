@@ -1,10 +1,8 @@
 package slog
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path"
@@ -196,249 +194,95 @@ func logLevelToSlog(level glog.Level) slog.Level {
 	}
 }
 
-type levelWriter struct {
-	w        io.Writer
-	minLevel slog.Level
-}
-
-func (lw *levelWriter) Write(p []byte) (int, error) {
-	if !lw.shouldWrite(p) {
-		return len(p), nil
-	}
-	return lw.w.Write(p)
-}
-
-func (lw *levelWriter) shouldWrite(p []byte) bool {
-	scanRange := p
-	if len(p) > 256 {
-		scanRange = p[:256]
-	}
-
-	needle := []byte(`"level":"`)
-	idx := bytes.Index(scanRange, needle)
-	if idx < 0 {
-		return true
-	}
-	rest := scanRange[idx+len(needle):]
-	end := bytes.IndexByte(rest, '"')
-	if end < 0 {
-		return true
-	}
-	levelBytes := rest[:end]
-
-	switch string(levelBytes) {
-	case "DEBUG":
-		return slog.LevelDebug >= lw.minLevel
-	case "INFO":
-		return slog.LevelInfo >= lw.minLevel
-	case "WARN":
-		return slog.LevelWarn >= lw.minLevel
-	case "ERROR":
-		return slog.LevelError >= lw.minLevel
-	case "PANIC":
-		return slogLevelPanic >= lw.minLevel
-	case "FATAL":
-		return slogLevelFatal >= lw.minLevel
-	default:
-		return true
-	}
-}
-
-type writerPair struct {
-	full     *lumberjack.Logger
-	wf       *levelWriter
-	fullFile *os.File
-	wfFile   *os.File
-}
-
 type gSlogFileWriter struct {
-	wc          glog.WriterConfig
-	serviceName string
-	rotateMu    sync.Mutex
-	current     atomic.Pointer[writerPair]
-	currentDate atomic.Value
+	wc           glog.WriterConfig
+	serviceName  string
+	suffix       string // "_full" 或 "_wf"
+	rotateMu     sync.Mutex
+	current      atomic.Pointer[lumberjack.Logger]
+	today        string
 	nextRotateAt atomic.Int64
 }
 
-func newSlogFileWriter(wc glog.WriterConfig, serviceName string) (*gSlogFileWriter, error) {
-	w := &gSlogFileWriter{wc: wc, serviceName: serviceName}
-	pair, dateStr, nextAt, err := w.buildWriterPair(time.Now())
-	if err != nil {
+func newSlogFileWriter(wc glog.WriterConfig, serviceName, suffix string) (*gSlogFileWriter, error) {
+	w := &gSlogFileWriter{wc: wc, serviceName: serviceName, suffix: suffix}
+	if err := w.rotate(true); err != nil {
 		return nil, err
 	}
-	w.current.Store(pair)
-	w.currentDate.Store(dateStr)
-	w.nextRotateAt.Store(nextAt)
 	return w, nil
+}
+
+func (w *gSlogFileWriter) filePath(now time.Time) string {
+	dateStr := now.Format("20060102")
+	dir := path.Join(w.wc.EffectiveDir(), dateStr)
+	baseName := w.wc.EffectiveFileName(w.serviceName)
+	ext := path.Ext(baseName)
+	nameWithoutExt := baseName[:len(baseName)-len(ext)]
+	return path.Join(dir, nameWithoutExt+w.suffix+ext)
 }
 
 func (w *gSlogFileWriter) needsRotate(now time.Time) bool {
 	return now.Unix() >= w.nextRotateAt.Load()
 }
 
-func (w *gSlogFileWriter) buildWriterPair(now time.Time) (*writerPair, string, int64, error) {
-	dateStr := now.Format("20060102")
-	dir := w.wc.EffectiveDir() + "/" + dateStr
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		return nil, "", 0, fmt.Errorf("glog: mkdir %s: %w", dir, err)
-	}
-
-	maxSize, maxBackups, maxAge := w.wc.EffectiveRotateConfig()
-
-	baseName := w.wc.EffectiveFileName(w.serviceName)
-	ext := path.Ext(baseName)
-	nameWithoutExt := baseName[:len(baseName)-len(ext)]
-	fullPath := path.Join(dir, nameWithoutExt + "_full" + ext)
-	wfPath := path.Join(dir, nameWithoutExt + "_wf" + ext)
-
-	fullLJ := &lumberjack.Logger{
-		Filename:   fullPath,
-		MaxSize:    maxSize,
-		MaxBackups: maxBackups,
-		MaxAge:     maxAge,
-		Compress:   w.wc.Compress,
-		LocalTime:  true,
-	}
-	wfLJ := &lumberjack.Logger{
-		Filename:   wfPath,
-		MaxSize:    maxSize,
-		MaxBackups: maxBackups,
-		MaxAge:     maxAge,
-		Compress:   w.wc.Compress,
-		LocalTime:  true,
-	}
-
-	fullFile, err := openLogFile(fullPath)
-	if err != nil {
-		return nil, "", 0, err
-	}
-	wfFile, err := openLogFile(wfPath)
-	if err != nil {
-		_ = fullFile.Close()
-		return nil, "", 0, err
-	}
-
-	pair := &writerPair{
-		full:     fullLJ,
-		wf:       &levelWriter{w: wfLJ, minLevel: slog.LevelWarn},
-		fullFile: fullFile,
-		wfFile:   wfFile,
-	}
-
-	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
-	return pair, dateStr, tomorrow.Unix(), nil
-}
-
-func openLogFile(filePath string) (*os.File, error) {
-	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("glog: open %s: %w", filePath, err)
-	}
-	return f, nil
-}
-
-func (w *gSlogFileWriter) rotate() error {
+func (w *gSlogFileWriter) rotate(force bool) error {
 	w.rotateMu.Lock()
 	defer w.rotateMu.Unlock()
 
 	now := time.Now()
+	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
 
-	if !w.needsRotate(now) {
+	if !force && !w.needsRotate(now) {
 		return nil
 	}
-
-	newDateStr := now.Format("20060102")
-	if cur, ok := w.currentDate.Load().(string); ok && cur == newDateStr {
-		tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+	newToday := now.Format("20060102")
+	if lj := w.current.Load(); lj != nil && w.today == newToday {
 		w.nextRotateAt.Store(tomorrow.Unix())
 		return nil
 	}
 
-	pair, dateStr, nextAt, err := w.buildWriterPair(now)
-	if err != nil {
-		return err
+	filePath := w.filePath(now)
+	if err := os.MkdirAll(path.Dir(filePath), os.ModePerm); err != nil {
+		return fmt.Errorf("glog: mkdir %s: %w", path.Dir(filePath), err)
+	}
+	maxSize, maxBackups, maxAge := w.wc.EffectiveRotateConfig()
+	lj := &lumberjack.Logger{
+		Filename:   filePath,
+		MaxSize:    maxSize,
+		MaxBackups: maxBackups,
+		MaxAge:     maxAge,
+		Compress:   w.wc.Compress,
+		LocalTime:  true,
 	}
 
-	old := w.current.Swap(pair)
-	w.currentDate.Store(dateStr)
-	w.nextRotateAt.Store(nextAt)
+	old := w.current.Swap(lj)
+	w.today = newToday
+	w.nextRotateAt.Store(tomorrow.Unix())
 
-	go closeWriterPair(old)
-
+	if old != nil {
+		go func() { _ = old.Close() }()
+	}
 	return nil
-}
-
-func closeWriterPair(pair *writerPair) {
-	if pair == nil {
-		return
-	}
-	if pair.fullFile != nil {
-		_ = pair.fullFile.Sync()
-		_ = pair.fullFile.Close()
-	}
-	if pair.wfFile != nil {
-		_ = pair.wfFile.Sync()
-		_ = pair.wfFile.Close()
-	}
-	if pair.full != nil {
-		_ = pair.full.Close()
-	}
-	if pair.wf != nil {
-		if lj, ok := pair.wf.w.(*lumberjack.Logger); ok {
-			_ = lj.Close()
-		}
-	}
 }
 
 func (w *gSlogFileWriter) Write(p []byte) (int, error) {
 	if w.needsRotate(time.Now()) {
-		if err := w.rotate(); err != nil {
+		if err := w.rotate(false); err != nil {
 			return 0, err
 		}
 	}
-
-	pair := w.current.Load()
-
-	n, err := pair.full.Write(p)
-	if err != nil {
-		return n, err
-	}
-
-	_, _ = pair.wf.Write(p)
-
-	return n, nil
+	lj := w.current.Load()
+	return lj.Write(p)
 }
 
 func (w *gSlogFileWriter) Close() error {
-	pair := w.current.Load()
-	if pair == nil {
-		return nil
+	w.rotateMu.Lock()
+	lj := w.current.Load()
+	w.rotateMu.Unlock()
+	if lj != nil {
+		return lj.Close()
 	}
-
-	var firstErr error
-
-	if pair.fullFile != nil {
-		if err := pair.fullFile.Sync(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		_ = pair.fullFile.Close()
-	}
-	if pair.wfFile != nil {
-		if err := pair.wfFile.Sync(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		_ = pair.wfFile.Close()
-	}
-	if pair.full != nil {
-		_ = pair.full.Close()
-	}
-	if pair.wf != nil {
-		if lj, ok := pair.wf.w.(*lumberjack.Logger); ok {
-			_ = lj.Close()
-		}
-	}
-
-	return firstErr
+	return nil
 }
 
 type multiHandler struct {

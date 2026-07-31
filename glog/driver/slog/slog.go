@@ -76,21 +76,30 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 			h := wrapHandler(innerHandler, cfg, o)
 			handlers = append(handlers, h)
 		case glog.WriterFile:
-			fw, err := newSlogFileWriter(wc, serviceName)
-			if err != nil {
-				for _, wf := range fileWriters {
-					_ = wf.Close()
-				}
-				return nil, err
-			}
-			fileWriters = append(fileWriters, fw)
-
 			if wc.WfOnly {
-				filtered := &levelWriter{w: fw, minLevel: slog.LevelWarn}
-				innerHandler := slog.NewJSONHandler(filtered, handlerOpts)
+				fw, err := newSlogFileWriter(wc, serviceName, "_wf")
+				if err != nil {
+					for _, wf := range fileWriters {
+						_ = wf.Close()
+					}
+					return nil, err
+				}
+				fileWriters = append(fileWriters, fw)
+
+				handlerOpts.Level = logLevelToSlog(glog.WarnLevel)
+				innerHandler := slog.NewJSONHandler(fw, handlerOpts)
 				h := wrapHandler(innerHandler, cfg, o)
 				handlers = append(handlers, h)
 			} else {
+				fw, err := newSlogFileWriter(wc, serviceName, "_full")
+				if err != nil {
+					for _, wf := range fileWriters {
+						_ = wf.Close()
+					}
+					return nil, err
+				}
+				fileWriters = append(fileWriters, fw)
+
 				innerHandler := slog.NewJSONHandler(fw, handlerOpts)
 				h := wrapHandler(innerHandler, cfg, o)
 				handlers = append(handlers, h)
