@@ -29,7 +29,7 @@ type Dao[T Entity, L ~[]T] struct {
 }
 
 func NewDao[T Entity, L ~[]T](tableName string, daoName string, getDB DBGetter, opts ...Option) *Dao[T, L] {
-	cfg := &config{isSoftDelete: true}
+	cfg := &options{isSoftDelete: true}
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -87,16 +87,19 @@ func (d *Dao[T, L]) UpdateMap(ctx context.Context, id uint, updateMap map[string
 }
 
 func (d *Dao[T, L]) Delete(ctx context.Context, id, deletedBy uint) error {
-	if !d.isSoftDelete {
-		return getDBError(gconstant.DBDeleteErr).Wrapf(nil, "[%s] Delete fail, entity does not support soft delete, id:%d", d.daoName, id)
-	}
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
-	updatedField := map[string]any{
-		"deleted_time": time.Now(),
-		"deleted_by":   deletedBy,
+	if d.isSoftDelete {
+		updatedField := map[string]any{
+			"deleted_time": time.Now(),
+			"deleted_by":   deletedBy,
+		}
+		if err := db.Where("id = ?", id).Updates(updatedField).Error; err != nil {
+			return getDBError(gconstant.DBDeleteErr).Wrapf(err, "[%s] Delete fail, id:%d, deletedBy:%d", d.daoName, id, deletedBy)
+		}
+		return nil
 	}
-	if err := db.Where("id = ?", id).Updates(updatedField).Error; err != nil {
-		return getDBError(gconstant.DBDeleteErr).Wrapf(err, "[%s] Delete fail, id:%d, deletedBy:%d", d.daoName, id, deletedBy)
+	if err := db.Delete(new(T), id).Error; err != nil {
+		return getDBError(gconstant.DBDeleteErr).Wrapf(err, "[%s] HardDelete fail, id:%d", d.daoName, id)
 	}
 	return nil
 }

@@ -1,13 +1,13 @@
 package gormdao
 
-type Option func(*config)
+type Option func(*options)
 
-type config struct {
+type options struct {
 	isSoftDelete bool
 }
 
 func WithoutSoftDelete() Option {
-	return func(c *config) {
+	return func(c *options) {
 		c.isSoftDelete = false
 	}
 }
