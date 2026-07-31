@@ -23,23 +23,30 @@ type Entity interface {
 
 type Dao[T Entity, L ~[]T] struct {
 	base
-	TableName string
-	daoName   string
+	TableName    string
+	daoName      string
+	isSoftDelete bool
 }
 
-func NewDao[T Entity, L ~[]T](tableName string, daoName string, getDB DBGetter) *Dao[T, L] {
+func NewDao[T Entity, L ~[]T](tableName string, daoName string, getDB DBGetter, opts ...Option) *Dao[T, L] {
+	cfg := &config{isSoftDelete: true}
+	for _, opt := range opts {
+		opt(cfg)
+	}
 	return &Dao[T, L]{
-		base:      newBase(getDB),
-		TableName: tableName,
-		daoName:   daoName,
+		base:         newBase(getDB),
+		TableName:    tableName,
+		daoName:      daoName,
+		isSoftDelete: cfg.isSoftDelete,
 	}
 }
 
 func (d *Dao[T, L]) WithTx(tx *gorm.DB) *Dao[T, L] {
 	return &Dao[T, L]{
-		base:      d.base.withTx(tx),
-		TableName: d.TableName,
-		daoName:   d.daoName,
+		base:         d.base.withTx(tx),
+		TableName:    d.TableName,
+		daoName:      d.daoName,
+		isSoftDelete: d.isSoftDelete,
 	}
 }
 
@@ -80,6 +87,9 @@ func (d *Dao[T, L]) UpdateMap(ctx context.Context, id uint, updateMap map[string
 }
 
 func (d *Dao[T, L]) Delete(ctx context.Context, id, deletedBy uint) error {
+	if !d.isSoftDelete {
+		return getDBError(gconstant.DBDeleteErr).Wrapf(nil, "[%s] Delete fail, entity does not support soft delete, id:%d", d.daoName, id)
+	}
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	updatedField := map[string]any{
 		"deleted_time": time.Now(),
