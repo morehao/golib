@@ -20,8 +20,8 @@ const (
 	FileStatusAborted   FileStatus = "aborted"
 )
 
-// File 物理文件的元数据记录，按内容哈希去重。
-type File struct {
+// FileEntity 物理文件的元数据记录，按内容哈希去重。
+type FileEntity struct {
 	ID          uint      `gorm:"primarykey"`
 	CreatedAt   time.Time `gorm:"column:created_at;not null;autoCreateTime"`
 	UpdatedAt   time.Time `gorm:"column:updated_at;not null;autoUpdateTime"`
@@ -30,11 +30,11 @@ type File struct {
 	StorageURI  string    `gorm:"column:storage_uri;type:varchar(512);not null;default:''"`
 }
 
-func (File) TableName() string { return "core_file" }
+func (FileEntity) TableName() string { return "core_file" }
 
-// FileUpload 一次上传行为的记录，只存跟"这次上传"相关的信息。
+// FileUploadEntity 一次上传行为的记录，只存跟"这次上传"相关的信息。
 // 内容相关信息（哈希/大小/存储路径）不冗余存储，需要时按 FileID 查 File 表。
-type FileUpload struct {
+type FileUploadEntity struct {
 	gorm.Model
 	FileID   uint       `gorm:"column:file_id;not null;default:0;index"`
 	UploadID string     `gorm:"column:upload_id;type:varchar(128);not null;default:'';index"`
@@ -44,7 +44,7 @@ type FileUpload struct {
 	Scene    string     `gorm:"column:scene;type:varchar(64);not null;default:'';index"`
 }
 
-func (FileUpload) TableName() string { return "core_file_upload" }
+func (FileUploadEntity) TableName() string { return "core_file_upload" }
 
 type fileCond struct {
 	gormdao.BaseCond

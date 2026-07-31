@@ -192,12 +192,9 @@ func TestMarshalValueByType(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(string(tc.valueType), func(t *testing.T) {
-			value, encrypted, err := s.marshalValue(tc.valueType, tc.val)
+			value, err := s.marshalValue(tc.valueType, tc.val)
 			if err != nil {
 				t.Fatalf("marshalValue failed: %v", err)
-			}
-			if encrypted {
-				t.Error("should not be encrypted for non-secret type")
 			}
 			if value == "" {
 				t.Error("value should not be empty")

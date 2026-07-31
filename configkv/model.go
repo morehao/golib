@@ -3,6 +3,7 @@ package configkv
 import (
 	"fmt"
 
+	"github.com/morehao/golib/dbaccess/gormdao"
 	"gorm.io/gorm"
 )
 
@@ -52,17 +53,16 @@ func (ConfigEntity) TableName() string {
 }
 
 type ConfigCond struct {
+	gormdao.BaseCond
 	Group      string
 	Key        string
 	ValueType  string
 	Status     string
-	Page       int
-	PageSize   int
-	OrderField string
 	ExactKey   bool
 }
 
 func (c *ConfigCond) BuildCondition(db *gorm.DB, tableName string) {
+	c.BaseCond.BuildCondition(db, tableName)
 	if c.Group != "" {
 		db.Where(fmt.Sprintf("%s.group_name = ?", tableName), c.Group)
 	}
@@ -79,11 +79,4 @@ func (c *ConfigCond) BuildCondition(db *gorm.DB, tableName string) {
 	if c.Status != "" {
 		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)
 	}
-	if c.OrderField != "" {
-		db.Order(c.OrderField)
-	}
-}
-
-func (c *ConfigCond) GetPageInfo() (page int, pageSize int) {
-	return c.Page, c.PageSize
 }
