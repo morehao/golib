@@ -60,7 +60,7 @@ func WithCallerSkip(skip int) Option {
 }
 
 func New(cfg *Config, opts ...Option) (*gorm.DB, error) {
-	cfg.loggerConfig = glog.GetDefaultLogConfig()
+	cfg.loggerConfig = glog.CloneLogConfig(glog.GetLoggerConfig())
 	for _, opt := range opts {
 		opt.apply(cfg)
 	}

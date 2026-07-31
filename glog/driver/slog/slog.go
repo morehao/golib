@@ -5,10 +5,18 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/morehao/golib/glog"
 )
+
+// slogBaseCallerSkip 是从 logSkip 内 runtime.Callers 抓取调用点时，到"调用 glog API 的那一帧"的固定栈帧数。
+// 本 Go 版本下 runtime.Callers(0) 首帧为 runtime.Callers 自身，调用链:
+// runtime.Callers → logSkip → Infow(公共方法，业务经接口分派调用) → 业务代码，因此直达业务需 3 帧。
+// 帧数稳定依赖 Go 编译器对"接口分派调用与较重函数不内联"的行为保证，无需 //go:noinline；
+// 若内联策略变化导致偏移，见 glog/caller_test.go 校准此常量。
+const slogBaseCallerSkip = 3
 
 type slogLogger struct {
 	logger      *slog.Logger
@@ -131,86 +139,86 @@ func (l *slogLogger) With(kvs ...any) glog.Logger {
 }
 
 func (l *slogLogger) Debug(ctx context.Context, args ...any) {
-	l.log(ctx, glog.DebugLevel, fmt.Sprint(args...))
+	l.logSkip(ctx, glog.DebugLevel, 0, fmt.Sprint(args...), nil)
 }
 
 func (l *slogLogger) Debugf(ctx context.Context, format string, args ...any) {
-	l.log(ctx, glog.DebugLevel, fmt.Sprintf(format, args...))
+	l.logSkip(ctx, glog.DebugLevel, 0, fmt.Sprintf(format, args...), nil)
 }
 
 func (l *slogLogger) Debugw(ctx context.Context, msg string, kvs ...any) {
-	l.log(ctx, glog.DebugLevel, msg, kvs...)
+	l.logSkip(ctx, glog.DebugLevel, 0, msg, kvs)
 }
 
 func (l *slogLogger) Info(ctx context.Context, args ...any) {
-	l.log(ctx, glog.InfoLevel, fmt.Sprint(args...))
+	l.logSkip(ctx, glog.InfoLevel, 0, fmt.Sprint(args...), nil)
 }
 
 func (l *slogLogger) Infof(ctx context.Context, format string, args ...any) {
-	l.log(ctx, glog.InfoLevel, fmt.Sprintf(format, args...))
+	l.logSkip(ctx, glog.InfoLevel, 0, fmt.Sprintf(format, args...), nil)
 }
 
 func (l *slogLogger) Infow(ctx context.Context, msg string, kvs ...any) {
-	l.log(ctx, glog.InfoLevel, msg, kvs...)
+	l.logSkip(ctx, glog.InfoLevel, 0, msg, kvs)
 }
 
 func (l *slogLogger) Warn(ctx context.Context, args ...any) {
-	l.log(ctx, glog.WarnLevel, fmt.Sprint(args...))
+	l.logSkip(ctx, glog.WarnLevel, 0, fmt.Sprint(args...), nil)
 }
 
 func (l *slogLogger) Warnf(ctx context.Context, format string, args ...any) {
-	l.log(ctx, glog.WarnLevel, fmt.Sprintf(format, args...))
+	l.logSkip(ctx, glog.WarnLevel, 0, fmt.Sprintf(format, args...), nil)
 }
 
 func (l *slogLogger) Warnw(ctx context.Context, msg string, kvs ...any) {
-	l.log(ctx, glog.WarnLevel, msg, kvs...)
+	l.logSkip(ctx, glog.WarnLevel, 0, msg, kvs)
 }
 
 func (l *slogLogger) Error(ctx context.Context, args ...any) {
-	l.log(ctx, glog.ErrorLevel, fmt.Sprint(args...))
+	l.logSkip(ctx, glog.ErrorLevel, 0, fmt.Sprint(args...), nil)
 }
 
 func (l *slogLogger) Errorf(ctx context.Context, format string, args ...any) {
-	l.log(ctx, glog.ErrorLevel, fmt.Sprintf(format, args...))
+	l.logSkip(ctx, glog.ErrorLevel, 0, fmt.Sprintf(format, args...), nil)
 }
 
 func (l *slogLogger) Errorw(ctx context.Context, msg string, kvs ...any) {
-	l.log(ctx, glog.ErrorLevel, msg, kvs...)
+	l.logSkip(ctx, glog.ErrorLevel, 0, msg, kvs)
 }
 
 func (l *slogLogger) Panic(ctx context.Context, args ...any) {
 	msg := fmt.Sprint(args...)
-	l.log(ctx, glog.PanicLevel, msg)
+	l.logSkip(ctx, glog.PanicLevel, 0, msg, nil)
 	panic(msg)
 }
 
 func (l *slogLogger) Panicf(ctx context.Context, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	l.log(ctx, glog.PanicLevel, msg)
+	l.logSkip(ctx, glog.PanicLevel, 0, msg, nil)
 	panic(msg)
 }
 
 func (l *slogLogger) Panicw(ctx context.Context, msg string, kvs ...any) {
-	l.log(ctx, glog.PanicLevel, msg, kvs...)
+	l.logSkip(ctx, glog.PanicLevel, 0, msg, kvs)
 	panic(msg)
 }
 
 func (l *slogLogger) Fatal(ctx context.Context, args ...any) {
 	msg := fmt.Sprint(args...)
-	l.log(ctx, glog.FatalLevel, msg)
+	l.logSkip(ctx, glog.FatalLevel, 0, msg, nil)
 	_ = l.Close()
 	os.Exit(1)
 }
 
 func (l *slogLogger) Fatalf(ctx context.Context, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	l.log(ctx, glog.FatalLevel, msg)
+	l.logSkip(ctx, glog.FatalLevel, 0, msg, nil)
 	_ = l.Close()
 	os.Exit(1)
 }
 
 func (l *slogLogger) Fatalw(ctx context.Context, msg string, kvs ...any) {
-	l.log(ctx, glog.FatalLevel, msg, kvs...)
+	l.logSkip(ctx, glog.FatalLevel, 0, msg, kvs)
 	_ = l.Close()
 	os.Exit(1)
 }
@@ -225,17 +233,36 @@ func (l *slogLogger) Close() error {
 	return firstErr
 }
 
-func (l *slogLogger) log(ctx context.Context, level glog.Level, msg string, kvs ...any) {
+// logSkip 是 slog 驱动的统一日志入口。函数体较重（runtime.Callers、slog.NewRecord、
+// 接口调用 Handle），超过 Go 内联器预算而不会被内联，因此
+// "业务 → Infow(接口分派) → logSkip → runtime.Callers" 的帧数稳定，无需 //go:noinline。
+func (l *slogLogger) logSkip(ctx context.Context, level glog.Level, extra int, msg string, kvs []any) {
 	if glog.SkipLog(ctx) {
 		return
 	}
 	kvs = normalizeKVs(kvs)
 
-	_, pc := glog.CallerFrame(l.callerSkip)
-	r := slog.NewRecord(time.Now(), logLevelToSlog(level), msg, pc)
+	var pc [1]uintptr
+	runtime.Callers(slogBaseCallerSkip+l.callerSkip+extra, pc[:])
+	r := slog.NewRecord(time.Now(), logLevelToSlog(level), msg, pc[0])
 	r.Add(kvs...)
 
 	_ = l.logger.Handler().Handle(ctx, r)
+}
+
+// LogDepth 实现 glog.CallerOffsetLogger，供包级日志函数补偿自身栈帧。
+func (l *slogLogger) LogDepth(ctx context.Context, level glog.Level, msg string, kvs []any, extra int) {
+	switch level {
+	case glog.PanicLevel:
+		l.logSkip(ctx, level, extra, msg, kvs)
+		panic(msg)
+	case glog.FatalLevel:
+		l.logSkip(ctx, level, extra, msg, kvs)
+		_ = l.Close()
+		os.Exit(1)
+	default:
+		l.logSkip(ctx, level, extra, msg, kvs)
+	}
 }
 
 func normalizeKVs(kvs []any) []any {

@@ -13,7 +13,7 @@ func New(cfg *RedisConfig, opts ...Option) (*redis.Client, error) {
 		return nil, fmt.Errorf("service name is empty")
 	}
 
-	cfg.loggerConfig = glog.GetDefaultLogConfig()
+	cfg.loggerConfig = glog.CloneLogConfig(glog.GetLoggerConfig())
 	for _, opt := range opts {
 		opt.apply(cfg)
 	}

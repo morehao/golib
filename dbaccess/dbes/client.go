@@ -6,7 +6,7 @@ import (
 )
 
 func New(cfg *ESConfig, opts ...Option) (*elasticsearch.Client, *elasticsearch.TypedClient, error) {
-	cfg.loggerConfig = glog.GetDefaultLogConfig()
+	cfg.loggerConfig = glog.CloneLogConfig(glog.GetLoggerConfig())
 	for _, opt := range opts {
 		opt.apply(cfg)
 	}

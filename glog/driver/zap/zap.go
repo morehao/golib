@@ -19,6 +19,13 @@ var logLevelMap = map[glog.Level]zapcore.Level{
 	glog.FatalLevel: zapcore.FatalLevel,
 }
 
+// zapBaseCallerSkip 是 zap.Logger 底层抓取调用点时，到"调用 glog API 的那一帧"的固定栈帧数。
+// zap.AddCallerSkip(0) 指向 entry（log.Info 的调用者），向上调用链:
+// entry → Infow(公共方法，业务经接口分派调用) → 业务代码，共 2 帧。
+// 帧数稳定依赖 Go 编译器对"接口分派调用与较重函数不内联"的行为保证，无需 //go:noinline；
+// 若内联策略变化导致偏移，见 glog/caller_test.go 校准此常量。
+const zapBaseCallerSkip = 2
+
 type zapLogger struct {
 	logger          *zap.Logger
 	cfg             *glog.LogConfig
@@ -120,47 +127,59 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, erro
 
 func (l *zapLogger) GetConfig() *glog.LogConfig { return l.cfg }
 
-func (l *zapLogger) Debug(ctx context.Context, args ...any) { l.ctxLog(glog.DebugLevel, ctx, args...) }
+func (l *zapLogger) Debug(ctx context.Context, args ...any) {
+	l.entry(glog.DebugLevel, ctx, 0, fmt.Sprint(args...), nil)
+}
 func (l *zapLogger) Debugf(ctx context.Context, f string, args ...any) {
-	l.ctxLogf(glog.DebugLevel, ctx, f, args...)
+	l.entry(glog.DebugLevel, ctx, 0, fmt.Sprintf(f, args...), nil)
 }
 func (l *zapLogger) Debugw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(glog.DebugLevel, ctx, msg, kvs...)
+	l.entry(glog.DebugLevel, ctx, 0, msg, kvs)
 }
-func (l *zapLogger) Info(ctx context.Context, args ...any) { l.ctxLog(glog.InfoLevel, ctx, args...) }
+func (l *zapLogger) Info(ctx context.Context, args ...any) {
+	l.entry(glog.InfoLevel, ctx, 0, fmt.Sprint(args...), nil)
+}
 func (l *zapLogger) Infof(ctx context.Context, f string, args ...any) {
-	l.ctxLogf(glog.InfoLevel, ctx, f, args...)
+	l.entry(glog.InfoLevel, ctx, 0, fmt.Sprintf(f, args...), nil)
 }
 func (l *zapLogger) Infow(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(glog.InfoLevel, ctx, msg, kvs...)
+	l.entry(glog.InfoLevel, ctx, 0, msg, kvs)
 }
-func (l *zapLogger) Warn(ctx context.Context, args ...any) { l.ctxLog(glog.WarnLevel, ctx, args...) }
+func (l *zapLogger) Warn(ctx context.Context, args ...any) {
+	l.entry(glog.WarnLevel, ctx, 0, fmt.Sprint(args...), nil)
+}
 func (l *zapLogger) Warnf(ctx context.Context, f string, args ...any) {
-	l.ctxLogf(glog.WarnLevel, ctx, f, args...)
+	l.entry(glog.WarnLevel, ctx, 0, fmt.Sprintf(f, args...), nil)
 }
 func (l *zapLogger) Warnw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(glog.WarnLevel, ctx, msg, kvs...)
+	l.entry(glog.WarnLevel, ctx, 0, msg, kvs)
 }
-func (l *zapLogger) Error(ctx context.Context, args ...any) { l.ctxLog(glog.ErrorLevel, ctx, args...) }
+func (l *zapLogger) Error(ctx context.Context, args ...any) {
+	l.entry(glog.ErrorLevel, ctx, 0, fmt.Sprint(args...), nil)
+}
 func (l *zapLogger) Errorf(ctx context.Context, f string, args ...any) {
-	l.ctxLogf(glog.ErrorLevel, ctx, f, args...)
+	l.entry(glog.ErrorLevel, ctx, 0, fmt.Sprintf(f, args...), nil)
 }
 func (l *zapLogger) Errorw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(glog.ErrorLevel, ctx, msg, kvs...)
+	l.entry(glog.ErrorLevel, ctx, 0, msg, kvs)
 }
-func (l *zapLogger) Panic(ctx context.Context, args ...any) { l.ctxLog(glog.PanicLevel, ctx, args...) }
+func (l *zapLogger) Panic(ctx context.Context, args ...any) {
+	l.entry(glog.PanicLevel, ctx, 0, fmt.Sprint(args...), nil)
+}
 func (l *zapLogger) Panicf(ctx context.Context, f string, args ...any) {
-	l.ctxLogf(glog.PanicLevel, ctx, f, args...)
+	l.entry(glog.PanicLevel, ctx, 0, fmt.Sprintf(f, args...), nil)
 }
 func (l *zapLogger) Panicw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(glog.PanicLevel, ctx, msg, kvs...)
+	l.entry(glog.PanicLevel, ctx, 0, msg, kvs)
 }
-func (l *zapLogger) Fatal(ctx context.Context, args ...any) { l.ctxLog(glog.FatalLevel, ctx, args...) }
+func (l *zapLogger) Fatal(ctx context.Context, args ...any) {
+	l.entry(glog.FatalLevel, ctx, 0, fmt.Sprint(args...), nil)
+}
 func (l *zapLogger) Fatalf(ctx context.Context, f string, args ...any) {
-	l.ctxLogf(glog.FatalLevel, ctx, f, args...)
+	l.entry(glog.FatalLevel, ctx, 0, fmt.Sprintf(f, args...), nil)
 }
 func (l *zapLogger) Fatalw(ctx context.Context, msg string, kvs ...any) {
-	l.ctxLogw(glog.FatalLevel, ctx, msg, kvs...)
+	l.entry(glog.FatalLevel, ctx, 0, msg, kvs)
 }
 
 func (l *zapLogger) With(kvs ...any) glog.Logger {
@@ -187,41 +206,20 @@ func (l *zapLogger) loggerWithCtx(ctx context.Context) *zap.Logger {
 	return l.logger.With(fields...)
 }
 
-func (l *zapLogger) dispatch(level glog.Level, ctx context.Context, fn func(*zap.Logger)) {
+// entry 是 zap 驱动的统一日志入口。函数体较重（接口调用 + 循环 + switch），
+// 超过 Go 内联器预算而不会被内联，因此 "业务 → Infow(接口分派) → entry → zap.Logger"
+// 的帧数稳定，无需 //go:noinline。caller 深度由 zapBaseCallerSkip + callerSkip + extra 固定。
+func (l *zapLogger) entry(level glog.Level, ctx context.Context, extra int, msg string, kvs []any) {
 	if glog.NilCtx(ctx) || glog.SkipLog(ctx) {
 		return
 	}
 	if !l.logger.Core().Enabled(levelToZapLevel(level)) {
 		return
 	}
-	fn(l.loggerWithCtx(ctx))
-}
-
-func (l *zapLogger) ctxLog(level glog.Level, ctx context.Context, args ...any) {
-	l.dispatch(level, ctx, func(log *zap.Logger) {
-		l.logWithLevel(log, level, fmt.Sprint(args...))
-	})
-}
-
-func (l *zapLogger) ctxLogf(level glog.Level, ctx context.Context, format string, args ...any) {
-	l.dispatch(level, ctx, func(log *zap.Logger) {
-		l.logWithLevel(log, level, fmt.Sprintf(format, args...))
-	})
-}
-
-func (l *zapLogger) ctxLogw(level glog.Level, ctx context.Context, msg string, kvs ...any) {
-	l.dispatch(level, ctx, func(log *zap.Logger) {
-		fields := sweetenFields(kvs)
-		fields = l.applyFieldHook(fields)
-		l.logWithLevel(log, level, msg, fields...)
-	})
-}
-
-func (l *zapLogger) logWithLevel(log *zap.Logger, level glog.Level, msg string, fields ...zap.Field) {
-	skip, _ := glog.CallerFrame(l.callerSkip)
-	if skip > 0 {
-		log = log.WithOptions(zap.AddCallerSkip(skip))
-	}
+	fields := sweetenFields(kvs)
+	fields = l.applyFieldHook(fields)
+	skip := zapBaseCallerSkip + l.callerSkip + extra
+	log := l.loggerWithCtx(ctx).WithOptions(zap.AddCallerSkip(skip))
 	switch level {
 	case glog.DebugLevel:
 		log.Debug(msg, fields...)
@@ -236,6 +234,11 @@ func (l *zapLogger) logWithLevel(log *zap.Logger, level glog.Level, msg string, 
 	case glog.FatalLevel:
 		log.Fatal(msg, fields...)
 	}
+}
+
+// LogDepth 实现 glog.CallerOffsetLogger，供包级日志函数补偿自身栈帧。
+func (l *zapLogger) LogDepth(ctx context.Context, level glog.Level, msg string, kvs []any, extra int) {
+	l.entry(level, ctx, extra, msg, kvs)
 }
 
 func sweetenFields(kvs []any) []zap.Field {

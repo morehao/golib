@@ -46,6 +46,18 @@ func (wc *WriterConfig) EffectiveFileName(service string) string {
 	return service + ".log"
 }
 
+// CloneLogConfig 返回配置的浅拷贝（Writers、ExtraKeys 切片独立），
+// 避免对副本的修改（如 AppendExtraKeys）影响原配置。
+func CloneLogConfig(cfg *LogConfig) *LogConfig {
+	if cfg == nil {
+		return nil
+	}
+	c := *cfg
+	c.Writers = append([]WriterConfig(nil), cfg.Writers...)
+	c.ExtraKeys = append([]string(nil), cfg.ExtraKeys...)
+	return &c
+}
+
 func (wc *WriterConfig) EffectiveRotateConfig() (maxSize, maxBackups, maxAge int) {
 	maxSize = wc.MaxSize
 	if maxSize <= 0 {
