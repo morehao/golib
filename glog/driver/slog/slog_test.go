@@ -28,8 +28,7 @@ func TestSlogLoggerInit(t *testing.T) {
 			Service:    "slog-service",
 			Module:     "slog-module",
 			Level:      glog.InfoLevel,
-			Writer:     glog.WriterFile,
-			Dir:        tempDir,
+			Writers:    []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 			LoggerType: glog.LoggerTypeSlog,
 		}
 
@@ -50,8 +49,7 @@ func TestSlogLoggerInit(t *testing.T) {
 			Service:    "slog-service",
 			Module:     "slog-module",
 			Level:      glog.InfoLevel,
-			Writer:     glog.WriterConsole,
-			Dir:        tempDir,
+			Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 			LoggerType: glog.LoggerTypeSlog,
 		}
 
@@ -72,8 +70,7 @@ func TestSlogLoggerLevels(t *testing.T) {
 		Service:    "slog-test",
 		Module:     "test-module",
 		Level:      glog.InfoLevel,
-		Writer:     glog.WriterConsole,
-		Dir:        "log/slog-test",
+		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 		LoggerType: glog.LoggerTypeSlog,
 	}
 	logger, err := glog.NewLogger(config)
@@ -98,8 +95,7 @@ func TestSlogLoggerWithFields(t *testing.T) {
 		Service:    "slog-test",
 		Module:     "test-module",
 		Level:      glog.InfoLevel,
-		Writer:     glog.WriterConsole,
-		Dir:        "log/slog-test",
+		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 		LoggerType: glog.LoggerTypeSlog,
 	}
 	logger, err := glog.NewLogger(config)
@@ -115,8 +111,7 @@ func TestSlogLoggerFormat(t *testing.T) {
 		Service:    "slog-test",
 		Module:     "test-module",
 		Level:      glog.InfoLevel,
-		Writer:     glog.WriterConsole,
-		Dir:        "log/slog-test",
+		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 		LoggerType: glog.LoggerTypeSlog,
 	}
 	logger, err := glog.NewLogger(config)
@@ -139,8 +134,7 @@ func TestSlogLoggerHook(t *testing.T) {
 	config := &glog.LogConfig{
 		Service:    "slog-hook",
 		Level:      glog.DebugLevel,
-		Writer:     glog.WriterConsole,
-		Dir:        tempDir,
+		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 		LoggerType: glog.LoggerTypeSlog,
 	}
 
@@ -186,8 +180,7 @@ func TestSlogLoggerExtraKeys(t *testing.T) {
 		Service:    "slog-extrakeys",
 		Module:     "test",
 		Level:      glog.DebugLevel,
-		Writer:     glog.WriterConsole,
-		Dir:        tempDir,
+		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 		ExtraKeys:  []string{glog.KeyTraceID, "user_id", glog.KeyAppRequestID},
 		LoggerType: glog.LoggerTypeSlog,
 	}
@@ -214,8 +207,7 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 		Service:         "slog-otel",
 		Module:          "test",
 		Level:           glog.InfoLevel,
-		Writer:          glog.WriterFile,
-		Dir:             tempDir,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 		EnableOTELTrace: true,
 		LoggerType:      glog.LoggerTypeSlog,
 	}
@@ -251,8 +243,7 @@ func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 		Service:         "slog-otel-disabled",
 		Module:          "test",
 		Level:           glog.InfoLevel,
-		Writer:          glog.WriterFile,
-		Dir:             tempDir,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 		EnableOTELTrace: false,
 		LoggerType:      glog.LoggerTypeSlog,
 	}
@@ -288,8 +279,7 @@ func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
 		Service:         "slog-otel-option",
 		Module:          "test",
 		Level:           glog.InfoLevel,
-		Writer:          glog.WriterFile,
-		Dir:             tempDir,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 		EnableOTELTrace: true,
 		LoggerType:      glog.LoggerTypeSlog,
 	}
@@ -325,8 +315,7 @@ func TestSlogLoggerOTELTraceWithoutSpanContext(t *testing.T) {
 		Service:         "slog-otel-nospan",
 		Module:          "test",
 		Level:           glog.InfoLevel,
-		Writer:          glog.WriterFile,
-		Dir:             tempDir,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 		EnableOTELTrace: true,
 		LoggerType:      glog.LoggerTypeSlog,
 	}
@@ -354,12 +343,7 @@ func TestSlogLoggerRotation(t *testing.T) {
 	config := &glog.LogConfig{
 		Service:    "slog-rotation-test",
 		Level:      glog.InfoLevel,
-		Writer:     glog.WriterFile,
-		Dir:        tempDir,
-		MaxSize:    1,
-		MaxBackups: 5,
-		MaxAge:     7,
-		Compress:   false,
+		Writers:    []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir, MaxSize: 1, MaxBackups: 5, MaxAge: 7, Compress: false}},
 		LoggerType: glog.LoggerTypeSlog,
 	}
 
@@ -394,4 +378,70 @@ func TestSlogLoggerRotation(t *testing.T) {
 	assert.True(t, rotated, "Log rotation should occur when file size exceeds MaxSize")
 
 	glog.Close()
+}
+
+func TestSlogMultiWritersFileAndConsole(t *testing.T) {
+	tempDir := t.TempDir()
+	config := &glog.LogConfig{
+		Service:    "slog-multi",
+		Module:     "test",
+		Level:      glog.InfoLevel,
+		LoggerType: glog.LoggerTypeSlog,
+		Writers: []glog.WriterConfig{
+			{Type: glog.WriterConsole, Level: glog.DebugLevel},
+			{Type: glog.WriterFile, Dir: tempDir, MaxSize: 100, MaxBackups: 3, MaxAge: 7},
+		},
+	}
+	logger, err := glog.NewLogger(config)
+	assert.Nil(t, err)
+	defer logger.Close()
+	ctx := context.Background()
+	logger.Info(ctx, "multi writer test")
+	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
+	expectedFile := filepath.Join(expectedDir, "slog-multi_full.log")
+	assert.True(t, glog.FileExists(expectedFile), expectedFile)
+}
+
+func TestSlogMultiWritersLevelSplit(t *testing.T) {
+	tempDir := t.TempDir()
+	config := &glog.LogConfig{
+		Service:    "slog-split",
+		Module:     "test",
+		Level:      glog.InfoLevel,
+		LoggerType: glog.LoggerTypeSlog,
+		Writers: []glog.WriterConfig{
+			{Type: glog.WriterConsole, Level: glog.DebugLevel},
+			{Type: glog.WriterFile, Dir: tempDir, MaxSize: 100, MaxBackups: 3, MaxAge: 7},
+			{Type: glog.WriterFile, Dir: tempDir, FileName: "error.log", WfOnly: true},
+		},
+	}
+	logger, err := glog.NewLogger(config)
+	assert.Nil(t, err)
+	ctx := context.Background()
+	logger.Info(ctx, "info message")
+	logger.Error(ctx, "error message")
+	logger.Close()
+	dateStr := time.Now().Format("20060102")
+	fullFile := filepath.Join(tempDir, dateStr, "slog-split_full.log")
+	b, _ := os.ReadFile(fullFile)
+	content := string(b)
+	assert.Contains(t, content, "info message")
+	assert.Contains(t, content, "error message")
+	errorFile := filepath.Join(tempDir, dateStr, "slog-split_wf.log")
+	b2, _ := os.ReadFile(errorFile)
+	content2 := string(b2)
+	assert.NotContains(t, content2, "info message")
+	assert.Contains(t, content2, "error message")
+}
+
+func TestSlogWriterConfigDefaults(t *testing.T) {
+	wc := glog.WriterConfig{Type: glog.WriterFile}
+	assert.Equal(t, "./logs", wc.EffectiveDir())
+	assert.Equal(t, "myservice.log", wc.EffectiveFileName("myservice"))
+	custom := glog.WriterConfig{Type: glog.WriterFile, FileName: "custom.log"}
+	assert.Equal(t, "custom.log", custom.EffectiveFileName("myservice"))
+	ms, mb, ma := wc.EffectiveRotateConfig()
+	assert.Equal(t, 100, ms)
+	assert.Equal(t, 10, mb)
+	assert.Equal(t, 7, ma)
 }

@@ -25,29 +25,6 @@ type gSlogHandler struct {
 	cfg             *glog.LogConfig
 }
 
-func newSlogHandler(cfg *glog.LogConfig, o *glog.LoggerOptions, writer io.Writer) *gSlogHandler {
-	h := &gSlogHandler{
-		enableOTELTrace: cfg.EnableOTELTrace,
-		cfg:             cfg,
-	}
-
-	if o != nil {
-		h.fieldHookFunc = o.FieldHookFunc
-		h.messageHookFunc = o.MessageHookFunc
-		if o.EnableOTELTrace != nil {
-			h.enableOTELTrace = *o.EnableOTELTrace
-		}
-	}
-
-	handlerOpts := &slog.HandlerOptions{
-		AddSource:   true,
-		Level:       logLevelToSlog(cfg.Level),
-		ReplaceAttr: replaceLevel,
-	}
-	h.handler = slog.NewJSONHandler(writer, handlerOpts)
-	return h
-}
-
 func replaceLevel(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) != 0 || a.Key != slog.LevelKey {
 		return a
@@ -246,15 +223,16 @@ type writerPair struct {
 }
 
 type gSlogFileWriter struct {
-	cfg          *glog.LogConfig
-	rotateMu     sync.Mutex
-	current      atomic.Pointer[writerPair]
-	currentDate  atomic.Value
+	wc          glog.WriterConfig
+	serviceName string
+	rotateMu    sync.Mutex
+	current     atomic.Pointer[writerPair]
+	currentDate atomic.Value
 	nextRotateAt atomic.Int64
 }
 
-func newSlogFileWriter(cfg *glog.LogConfig) (*gSlogFileWriter, error) {
-	w := &gSlogFileWriter{cfg: cfg}
+func newSlogFileWriter(wc glog.WriterConfig, serviceName string) (*gSlogFileWriter, error) {
+	w := &gSlogFileWriter{wc: wc, serviceName: serviceName}
 	pair, dateStr, nextAt, err := w.buildWriterPair(time.Now())
 	if err != nil {
 		return nil, err
@@ -271,22 +249,25 @@ func (w *gSlogFileWriter) needsRotate(now time.Time) bool {
 
 func (w *gSlogFileWriter) buildWriterPair(now time.Time) (*writerPair, string, int64, error) {
 	dateStr := now.Format("20060102")
-	dir := w.cfg.Dir + "/" + dateStr
+	dir := w.wc.EffectiveDir() + "/" + dateStr
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		return nil, "", 0, fmt.Errorf("glog: mkdir %s: %w", dir, err)
 	}
 
-	maxSize, maxBackups, maxAge := w.resolvedRotateConfig()
+	maxSize, maxBackups, maxAge := w.wc.EffectiveRotateConfig()
 
-	fullPath := path.Join(dir, fmt.Sprintf("%s_full.log", w.cfg.Service))
-	wfPath := path.Join(dir, fmt.Sprintf("%s_wf.log", w.cfg.Service))
+	baseName := w.wc.EffectiveFileName(w.serviceName)
+	ext := path.Ext(baseName)
+	nameWithoutExt := baseName[:len(baseName)-len(ext)]
+	fullPath := path.Join(dir, nameWithoutExt + "_full" + ext)
+	wfPath := path.Join(dir, nameWithoutExt + "_wf" + ext)
 
 	fullLJ := &lumberjack.Logger{
 		Filename:   fullPath,
 		MaxSize:    maxSize,
 		MaxBackups: maxBackups,
 		MaxAge:     maxAge,
-		Compress:   w.cfg.Compress,
+		Compress:   w.wc.Compress,
 		LocalTime:  true,
 	}
 	wfLJ := &lumberjack.Logger{
@@ -294,7 +275,7 @@ func (w *gSlogFileWriter) buildWriterPair(now time.Time) (*writerPair, string, i
 		MaxSize:    maxSize,
 		MaxBackups: maxBackups,
 		MaxAge:     maxAge,
-		Compress:   w.cfg.Compress,
+		Compress:   w.wc.Compress,
 		LocalTime:  true,
 	}
 
@@ -378,22 +359,6 @@ func closeWriterPair(pair *writerPair) {
 			_ = lj.Close()
 		}
 	}
-}
-
-func (w *gSlogFileWriter) resolvedRotateConfig() (maxSize, maxBackups, maxAge int) {
-	maxSize = w.cfg.MaxSize
-	if maxSize <= 0 {
-		maxSize = 100
-	}
-	maxBackups = w.cfg.MaxBackups
-	if maxBackups <= 0 {
-		maxBackups = 10
-	}
-	maxAge = w.cfg.MaxAge
-	if maxAge <= 0 {
-		maxAge = 7
-	}
-	return
 }
 
 func (w *gSlogFileWriter) Write(p []byte) (int, error) {

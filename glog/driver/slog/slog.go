@@ -10,9 +10,25 @@ import (
 )
 
 type slogLogger struct {
-	logger     *slog.Logger
-	cfg        *glog.LogConfig
-	fileWriter *gSlogFileWriter
+	logger      *slog.Logger
+	cfg         *glog.LogConfig
+	fileWriters []*gSlogFileWriter
+}
+
+func wrapHandler(inner slog.Handler, cfg *glog.LogConfig, o *glog.LoggerOptions) *gSlogHandler {
+	h := &gSlogHandler{
+		enableOTELTrace: cfg.EnableOTELTrace,
+		cfg:             cfg,
+	}
+	if o != nil {
+		h.fieldHookFunc = o.FieldHookFunc
+		h.messageHookFunc = o.MessageHookFunc
+		if o.EnableOTELTrace != nil {
+			h.enableOTELTrace = *o.EnableOTELTrace
+		}
+	}
+	h.handler = inner
+	return h
 }
 
 func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error) {
@@ -21,26 +37,6 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 	}
 
 	o := glog.ApplyOptions(opts...)
-
-	var (
-		logger     *slog.Logger
-		fileWriter *gSlogFileWriter
-	)
-
-	if cfg.Writer == glog.WriterConsole {
-		handler := newSlogHandler(cfg, o, os.Stdout)
-		logger = slog.New(handler)
-	} else {
-		fw, err := newSlogFileWriter(cfg)
-		if err != nil {
-			return nil, err
-		}
-		fileWriter = fw
-		fileHandler := newSlogHandler(cfg, o, fw)
-		consoleHandler := newSlogHandler(cfg, o, os.Stdout)
-		handler := newMultiHandler(fileHandler, consoleHandler)
-		logger = slog.New(handler)
-	}
 
 	serviceName := cfg.Service
 	if serviceName == "" {
@@ -51,15 +47,67 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 		moduleName = glog.DefaultModuleName
 	}
 
-	logger = logger.With(
+	var (
+		handlers    []slog.Handler
+		fileWriters []*gSlogFileWriter
+	)
+
+	for _, wc := range cfg.Writers {
+		effectiveLevel := wc.EffectiveLevel(cfg.Level)
+		handlerOpts := &slog.HandlerOptions{
+			AddSource:   true,
+			Level:       logLevelToSlog(effectiveLevel),
+			ReplaceAttr: replaceLevel,
+		}
+
+		switch wc.Type {
+		case glog.WriterConsole:
+			innerHandler := slog.NewJSONHandler(os.Stdout, handlerOpts)
+			h := wrapHandler(innerHandler, cfg, o)
+			handlers = append(handlers, h)
+		case glog.WriterFile:
+			fw, err := newSlogFileWriter(wc, serviceName)
+			if err != nil {
+				for _, wf := range fileWriters {
+					_ = wf.Close()
+				}
+				return nil, err
+			}
+			fileWriters = append(fileWriters, fw)
+
+			if wc.WfOnly {
+				filtered := &levelWriter{w: fw, minLevel: slog.LevelWarn}
+				innerHandler := slog.NewJSONHandler(filtered, handlerOpts)
+				h := wrapHandler(innerHandler, cfg, o)
+				handlers = append(handlers, h)
+			} else {
+				innerHandler := slog.NewJSONHandler(fw, handlerOpts)
+				h := wrapHandler(innerHandler, cfg, o)
+				handlers = append(handlers, h)
+			}
+		}
+	}
+
+	if len(handlers) == 0 {
+		handlerOpts := &slog.HandlerOptions{
+			AddSource:   true,
+			Level:       logLevelToSlog(cfg.Level),
+			ReplaceAttr: replaceLevel,
+		}
+		innerHandler := slog.NewJSONHandler(os.Stdout, handlerOpts)
+		h := wrapHandler(innerHandler, cfg, o)
+		handlers = append(handlers, h)
+	}
+
+	logger := slog.New(newMultiHandler(handlers...)).With(
 		slog.String("service", serviceName),
 		slog.String("module", moduleName),
 	)
 
 	return &slogLogger{
-		logger:     logger,
-		cfg:        cfg,
-		fileWriter: fileWriter,
+		logger:      logger,
+		cfg:         cfg,
+		fileWriters: fileWriters,
 	}, nil
 }
 
@@ -73,9 +121,9 @@ func (l *slogLogger) With(kvs ...any) glog.Logger {
 	}
 	kvs = normalizeKVs(kvs)
 	return &slogLogger{
-		logger:     l.logger.With(kvs...),
-		cfg:        l.cfg,
-		fileWriter: l.fileWriter,
+		logger:      l.logger.With(kvs...),
+		cfg:         l.cfg,
+		fileWriters: l.fileWriters,
 	}
 }
 
@@ -165,10 +213,13 @@ func (l *slogLogger) Fatalw(ctx context.Context, msg string, kvs ...any) {
 }
 
 func (l *slogLogger) Close() error {
-	if l.fileWriter != nil {
-		return l.fileWriter.Close()
+	var firstErr error
+	for _, fw := range l.fileWriters {
+		if err := fw.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	return firstErr
 }
 
 func (l *slogLogger) log(ctx context.Context, level glog.Level, msg string, kvs ...any) {
