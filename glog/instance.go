@@ -35,7 +35,7 @@ func newLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 		cfg = GetDefaultLogConfig()
 	}
 	if cfg.LoggerType == "" {
-		cfg.LoggerType = LoggerTypeSlog
+		cfg.LoggerType = LoggerTypeZap
 	}
 
 	factory, ok := registeredFactories[cfg.LoggerType]
@@ -49,7 +49,7 @@ func getDefaultLogger() (Logger, error) {
 	if defaultLoggerInstance != nil {
 		return defaultLoggerInstance, nil
 	}
-	return newLogger(GetDefaultLogConfig(), WithCallerSkip(DefaultLogCallerSkip))
+	return newLogger(GetDefaultLogConfig())
 }
 
 func GetDefaultLogger() Logger {

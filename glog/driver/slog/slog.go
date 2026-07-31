@@ -5,16 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/morehao/golib/glog"
 )
-
-// 从 slogLogger.log() 到业务代码的固定栈帧数
-// runtime.Callers(0) 首帧为 runtime.Callers 自身
-// 调用链: runtime.Callers → slogLogger.log → slogLogger.Debugw → glog.Debugw → 业务代码
-const slogBaseCallerSkip = 4
 
 type slogLogger struct {
 	logger      *slog.Logger
@@ -115,7 +109,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 		logger:      logger,
 		cfg:         cfg,
 		fileWriters: fileWriters,
-		callerSkip:  slogBaseCallerSkip + o.CallerSkip,
+		callerSkip:  o.CallerSkip,
 	}, nil
 }
 
@@ -237,9 +231,8 @@ func (l *slogLogger) log(ctx context.Context, level glog.Level, msg string, kvs 
 	}
 	kvs = normalizeKVs(kvs)
 
-	var pc [1]uintptr
-	runtime.Callers(l.callerSkip, pc[:])
-	r := slog.NewRecord(time.Now(), logLevelToSlog(level), msg, pc[0])
+	_, pc := glog.CallerFrame(l.callerSkip)
+	r := slog.NewRecord(time.Now(), logLevelToSlog(level), msg, pc)
 	r.Add(kvs...)
 
 	_ = l.logger.Handler().Handle(ctx, r)

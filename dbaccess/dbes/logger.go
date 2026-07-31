@@ -14,7 +14,7 @@ import (
 func newEsLogger(cfg *ESConfig) (*esLog, error) {
 	callerSkip := cfg.callerSkip
 	if callerSkip <= 0 {
-		callerSkip = 9
+		callerSkip = 6
 	}
 	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(callerSkip))
 	if err != nil {

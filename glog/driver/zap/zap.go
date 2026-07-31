@@ -24,13 +24,11 @@ type zapLogger struct {
 	cfg             *glog.LogConfig
 	enableOTELTrace bool
 	fieldHookFunc   glog.FieldHookFunc
+	callerSkip      int
 }
 
 type zapLoggerConfig struct {
-	callerSkip      int
-	fieldHookFunc   glog.FieldHookFunc
 	messageHookFunc glog.MessageHookFunc
-	enableOTELTrace bool
 }
 
 func newZapLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error) {
@@ -54,18 +52,13 @@ func newZapLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error)
 		cfg:             cfg,
 		enableOTELTrace: enableOTELTrace,
 		fieldHookFunc:   o.FieldHookFunc,
+		callerSkip:      o.CallerSkip,
 	}, nil
 }
 
 func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, error) {
 	zapCfg := &zapLoggerConfig{
-		callerSkip:      o.CallerSkip,
-		fieldHookFunc:   o.FieldHookFunc,
 		messageHookFunc: o.MessageHookFunc,
-		enableOTELTrace: cfg.EnableOTELTrace,
-	}
-	if o.EnableOTELTrace != nil {
-		zapCfg.enableOTELTrace = *o.EnableOTELTrace
 	}
 
 	serviceName := cfg.Service
@@ -122,16 +115,12 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, erro
 
 	logger = logger.Named(serviceName).Named(moduleName)
 
-	callerSkip := glog.DefaultLogCallerSkip
-	if o.CallerSkip > 0 {
-		callerSkip = o.CallerSkip
-	}
-	return logger.WithOptions(zap.AddCallerSkip(callerSkip)), nil
+	return logger, nil
 }
 
 func (l *zapLogger) GetConfig() *glog.LogConfig { return l.cfg }
 
-func (l *zapLogger) Debug(ctx context.Context, args ...any)  { l.ctxLog(glog.DebugLevel, ctx, args...) }
+func (l *zapLogger) Debug(ctx context.Context, args ...any) { l.ctxLog(glog.DebugLevel, ctx, args...) }
 func (l *zapLogger) Debugf(ctx context.Context, f string, args ...any) {
 	l.ctxLogf(glog.DebugLevel, ctx, f, args...)
 }
@@ -184,6 +173,7 @@ func (l *zapLogger) With(kvs ...any) glog.Logger {
 		cfg:             l.cfg,
 		enableOTELTrace: l.enableOTELTrace,
 		fieldHookFunc:   l.fieldHookFunc,
+		callerSkip:      l.callerSkip,
 	}
 }
 
@@ -209,13 +199,13 @@ func (l *zapLogger) dispatch(level glog.Level, ctx context.Context, fn func(*zap
 
 func (l *zapLogger) ctxLog(level glog.Level, ctx context.Context, args ...any) {
 	l.dispatch(level, ctx, func(log *zap.Logger) {
-		logWithLevel(log, level, fmt.Sprint(args...))
+		l.logWithLevel(log, level, fmt.Sprint(args...))
 	})
 }
 
 func (l *zapLogger) ctxLogf(level glog.Level, ctx context.Context, format string, args ...any) {
 	l.dispatch(level, ctx, func(log *zap.Logger) {
-		logWithLevel(log, level, fmt.Sprintf(format, args...))
+		l.logWithLevel(log, level, fmt.Sprintf(format, args...))
 	})
 }
 
@@ -223,11 +213,15 @@ func (l *zapLogger) ctxLogw(level glog.Level, ctx context.Context, msg string, k
 	l.dispatch(level, ctx, func(log *zap.Logger) {
 		fields := sweetenFields(kvs)
 		fields = l.applyFieldHook(fields)
-		logWithLevel(log, level, msg, fields...)
+		l.logWithLevel(log, level, msg, fields...)
 	})
 }
 
-func logWithLevel(log *zap.Logger, level glog.Level, msg string, fields ...zap.Field) {
+func (l *zapLogger) logWithLevel(log *zap.Logger, level glog.Level, msg string, fields ...zap.Field) {
+	skip, _ := glog.CallerFrame(l.callerSkip)
+	if skip > 0 {
+		log = log.WithOptions(zap.AddCallerSkip(skip))
+	}
 	switch level {
 	case glog.DebugLevel:
 		log.Debug(msg, fields...)

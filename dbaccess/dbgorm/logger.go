@@ -35,7 +35,7 @@ func newOrmLogger(cfg *ormConfig) (*ormLogger, error) {
 	glog.AppendExtraKeys(cfg.loggerConfig, glog.KeyAppRequestID)
 	callerSkip := cfg.callerSkip
 	if callerSkip <= 0 {
-		callerSkip = 8
+		callerSkip = 3
 	}
 	l, err := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(callerSkip))
 	if err != nil {

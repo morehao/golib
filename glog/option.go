@@ -25,6 +25,9 @@ type LoggerOptions struct {
 
 type Option func(*LoggerOptions)
 
+// WithCallerSkip 设置额外跳过的调用栈帧数。
+// skip 表示在 glog 框架自身占用的栈帧之外，从"调用 glog.Logger 方法的那一帧"再向上额外跳过的帧数。
+// 该值与具体 driver 无关：zap、slog 等任意 driver 下，相同的 skip 都会定位到同一处业务代码。
 func WithCallerSkip(skip int) Option {
 	return func(cfg *LoggerOptions) {
 		cfg.CallerSkip = skip

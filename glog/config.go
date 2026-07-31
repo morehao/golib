@@ -86,6 +86,6 @@ func GetDefaultLogConfig() *LogConfig {
 			{Type: WriterConsole, Level: DebugLevel},
 		},
 		EnableOTELTrace: true,
-		LoggerType:      LoggerTypeSlog,
+		LoggerType:      LoggerTypeZap,
 	}
 }

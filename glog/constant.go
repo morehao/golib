@@ -93,7 +93,6 @@ const (
 )
 
 const (
-	DefaultServiceName   = "app"
-	DefaultModuleName    = "default"
-	DefaultLogCallerSkip = 6
+	DefaultServiceName = "app"
+	DefaultModuleName  = "default"
 )
