@@ -25,17 +25,17 @@ type gSlogHandler struct {
 	cfg             *glog.LogConfig
 }
 
-func newSlogHandler(cfg *glog.LogConfig, optCfg *glog.OptConfig, writer io.Writer) *gSlogHandler {
+func newSlogHandler(cfg *glog.LogConfig, o *glog.LoggerOptions, writer io.Writer) *gSlogHandler {
 	h := &gSlogHandler{
 		enableOTELTrace: cfg.EnableOTELTrace,
 		cfg:             cfg,
 	}
 
-	if optCfg != nil {
-		h.fieldHookFunc = optCfg.FieldHookFunc
-		h.messageHookFunc = optCfg.MessageHookFunc
-		if optCfg.EnableOTELTrace != nil {
-			h.enableOTELTrace = *optCfg.EnableOTELTrace
+	if o != nil {
+		h.fieldHookFunc = o.FieldHookFunc
+		h.messageHookFunc = o.MessageHookFunc
+		if o.EnableOTELTrace != nil {
+			h.enableOTELTrace = *o.EnableOTELTrace
 		}
 	}
 

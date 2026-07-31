@@ -2,9 +2,9 @@ package filestore
 
 import (
 	"fmt"
-	"io"
 	"time"
 
+	"github.com/morehao/golib/dbaccess/gormdao"
 	"gorm.io/gorm"
 )
 
@@ -46,79 +46,38 @@ type FileUpload struct {
 
 func (FileUpload) TableName() string { return "core_file_upload" }
 
-// FileDetail 组合返回 FileUpload 及其关联的 File（内容哈希/大小/存储路径）。
-type FileDetail struct {
-	// FileUploadID 为 FileUpload 表主键，外部调用方通过该 ID 与 FileStore 继续交互
-	// （GetFile/DeleteFile/PresignGetFile/CompleteMultipart/AbortMultipart 等）。
-	FileUploadID uint
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	FileID       uint
-	UploadID     string
-	Name         string
-	MimeType     string
-	Status       FileStatus
-	Scene        string
-	ContentHash  string
-	Size         int64
-	StorageURI   string
-}
-
-type RecordUploadRequest struct {
-	ContentHash string
-	Name        string
-	Size        int64
-	MimeType    string
-	StoragePath string
-	Scene       string
-}
-
-type UploadAndRecordRequest struct {
-	ContentHash string
-	Name        string
-	Size        int64
-	MimeType    string
-	Reader      io.Reader
-	StoragePath string
-	Scene       string
-}
-
 type fileCond struct {
-	ID         uint
-	FileID       uint
-	ContentHash  string
-	UploadID     string
-	StorageURI   string
-	Status       FileStatus
-	Page       int
-	PageSize   int
-	OrderField string
+	gormdao.BaseCond
+	ContentHash string
+	StorageURI  string
 }
 
 func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
-	if c.ID > 0 {
-		db.Where(fmt.Sprintf("%s.id = ?", tableName), c.ID)
-	}
-	if c.FileID > 0 {
-		db.Where(fmt.Sprintf("%s.file_id = ?", tableName), c.FileID)
-	}
+	c.BaseCond.BuildCondition(db, tableName)
 	if c.ContentHash != "" {
 		db.Where(fmt.Sprintf("%s.content_hash = ?", tableName), c.ContentHash)
-	}
-	if c.UploadID != "" {
-		db.Where(fmt.Sprintf("%s.upload_id = ?", tableName), c.UploadID)
 	}
 	if c.StorageURI != "" {
 		db.Where(fmt.Sprintf("%s.storage_uri = ?", tableName), c.StorageURI)
 	}
+}
+
+type fileUploadCond struct {
+	gormdao.BaseCond
+	FileID   uint
+	UploadID string
+	Status   FileStatus
+}
+
+func (c *fileUploadCond) BuildCondition(db *gorm.DB, tableName string) {
+	c.BaseCond.BuildCondition(db, tableName)
+	if c.FileID > 0 {
+		db.Where(fmt.Sprintf("%s.file_id = ?", tableName), c.FileID)
+	}
+	if c.UploadID != "" {
+		db.Where(fmt.Sprintf("%s.upload_id = ?", tableName), c.UploadID)
+	}
 	if c.Status != "" {
 		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)
 	}
-	if c.OrderField != "" {
-		db.Order(c.OrderField)
-	}
-}
-
-func (c *fileCond) GetPageInfo() (page int, pageSize int) {
-	return c.Page, c.PageSize
 }

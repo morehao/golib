@@ -37,35 +37,35 @@ func newZapLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error)
 	if cfg == nil {
 		cfg = glog.GetDefaultLogConfig()
 	}
-	optCfg := glog.GetOptConfig(opts...)
+	o := glog.ApplyOptions(opts...)
 
-	logger, err := getZapLogger(cfg, optCfg)
+	logger, err := getZapLogger(cfg, o)
 	if err != nil {
 		return nil, err
 	}
 
 	enableOTELTrace := cfg.EnableOTELTrace
-	if optCfg.EnableOTELTrace != nil {
-		enableOTELTrace = *optCfg.EnableOTELTrace
+	if o.EnableOTELTrace != nil {
+		enableOTELTrace = *o.EnableOTELTrace
 	}
 
 	return &zapLogger{
 		logger:          logger,
 		cfg:             cfg,
 		enableOTELTrace: enableOTELTrace,
-		fieldHookFunc:   optCfg.FieldHookFunc,
+		fieldHookFunc:   o.FieldHookFunc,
 	}, nil
 }
 
-func getZapLogger(cfg *glog.LogConfig, optCfg *glog.OptConfig) (*zap.Logger, error) {
+func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, error) {
 	zapCfg := &zapLoggerConfig{
-		callerSkip:      optCfg.CallerSkip,
-		fieldHookFunc:   optCfg.FieldHookFunc,
-		messageHookFunc: optCfg.MessageHookFunc,
+		callerSkip:      o.CallerSkip,
+		fieldHookFunc:   o.FieldHookFunc,
+		messageHookFunc: o.MessageHookFunc,
 		enableOTELTrace: cfg.EnableOTELTrace,
 	}
-	if optCfg.EnableOTELTrace != nil {
-		zapCfg.enableOTELTrace = *optCfg.EnableOTELTrace
+	if o.EnableOTELTrace != nil {
+		zapCfg.enableOTELTrace = *o.EnableOTELTrace
 	}
 
 	encoder := getZapEncoder(zapCfg)
@@ -109,8 +109,8 @@ func getZapLogger(cfg *glog.LogConfig, optCfg *glog.OptConfig) (*zap.Logger, err
 	logger = logger.Named(serviceName).Named(moduleName)
 
 	callerSkip := glog.DefaultLogCallerSkip
-	if optCfg.CallerSkip > 0 {
-		callerSkip = optCfg.CallerSkip
+	if o.CallerSkip > 0 {
+		callerSkip = o.CallerSkip
 	}
 	return logger.WithOptions(zap.AddCallerSkip(callerSkip)), nil
 }

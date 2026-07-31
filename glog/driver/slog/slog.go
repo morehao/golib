@@ -20,7 +20,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 		cfg = glog.GetDefaultLogConfig()
 	}
 
-	optCfg := glog.GetOptConfig(opts...)
+	o := glog.ApplyOptions(opts...)
 
 	var (
 		logger     *slog.Logger
@@ -28,7 +28,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 	)
 
 	if cfg.Writer == glog.WriterConsole {
-		handler := newSlogHandler(cfg, optCfg, os.Stdout)
+		handler := newSlogHandler(cfg, o, os.Stdout)
 		logger = slog.New(handler)
 	} else {
 		fw, err := newSlogFileWriter(cfg)
@@ -36,7 +36,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 			return nil, err
 		}
 		fileWriter = fw
-		handler := newSlogHandler(cfg, optCfg, fw)
+		handler := newSlogHandler(cfg, o, fw)
 		logger = slog.New(handler)
 	}
 
