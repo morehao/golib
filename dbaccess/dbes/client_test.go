@@ -29,7 +29,7 @@ func TestNewTypedES(t *testing.T) {
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
-		Writer:    glog.WriterConsole,
+		Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
 		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(2))
@@ -63,7 +63,7 @@ func TestNewSimpleES(t *testing.T) {
 	logCfg := &glog.LogConfig{
 		Service:   "test",
 		Level:     glog.DebugLevel,
-		Writer:    glog.WriterConsole,
+		Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
 		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(2))

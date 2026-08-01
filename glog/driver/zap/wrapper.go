@@ -56,19 +56,21 @@ func getZapStandoutWriter() zapcore.WriteSyncer {
 }
 
 type dailyRotateWriter struct {
-	mu         sync.Mutex
-	cfg        *glog.LogConfig
-	fileSuffix string
+	mu          sync.Mutex
+	wc          glog.WriterConfig
+	serviceName string
+	suffix      string // "_full" 或 "_wf"
 
 	current  *lumberjack.Logger
 	today    string
 	buffered *zapcore.BufferedWriteSyncer
 }
 
-func newDailyRotateWriter(cfg *glog.LogConfig, fileSuffix string) (*dailyRotateWriter, error) {
+func newDailyRotateWriter(wc glog.WriterConfig, serviceName, suffix string) (*dailyRotateWriter, error) {
 	w := &dailyRotateWriter{
-		cfg:        cfg,
-		fileSuffix: fileSuffix,
+		wc:          wc,
+		serviceName: serviceName,
+		suffix:      suffix,
 	}
 	if err := w.rotate(time.Now().Format("20060102")); err != nil {
 		return nil, err
@@ -81,32 +83,24 @@ func (w *dailyRotateWriter) rotate(today string) error {
 		_ = w.buffered.Stop()
 	}
 
-	dir := strings.TrimSuffix(w.cfg.Dir, "/") + "/" + today
+	dir := strings.TrimSuffix(w.wc.EffectiveDir(), "/") + "/" + today
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
 		return fmt.Errorf("glog: mkdir %s: %w", dir, err)
 	}
 
-	logFilepath := path.Join(dir, fmt.Sprintf("%s_%s.log", w.cfg.Service, w.fileSuffix))
+	baseName := w.wc.EffectiveFileName(w.serviceName)
+	ext := path.Ext(baseName)
+	nameWithoutExt := baseName[:len(baseName)-len(ext)]
+	logFilepath := path.Join(dir, nameWithoutExt+w.suffix+ext)
 
-	maxSize := w.cfg.MaxSize
-	if maxSize <= 0 {
-		maxSize = 100
-	}
-	maxBackups := w.cfg.MaxBackups
-	if maxBackups <= 0 {
-		maxBackups = 10
-	}
-	maxAge := w.cfg.MaxAge
-	if maxAge <= 0 {
-		maxAge = 7
-	}
+	maxSize, maxBackups, maxAge := w.wc.EffectiveRotateConfig()
 
 	lj := &lumberjack.Logger{
 		Filename:   logFilepath,
 		MaxSize:    maxSize,
 		MaxBackups: maxBackups,
 		MaxAge:     maxAge,
-		Compress:   w.cfg.Compress,
+		Compress:   w.wc.Compress,
 		LocalTime:  true,
 	}
 
@@ -146,6 +140,16 @@ func (w *dailyRotateWriter) Sync() error {
 	return nil
 }
 
-func getZapFileWriter(cfg *glog.LogConfig, fileSuffix string) (zapcore.WriteSyncer, error) {
-	return newDailyRotateWriter(cfg, fileSuffix)
+// Close 停止并刷出缓冲写，释放后台 goroutine 与底层文件资源。
+func (w *dailyRotateWriter) Close() error {
+	w.mu.Lock()
+	buf := w.buffered
+	w.buffered = nil
+	w.mu.Unlock()
+	if buf != nil {
+		return buf.Stop()
+	}
+	return nil
 }
+
+

@@ -29,7 +29,7 @@ func TestNew(t *testing.T) {
 	logCfg := &glog.LogConfig{
 		Service:   "app",
 		Level:     glog.DebugLevel,
-		Writer:    glog.WriterConsole,
+		Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
 		ExtraKeys: []string{glog.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg)

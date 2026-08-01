@@ -1,26 +1,77 @@
-/*
- * @Author: morehao morehao@qq.com
- * @Date: 2025-04-26 09:55:22
- * @LastEditors: morehao morehao@qq.com
- * @LastEditTime: 2025-04-26 16:50:59
- * @FilePath: /golib/glog/config.go
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
- */
 package glog
 
 type LogConfig struct {
-	Service         string
-	Module          string
-	Level           Level      `json:"level" yaml:"level"`
-	Writer          WriterType `json:"writer" yaml:"writer"`
-	Dir             string     `json:"dir" yaml:"dir"`
-	ExtraKeys       []string   `json:"extra_keys" yaml:"extra_keys"`
-	MaxSize         int        `json:"max_size" yaml:"max_size"`
-	MaxBackups      int        `json:"max_backups" yaml:"max_backups"`
-	MaxAge          int        `json:"max_age" yaml:"max_age"`
-	Compress        bool       `json:"compress" yaml:"compress"`
-	EnableOTELTrace bool       `json:"enable_otel_trace" yaml:"enable_otel_trace"`
-	LoggerType      LoggerType `json:"logger_type" yaml:"logger_type"`
+	Service         string         `json:"service" yaml:"service"`
+	Module          string         `json:"module" yaml:"module"`
+	Level           Level          `json:"level" yaml:"level"`
+	Writers         []WriterConfig `json:"writers" yaml:"writers"`
+	ExtraKeys       []string       `json:"extra_keys" yaml:"extra_keys"`
+	EnableOTELTrace bool           `json:"enable_otel_trace" yaml:"enable_otel_trace"`
+	LoggerType      LoggerType     `json:"logger_type" yaml:"logger_type"`
+}
+
+type WriterConfig struct {
+	Type       WriterType `json:"type" yaml:"type"`
+	Level      Level      `json:"level" yaml:"level"`
+	FileName   string     `json:"file_name" yaml:"file_name"`
+	Dir        string     `json:"dir" yaml:"dir"`
+	MaxSize    int        `json:"max_size" yaml:"max_size"`
+	MaxBackups int        `json:"max_backups" yaml:"max_backups"`
+	MaxAge     int        `json:"max_age" yaml:"max_age"`
+	Compress   bool       `json:"compress" yaml:"compress"`
+	WfOnly     bool       `json:"wf_only" yaml:"wf_only"`
+}
+
+func (wc *WriterConfig) EffectiveLevel(globalLevel Level) Level {
+	if wc.Level == "" {
+		return globalLevel
+	}
+	return wc.Level
+}
+
+func (wc *WriterConfig) EffectiveDir() string {
+	if wc.Dir == "" {
+		return "./logs"
+	}
+	return wc.Dir
+}
+
+func (wc *WriterConfig) EffectiveFileName(service string) string {
+	if wc.FileName != "" {
+		return wc.FileName
+	}
+	if service == "" {
+		service = DefaultServiceName
+	}
+	return service + ".log"
+}
+
+// CloneLogConfig 返回配置的浅拷贝（Writers、ExtraKeys 切片独立），
+// 避免对副本的修改（如 AppendExtraKeys）影响原配置。
+func CloneLogConfig(cfg *LogConfig) *LogConfig {
+	if cfg == nil {
+		return nil
+	}
+	c := *cfg
+	c.Writers = append([]WriterConfig(nil), cfg.Writers...)
+	c.ExtraKeys = append([]string(nil), cfg.ExtraKeys...)
+	return &c
+}
+
+func (wc *WriterConfig) EffectiveRotateConfig() (maxSize, maxBackups, maxAge int) {
+	maxSize = wc.MaxSize
+	if maxSize <= 0 {
+		maxSize = 100
+	}
+	maxBackups = wc.MaxBackups
+	if maxBackups <= 0 {
+		maxBackups = 10
+	}
+	maxAge = wc.MaxAge
+	if maxAge <= 0 {
+		maxAge = 7
+	}
+	return
 }
 
 func AppendExtraKeys(cfg *LogConfig, keys ...string) {
@@ -43,13 +94,10 @@ func GetDefaultLogConfig() *LogConfig {
 		Service:         DefaultServiceName,
 		Module:          DefaultModuleName,
 		Level:           DebugLevel,
-		Writer:          WriterConsole,
-		Dir:             DefaultLogDir,
-		MaxSize:         100,
-		MaxBackups:      10,
-		MaxAge:          7,
-		Compress:        false,
+		Writers: []WriterConfig{
+			{Type: WriterConsole, Level: DebugLevel},
+		},
 		EnableOTELTrace: true,
-		LoggerType:      LoggerTypeSlog,
+		LoggerType:      LoggerTypeZap,
 	}
 }

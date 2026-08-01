@@ -11,6 +11,52 @@ Go 数据库访问统一封装库，提供对多种数据库（GORM、Redis、El
 
 所有客户端都内置了日志记录功能，与 `glog` 库无缝集成，自动记录数据库操作日志。
 
+## 初始化方式
+
+`glog` 存在两套并存的 logger：**全局默认 logger**（业务代码用包级函数打日志）与各包装层的**独立 logger**（负责 SQL/Redis/ES 日志）。两种方式互补，可同时使用。
+
+### 方式一：项目初始化全局 glog（业务日志）
+
+在程序入口用 `glog.InitLogger` 初始化全局 logger，业务代码直接用包级函数：
+
+```go
+import (
+    _ "github.com/morehao/golib/glog/driver/zap" // 必须显式注册 driver！
+    "github.com/morehao/golib/glog"
+)
+
+func main() {
+    cfg := &glog.LogConfig{
+        Service:    "myapp",
+        Level:      glog.DebugLevel,
+        Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
+        LoggerType: glog.LoggerTypeZap,
+    }
+    if err := glog.InitLogger(cfg); err != nil {
+        panic(err)
+    }
+    defer glog.Close()
+
+    glog.Infow(ctx, "hello", "k", "v") // 包级函数
+}
+```
+
+### 方式二：包装层独立 logger（DB 日志）
+
+`dbgorm`/`dbredis`/`dbes` 各自通过 `glog.NewLogger(cfg, glog.WithCallerSkip(n))` 创建独立 logger 实例。
+
+- **不传 `WithLogConfig` 时**，默认配置跟随全局 logger（即方式一 `InitLogger` 的配置）；若未初始化过全局 logger，则使用内置默认配置（console + debug + zap）。
+- **传入 `WithLogConfig(logCfg)` 时**，使用指定的独立配置。
+- 日志 caller 默认已校准到业务调用 db 操作的那一行（`dbgorm=3`、`dbredis=4`、`dbes=6`）。若业务在 db 调用前又套了额外封装层，用各包的 `WithCallerSkip` 微调。
+
+```go
+db, err := dbgorm.New(&dbgorm.Config{URL: "mysql://root:pwd@127.0.0.1:3306/demo"},
+    dbgorm.WithLogConfig(customLogCfg), // 可选，默认跟随全局配置
+)
+```
+
+> 注意：`LoggerType` 默认值为 `zap`，使用前必须 `import _ "github.com/morehao/golib/glog/driver/zap"`（或 `driver/slog`），否则会报 `unknown LoggerType`。
+
 ## 子模块
 
 ### 1. dbgorm - GORM 数据库客户端
@@ -62,6 +108,7 @@ import (
     "time"
     "github.com/morehao/golib/dbaccess/dbgorm"
     "github.com/morehao/golib/glog"
+    _ "github.com/morehao/golib/glog/driver/zap" // 注册 zap driver，必须显式 import
     "gorm.io/gorm"
 )
 
@@ -70,8 +117,8 @@ func main() {
     logCfg := &glog.LogConfig{
         Service:   "app",
         Level:     glog.DebugLevel,
-        Writer:    glog.WriterConsole,
-        ExtraKeys: []string{glog.KeyRequestId},
+		Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
+        ExtraKeys: []string{glog.KeyAppRequestID},
     }
     defer glog.Close()
     glog.InitLogger(logCfg)
@@ -105,7 +152,7 @@ func main() {
 customLogCfg := &glog.LogConfig{
     Service:   "custom-service",
     Level:     glog.DebugLevel,
-    Writer:    glog.WriterConsole,
+    Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
 }
 
 db, err := dbgorm.New(cfg, dbgorm.WithLogConfig(customLogCfg))
@@ -145,6 +192,7 @@ import (
     "time"
     "github.com/morehao/golib/dbaccess/dbredis"
     "github.com/morehao/golib/glog"
+    _ "github.com/morehao/golib/glog/driver/zap" // 注册 zap driver，必须显式 import
 )
 
 func main() {
@@ -152,8 +200,8 @@ func main() {
     logCfg := &glog.LogConfig{
         Service:   "app",
         Level:     glog.DebugLevel,
-        Writer:    glog.WriterConsole,
-        ExtraKeys: []string{glog.KeyRequestId},
+		Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
+        ExtraKeys: []string{glog.KeyAppRequestID},
     }
     defer glog.Close()
     glog.InitLogger(logCfg)
@@ -230,6 +278,7 @@ import (
     "strings"
     "github.com/morehao/golib/dbaccess/dbes"
     "github.com/morehao/golib/glog"
+    _ "github.com/morehao/golib/glog/driver/zap" // 注册 zap driver，必须显式 import
 )
 
 func main() {
@@ -237,8 +286,8 @@ func main() {
     logCfg := &glog.LogConfig{
         Service:   "app",
         Level:     glog.DebugLevel,
-        Writer:    glog.WriterConsole,
-        ExtraKeys: []string{glog.KeyRequestId},
+		Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
+        ExtraKeys: []string{glog.KeyAppRequestID},
     }
     defer glog.Close()
     glog.InitLogger(logCfg)

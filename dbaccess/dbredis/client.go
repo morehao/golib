@@ -13,7 +13,7 @@ func New(cfg *RedisConfig, opts ...Option) (*redis.Client, error) {
 		return nil, fmt.Errorf("service name is empty")
 	}
 
-	cfg.loggerConfig = glog.GetDefaultLogConfig()
+	cfg.loggerConfig = glog.CloneLogConfig(glog.GetLoggerConfig())
 	for _, opt := range opts {
 		opt.apply(cfg)
 	}
@@ -47,7 +47,7 @@ func New(cfg *RedisConfig, opts ...Option) (*redis.Client, error) {
 
 	callerSkip := cfg.callerSkip
 	if callerSkip <= 0 {
-		callerSkip = 8
+		callerSkip = 4
 	}
 	l, getLoggerErr := glog.NewLogger(cfg.loggerConfig, glog.WithCallerSkip(callerSkip))
 	if getLoggerErr != nil {
