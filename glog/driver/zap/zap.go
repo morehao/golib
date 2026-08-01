@@ -3,6 +3,8 @@ package zap
 import (
 	"context"
 	"fmt"
+	"math"
+	"time"
 
 	"github.com/morehao/golib/glog"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -32,6 +34,7 @@ type zapLogger struct {
 	enableOTELTrace bool
 	fieldHookFunc   glog.FieldHookFunc
 	callerSkip      int
+	writers         []*dailyRotateWriter
 }
 
 type zapLoggerConfig struct {
@@ -44,7 +47,7 @@ func newZapLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error)
 	}
 	o := glog.ApplyOptions(opts...)
 
-	logger, err := getZapLogger(cfg, o)
+	logger, writers, err := getZapLogger(cfg, o)
 	if err != nil {
 		return nil, err
 	}
@@ -60,10 +63,11 @@ func newZapLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error)
 		enableOTELTrace: enableOTELTrace,
 		fieldHookFunc:   o.FieldHookFunc,
 		callerSkip:      o.CallerSkip,
+		writers:         writers,
 	}, nil
 }
 
-func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, error) {
+func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, []*dailyRotateWriter, error) {
 	zapCfg := &zapLoggerConfig{
 		messageHookFunc: o.MessageHookFunc,
 	}
@@ -79,7 +83,10 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, erro
 
 	encoder := getZapEncoder(zapCfg)
 
-	var cores []zapcore.Core
+	var (
+		cores   []zapcore.Core
+		writers []*dailyRotateWriter
+	)
 
 	for _, wc := range cfg.Writers {
 		effectiveLevel := wc.EffectiveLevel(cfg.Level)
@@ -93,15 +100,20 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, erro
 			)
 			cores = append(cores, consoleCore)
 		case glog.WriterFile:
-			dw, err := newDailyRotateWriter(wc, serviceName)
-			if err != nil {
-				return nil, err
-			}
-
 			if wc.WfOnly {
+				dw, err := newDailyRotateWriter(wc, serviceName, "_wf")
+				if err != nil {
+					return nil, nil, err
+				}
+				writers = append(writers, dw)
 				wfCore := zapcore.NewCore(encoder, dw, zapcore.WarnLevel)
 				cores = append(cores, wfCore)
 			} else {
+				dw, err := newDailyRotateWriter(wc, serviceName, "_full")
+				if err != nil {
+					return nil, nil, err
+				}
+				writers = append(writers, dw)
 				fileCore := zapcore.NewCore(encoder, dw, logLevelMap[effectiveLevel])
 				cores = append(cores, fileCore)
 			}
@@ -122,7 +134,7 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, erro
 
 	logger = logger.Named(serviceName).Named(moduleName)
 
-	return logger, nil
+	return logger, writers, nil
 }
 
 func (l *zapLogger) GetConfig() *glog.LogConfig { return l.cfg }
@@ -193,17 +205,26 @@ func (l *zapLogger) With(kvs ...any) glog.Logger {
 		enableOTELTrace: l.enableOTELTrace,
 		fieldHookFunc:   l.fieldHookFunc,
 		callerSkip:      l.callerSkip,
+		writers:         l.writers,
 	}
 }
 
-func (l *zapLogger) Close() error { return l.logger.Sync() }
-
-func (l *zapLogger) loggerWithCtx(ctx context.Context) *zap.Logger {
-	fields := l.extraFields(ctx)
-	if len(fields) == 0 {
-		return l.logger
+func (l *zapLogger) Close() error {
+	var firstErr error
+	for _, w := range l.writers {
+		if err := w.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return l.logger.With(fields...)
+	_ = l.logger.Sync()
+	return firstErr
+}
+
+// allFields 合并 kvs 与 ctx 提取字段（OTEL/ExtraKeys），统一经过 fieldHook 脱敏。
+func (l *zapLogger) allFields(ctx context.Context, kvs []any) []zap.Field {
+	fields := sweetenFields(kvs)
+	fields = append(fields, l.extraFields(ctx)...)
+	return l.applyFieldHook(fields)
 }
 
 // entry 是 zap 驱动的统一日志入口。函数体较重（接口调用 + 循环 + switch），
@@ -216,10 +237,9 @@ func (l *zapLogger) entry(level glog.Level, ctx context.Context, extra int, msg 
 	if !l.logger.Core().Enabled(levelToZapLevel(level)) {
 		return
 	}
-	fields := sweetenFields(kvs)
-	fields = l.applyFieldHook(fields)
+	fields := l.allFields(ctx, kvs)
 	skip := zapBaseCallerSkip + l.callerSkip + extra
-	log := l.loggerWithCtx(ctx).WithOptions(zap.AddCallerSkip(skip))
+	log := l.logger.WithOptions(zap.AddCallerSkip(skip))
 	switch level {
 	case glog.DebugLevel:
 		log.Debug(msg, fields...)
@@ -232,6 +252,7 @@ func (l *zapLogger) entry(level glog.Level, ctx context.Context, extra int, msg 
 	case glog.PanicLevel:
 		log.Panic(msg, fields...)
 	case glog.FatalLevel:
+		_ = l.Close()
 		log.Fatal(msg, fields...)
 	}
 }
@@ -269,7 +290,7 @@ func (l *zapLogger) applyFieldHook(fields []zap.Field) []zap.Field {
 
 	gFields := make([]glog.Field, len(fields))
 	for i, f := range fields {
-		gFields[i] = glog.KV(f.Key, f.Interface)
+		gFields[i] = glog.KV(f.Key, zapFieldValue(f))
 	}
 
 	l.fieldHookFunc(gFields)
@@ -278,6 +299,46 @@ func (l *zapLogger) applyFieldHook(fields []zap.Field) []zap.Field {
 		fields[i] = zap.Any(gf.Key, gf.Value)
 	}
 	return fields
+}
+
+// zapFieldValue 提取 zap.Field 的实际值。zap.Any 对 string/int/bool 等基本类型
+// 会优化为专用 Field 类型（值存在 String/Integer 字段），Interface 字段为 nil，
+// 直接取 f.Interface 会丢失真实值。
+func zapFieldValue(f zap.Field) any {
+	switch f.Type {
+	case zapcore.BoolType:
+		return f.Integer == 1
+	case zapcore.Int8Type:
+		return int8(f.Integer)
+	case zapcore.Int16Type:
+		return int16(f.Integer)
+	case zapcore.Int32Type:
+		return int32(f.Integer)
+	case zapcore.Int64Type:
+		return f.Integer
+	case zapcore.Uint8Type:
+		return uint8(f.Integer)
+	case zapcore.Uint16Type:
+		return uint16(f.Integer)
+	case zapcore.Uint32Type:
+		return uint32(f.Integer)
+	case zapcore.Uint64Type:
+		return uint64(f.Integer)
+	case zapcore.Float32Type:
+		return math.Float32frombits(uint32(f.Integer))
+	case zapcore.Float64Type:
+		return math.Float64frombits(uint64(f.Integer))
+	case zapcore.StringType:
+		return f.String
+	case zapcore.DurationType:
+		return time.Duration(f.Integer)
+	case zapcore.TimeType:
+		return time.Unix(0, f.Integer).UTC()
+	case zapcore.ErrorType:
+		return f.Interface
+	default:
+		return f.Interface
+	}
 }
 
 func (l *zapLogger) extraFields(ctx context.Context) []zap.Field {

@@ -37,7 +37,7 @@ func TestInit(t *testing.T) {
 		glog.Close()
 
 		expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
-		expectedFile := filepath.Join(expectedDir, "test-service.log")
+		expectedFile := filepath.Join(expectedDir, "test-service_full.log")
 		if !glog.FileExists(expectedFile) {
 			t.Errorf("Log file not created: %s", expectedFile)
 		}
@@ -65,29 +65,21 @@ func TestInit(t *testing.T) {
 }
 
 func TestHook(t *testing.T) {
-	tempDir := "log/glog-test"
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
+	tempDir := t.TempDir()
 	config := &glog.LogConfig{
 		Service:    "test",
 		Level:      glog.DebugLevel,
-		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
+		ExtraKeys:  []string{"phone"},
 		LoggerType: glog.LoggerTypeZap,
+		Writers:    []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 	}
 
 	var phoneDesensitizationHook = func(fields []glog.Field) {
 		phoneRegex := regexp.MustCompile(`(\d{3})\d{4}(\d{4})`)
 		for i := range fields {
 			if fields[i].Key == "phone" {
-				strValue, ok := fields[i].Value.(string)
-				if ok {
-					if phoneRegex.MatchString(strValue) {
-						fields[i].Value = phoneRegex.ReplaceAllString(strValue, `$1****$2`)
-						t.Log("Phone number desensitized:", fields[i].Value)
-					}
+				if strValue, ok := fields[i].Value.(string); ok {
+					fields[i].Value = phoneRegex.ReplaceAllString(strValue, `$1****$2`)
 				}
 			}
 		}
@@ -101,15 +93,24 @@ func TestHook(t *testing.T) {
 		return message
 	}
 
-	t.Log("Initializing logger with field hook")
-	glog.InitLogger(config, glog.WithFieldHookFunc(phoneDesensitizationHook), glog.WithMessageHookFunc(pwdDesensitizationHook))
+	logger, err := glog.NewLogger(config, glog.WithFieldHookFunc(phoneDesensitizationHook), glog.WithMessageHookFunc(pwdDesensitizationHook))
+	assert.Nil(t, err)
 
 	ctx := context.Background()
-	t.Log("Logging message with phone number")
-	glog.Infow(ctx, "test message", "phone", "13812345678")
+	logger.Infow(ctx, "test message", "phone", "13812345678")
+	ctx = context.WithValue(ctx, "phone", "13812345678")
+	logger.Info(ctx, "ctx phone message")
+	logger.Info(ctx, "test message with password=123456")
+	logger.Close()
 
-	t.Log("Logging message with password")
-	glog.Info(ctx, "test message with password=123456")
+	dateStr := time.Now().Format("20060102")
+	b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "test_full.log"))
+	assert.Nil(t, readErr)
+	content := string(b)
+	assert.Contains(t, content, "138****5678")
+	assert.NotContains(t, content, "13812345678")
+	assert.Contains(t, content, "password=***")
+	assert.NotContains(t, content, "password=123456")
 }
 
 func TestExtraKeys(t *testing.T) {
@@ -171,7 +172,7 @@ func TestLogRotation(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
-	baseFile := filepath.Join(expectedDir, "rotation-test.log")
+	baseFile := filepath.Join(expectedDir, "rotation-test_full.log")
 
 	assert.True(t, glog.FileExists(baseFile), "Current log file should exist")
 
@@ -180,7 +181,7 @@ func TestLogRotation(t *testing.T) {
 
 	rotated := false
 	for _, file := range files {
-		if strings.Contains(file.Name(), "rotation-test-") && strings.HasSuffix(file.Name(), ".log") {
+		if strings.Contains(file.Name(), "rotation-test_full-") && strings.HasSuffix(file.Name(), ".log") {
 			rotated = true
 			break
 		}
@@ -217,7 +218,7 @@ func TestOTELTraceFieldsInjected(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-test.log")
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-test_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -253,7 +254,7 @@ func TestOTELTraceFieldsDisabled(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-disabled.log")
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-disabled_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -289,7 +290,7 @@ func TestOTELTraceOptionOverridesConfig(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-option.log")
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-option_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -318,7 +319,7 @@ func TestOTELTraceWithoutSpanContext(t *testing.T) {
 	logger.Infow(context.Background(), "without span context", "key", "value")
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-nospan.log")
+	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-nospan_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -346,7 +347,7 @@ func TestZapMultiWritersFileAndConsole(t *testing.T) {
 	logger.Info(ctx, "multi writer test")
 	logger.Close()
 	dateStr := time.Now().Format("20060102")
-	expectedFile := filepath.Join(tempDir, dateStr, "zap-multi.log")
+	expectedFile := filepath.Join(tempDir, dateStr, "zap-multi_full.log")
 	assert.True(t, glog.FileExists(expectedFile), expectedFile)
 }
 
@@ -370,14 +371,33 @@ func TestZapMultiWritersLevelSplit(t *testing.T) {
 	logger.Error(ctx, "error message")
 	logger.Close()
 	dateStr := time.Now().Format("20060102")
-	fullFile := filepath.Join(tempDir, dateStr, "zap-split.log")
+	fullFile := filepath.Join(tempDir, dateStr, "zap-split_full.log")
 	b, _ := os.ReadFile(fullFile)
 	content := string(b)
 	assert.Contains(t, content, "info message")
 	assert.Contains(t, content, "error message")
-	errorFile := filepath.Join(tempDir, dateStr, "error.log")
+	errorFile := filepath.Join(tempDir, dateStr, "error_wf.log")
 	b2, _ := os.ReadFile(errorFile)
 	content2 := string(b2)
 	assert.NotContains(t, content2, "info message")
 	assert.Contains(t, content2, "error message")
+}
+
+func TestZapCloseFlushesBuffer(t *testing.T) {
+	tempDir := t.TempDir()
+	config := &glog.LogConfig{
+		Service:    "zap-flush",
+		Module:     "test",
+		Level:      glog.InfoLevel,
+		LoggerType: glog.LoggerTypeZap,
+		Writers:    []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
+	}
+	logger, err := glog.NewLogger(config)
+	assert.Nil(t, err)
+	logger.Info(context.Background(), "buffered message")
+	logger.Close()
+	dateStr := time.Now().Format("20060102")
+	b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "zap-flush_full.log"))
+	assert.Nil(t, readErr)
+	assert.Contains(t, string(b), "buffered message")
 }

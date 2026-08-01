@@ -59,16 +59,18 @@ type dailyRotateWriter struct {
 	mu          sync.Mutex
 	wc          glog.WriterConfig
 	serviceName string
+	suffix      string // "_full" 或 "_wf"
 
 	current  *lumberjack.Logger
 	today    string
 	buffered *zapcore.BufferedWriteSyncer
 }
 
-func newDailyRotateWriter(wc glog.WriterConfig, serviceName string) (*dailyRotateWriter, error) {
+func newDailyRotateWriter(wc glog.WriterConfig, serviceName, suffix string) (*dailyRotateWriter, error) {
 	w := &dailyRotateWriter{
 		wc:          wc,
 		serviceName: serviceName,
+		suffix:      suffix,
 	}
 	if err := w.rotate(time.Now().Format("20060102")); err != nil {
 		return nil, err
@@ -86,8 +88,10 @@ func (w *dailyRotateWriter) rotate(today string) error {
 		return fmt.Errorf("glog: mkdir %s: %w", dir, err)
 	}
 
-	fileName := w.wc.EffectiveFileName(w.serviceName)
-	logFilepath := path.Join(dir, fileName)
+	baseName := w.wc.EffectiveFileName(w.serviceName)
+	ext := path.Ext(baseName)
+	nameWithoutExt := baseName[:len(baseName)-len(ext)]
+	logFilepath := path.Join(dir, nameWithoutExt+w.suffix+ext)
 
 	maxSize, maxBackups, maxAge := w.wc.EffectiveRotateConfig()
 
@@ -132,6 +136,18 @@ func (w *dailyRotateWriter) Sync() error {
 	w.mu.Unlock()
 	if buf != nil {
 		return buf.Sync()
+	}
+	return nil
+}
+
+// Close 停止并刷出缓冲写，释放后台 goroutine 与底层文件资源。
+func (w *dailyRotateWriter) Close() error {
+	w.mu.Lock()
+	buf := w.buffered
+	w.buffered = nil
+	w.mu.Unlock()
+	if buf != nil {
+		return buf.Stop()
 	}
 	return nil
 }

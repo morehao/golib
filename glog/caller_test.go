@@ -45,7 +45,7 @@ func newCallerTestLogger(t *testing.T, dir string, lt glog.LoggerType, skip int)
 	logPath := filepath.Join(dir, time.Now().Format("20060102"), "slog_full.log")
 	if lt == glog.LoggerTypeZap {
 		fileName = "zap.log"
-		logPath = filepath.Join(dir, time.Now().Format("20060102"), "zap.log")
+		logPath = filepath.Join(dir, time.Now().Format("20060102"), "zap_full.log")
 	}
 	cfg := &glog.LogConfig{
 		Service:    "caller-test",
@@ -101,7 +101,7 @@ func TestCallerPackageLevelCall(t *testing.T) {
 		logPath := filepath.Join(dir, time.Now().Format("20060102"), "slog_full.log")
 		if lt == glog.LoggerTypeZap {
 			fileName = "zap.log"
-			logPath = filepath.Join(dir, time.Now().Format("20060102"), "zap.log")
+			logPath = filepath.Join(dir, time.Now().Format("20060102"), "zap_full.log")
 		}
 		cfg := &glog.LogConfig{
 			Service:    "caller-test",

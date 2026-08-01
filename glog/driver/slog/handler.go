@@ -13,16 +13,12 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
-	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type gSlogHandler struct {
 	handler         slog.Handler
-	fieldHookFunc   glog.FieldHookFunc
 	messageHookFunc glog.MessageHookFunc
-	enableOTELTrace bool
-	cfg             *glog.LogConfig
 }
 
 func replaceAttr(groups []string, a slog.Attr) slog.Attr {
@@ -77,97 +73,25 @@ func (h *gSlogHandler) Handle(ctx context.Context, r slog.Record) error {
 	if glog.SkipLog(ctx) {
 		return nil
 	}
-
-	r = r.Clone()
-
 	if h.messageHookFunc != nil {
+		r = r.Clone()
 		r.Message = h.messageHookFunc(r.Message)
 	}
-
-	fields := acquireFields()
-	defer releaseFields(fields)
-
-	fields = h.extractFields(ctx, fields)
-
-	if h.fieldHookFunc != nil {
-		h.fieldHookFunc(fields)
-	}
-
-	for _, f := range fields {
-		r.AddAttrs(slog.Any(f.Key, f.Value))
-	}
-
 	return h.handler.Handle(ctx, r)
 }
 
 func (h *gSlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &gSlogHandler{
 		handler:         h.handler.WithAttrs(attrs),
-		fieldHookFunc:   h.fieldHookFunc,
 		messageHookFunc: h.messageHookFunc,
-		enableOTELTrace: h.enableOTELTrace,
-		cfg:             h.cfg,
 	}
 }
 
 func (h *gSlogHandler) WithGroup(name string) slog.Handler {
 	return &gSlogHandler{
 		handler:         h.handler.WithGroup(name),
-		fieldHookFunc:   h.fieldHookFunc,
 		messageHookFunc: h.messageHookFunc,
-		enableOTELTrace: h.enableOTELTrace,
-		cfg:             h.cfg,
 	}
-}
-
-func (h *gSlogHandler) extractFields(ctx context.Context, dst []glog.Field) []glog.Field {
-	if h.enableOTELTrace {
-		sc := trace.SpanFromContext(ctx).SpanContext()
-		if sc.IsValid() {
-			dst = append(dst,
-				glog.Field{Key: glog.KeyTraceID, Value: sc.TraceID().String()},
-				glog.Field{Key: glog.KeySpanID, Value: sc.SpanID().String()},
-				glog.Field{Key: glog.KeyTraceFlags, Value: sc.TraceFlags().String()},
-			)
-		}
-	}
-
-	if h.cfg != nil {
-		for _, key := range h.cfg.ExtraKeys {
-			if h.enableOTELTrace && isOTELKey(key) {
-				continue
-			}
-			if v := ctx.Value(key); v != nil {
-				dst = append(dst, glog.Field{Key: key, Value: v})
-			}
-		}
-	}
-
-	return dst
-}
-
-func isOTELKey(key string) bool {
-	return key == glog.KeyTraceID || key == glog.KeySpanID || key == glog.KeyTraceFlags
-}
-
-var fieldsPool = sync.Pool{
-	New: func() any {
-		s := make([]glog.Field, 0, 8)
-		return &s
-	},
-}
-
-func acquireFields() []glog.Field {
-	p := fieldsPool.Get().(*[]glog.Field)
-	return (*p)[:0]
-}
-
-func releaseFields(fields []glog.Field) {
-	if cap(fields) > 64 {
-		return
-	}
-	p := &fields
-	fieldsPool.Put(p)
 }
 
 const (

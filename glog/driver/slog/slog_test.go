@@ -125,29 +125,21 @@ func TestSlogLoggerFormat(t *testing.T) {
 }
 
 func TestSlogLoggerHook(t *testing.T) {
-	tempDir := "log/slog-hook-test"
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
+	tempDir := t.TempDir()
 	config := &glog.LogConfig{
 		Service:    "slog-hook",
 		Level:      glog.DebugLevel,
-		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
 		LoggerType: glog.LoggerTypeSlog,
+		ExtraKeys:  []string{"phone"},
+		Writers:    []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
 	}
 
 	var phoneDesensitizationHook = func(fields []glog.Field) {
 		phoneRegex := regexp.MustCompile(`(\d{3})\d{4}(\d{4})`)
 		for i := range fields {
 			if fields[i].Key == "phone" {
-				strValue, ok := fields[i].Value.(string)
-				if ok {
-					if phoneRegex.MatchString(strValue) {
-						fields[i].Value = phoneRegex.ReplaceAllString(strValue, `$1****$2`)
-						t.Log("Phone number desensitized:", fields[i].Value)
-					}
+				if strValue, ok := fields[i].Value.(string); ok {
+					fields[i].Value = phoneRegex.ReplaceAllString(strValue, `$1****$2`)
 				}
 			}
 		}
@@ -166,7 +158,19 @@ func TestSlogLoggerHook(t *testing.T) {
 
 	ctx := context.Background()
 	logger.Infow(ctx, "test message", "phone", "13812345678")
+	ctx = context.WithValue(ctx, "phone", "13812345678")
+	logger.Info(ctx, "ctx phone message")
 	logger.Info(ctx, "test message with password=123456")
+	logger.Close()
+
+	dateStr := time.Now().Format("20060102")
+	b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-hook_full.log"))
+	assert.Nil(t, readErr)
+	content := string(b)
+	assert.Contains(t, content, "138****5678")
+	assert.NotContains(t, content, "13812345678")
+	assert.Contains(t, content, "password=***")
+	assert.NotContains(t, content, "password=123456")
 }
 
 func TestSlogLoggerExtraKeys(t *testing.T) {

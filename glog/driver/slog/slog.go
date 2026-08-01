@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/morehao/golib/glog"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // slogBaseCallerSkip 是从 logSkip 内 runtime.Callers 抓取调用点时，到"调用 glog API 的那一帧"的固定栈帧数。
@@ -19,25 +21,19 @@ import (
 const slogBaseCallerSkip = 3
 
 type slogLogger struct {
-	logger      *slog.Logger
-	cfg         *glog.LogConfig
-	fileWriters []*gSlogFileWriter
-	callerSkip  int
+	logger          *slog.Logger
+	cfg             *glog.LogConfig
+	fileWriters     []*gSlogFileWriter
+	callerSkip      int
+	enableOTELTrace bool
+	fieldHookFunc   glog.FieldHookFunc
 }
 
-func wrapHandler(inner slog.Handler, cfg *glog.LogConfig, o *glog.LoggerOptions) *gSlogHandler {
-	h := &gSlogHandler{
-		enableOTELTrace: cfg.EnableOTELTrace,
-		cfg:             cfg,
-	}
+func wrapHandler(inner slog.Handler, o *glog.LoggerOptions) *gSlogHandler {
+	h := &gSlogHandler{handler: inner}
 	if o != nil {
-		h.fieldHookFunc = o.FieldHookFunc
 		h.messageHookFunc = o.MessageHookFunc
-		if o.EnableOTELTrace != nil {
-			h.enableOTELTrace = *o.EnableOTELTrace
-		}
 	}
-	h.handler = inner
 	return h
 }
 
@@ -47,6 +43,11 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 	}
 
 	o := glog.ApplyOptions(opts...)
+
+	enableOTELTrace := cfg.EnableOTELTrace
+	if o.EnableOTELTrace != nil {
+		enableOTELTrace = *o.EnableOTELTrace
+	}
 
 	serviceName := cfg.Service
 	if serviceName == "" {
@@ -73,7 +74,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 		switch wc.Type {
 		case glog.WriterConsole:
 			innerHandler := slog.NewJSONHandler(os.Stdout, handlerOpts)
-			h := wrapHandler(innerHandler, cfg, o)
+			h := wrapHandler(innerHandler, o)
 			handlers = append(handlers, h)
 		case glog.WriterFile:
 			if wc.WfOnly {
@@ -88,7 +89,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 
 				handlerOpts.Level = logLevelToSlog(glog.WarnLevel)
 				innerHandler := slog.NewJSONHandler(fw, handlerOpts)
-				h := wrapHandler(innerHandler, cfg, o)
+				h := wrapHandler(innerHandler, o)
 				handlers = append(handlers, h)
 			} else {
 				fw, err := newSlogFileWriter(wc, serviceName, "_full")
@@ -101,7 +102,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 				fileWriters = append(fileWriters, fw)
 
 				innerHandler := slog.NewJSONHandler(fw, handlerOpts)
-				h := wrapHandler(innerHandler, cfg, o)
+				h := wrapHandler(innerHandler, o)
 				handlers = append(handlers, h)
 			}
 		}
@@ -114,7 +115,7 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 			ReplaceAttr: replaceAttr,
 		}
 		innerHandler := slog.NewJSONHandler(os.Stdout, handlerOpts)
-		h := wrapHandler(innerHandler, cfg, o)
+		h := wrapHandler(innerHandler, o)
 		handlers = append(handlers, h)
 	}
 
@@ -123,10 +124,12 @@ func newSlogLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error
 	)
 
 	return &slogLogger{
-		logger:      logger,
-		cfg:         cfg,
-		fileWriters: fileWriters,
-		callerSkip:  o.CallerSkip,
+		logger:          logger,
+		cfg:             cfg,
+		fileWriters:     fileWriters,
+		callerSkip:      o.CallerSkip,
+		enableOTELTrace: enableOTELTrace,
+		fieldHookFunc:   o.FieldHookFunc,
 	}, nil
 }
 
@@ -140,10 +143,12 @@ func (l *slogLogger) With(kvs ...any) glog.Logger {
 	}
 	kvs = normalizeKVs(kvs)
 	return &slogLogger{
-		logger:      l.logger.With(kvs...),
-		cfg:         l.cfg,
-		fileWriters: l.fileWriters,
-		callerSkip:  l.callerSkip,
+		logger:          l.logger.With(kvs...),
+		cfg:             l.cfg,
+		fileWriters:     l.fileWriters,
+		callerSkip:      l.callerSkip,
+		enableOTELTrace: l.enableOTELTrace,
+		fieldHookFunc:   l.fieldHookFunc,
 	}
 }
 
@@ -254,9 +259,39 @@ func (l *slogLogger) logSkip(ctx context.Context, level glog.Level, extra int, m
 	var pc [1]uintptr
 	runtime.Callers(slogBaseCallerSkip+l.callerSkip+extra, pc[:])
 	r := slog.NewRecord(time.Now(), logLevelToSlog(level), msg, pc[0])
-	r.Add(kvs...)
+
+	hasHook := l.fieldHookFunc != nil
+	needExtract := l.enableOTELTrace || (l.cfg != nil && len(l.cfg.ExtraKeys) > 0)
+
+	if !hasHook && !needExtract {
+		r.Add(kvs...)
+	} else {
+		fields := acquireFields()
+		defer releaseFields(fields)
+		fields = l.kvsToFields(fields, kvs)
+		if needExtract {
+			fields = l.extractFields(ctx, fields)
+		}
+		if hasHook {
+			l.fieldHookFunc(fields)
+		}
+		for _, f := range fields {
+			r.AddAttrs(slog.Any(f.Key, f.Value))
+		}
+	}
 
 	_ = l.logger.Handler().Handle(ctx, r)
+}
+
+func (l *slogLogger) kvsToFields(dst []glog.Field, kvs []any) []glog.Field {
+	for i := 0; i+1 < len(kvs); i += 2 {
+		key, ok := kvs[i].(string)
+		if !ok {
+			key = fmt.Sprintf("!badKey%d", i)
+		}
+		dst = append(dst, glog.KV(key, kvs[i+1]))
+	}
+	return dst
 }
 
 // LogDepth 实现 glog.CallerOffsetLogger，供包级日志函数补偿自身栈帧。
@@ -282,6 +317,56 @@ func normalizeKVs(kvs []any) []any {
 	copy(fixed, kvs)
 	fixed[len(kvs)] = "(MISSING)"
 	return fixed
+}
+
+func (l *slogLogger) extractFields(ctx context.Context, dst []glog.Field) []glog.Field {
+	if l.enableOTELTrace {
+		sc := trace.SpanFromContext(ctx).SpanContext()
+		if sc.IsValid() {
+			dst = append(dst,
+				glog.Field{Key: glog.KeyTraceID, Value: sc.TraceID().String()},
+				glog.Field{Key: glog.KeySpanID, Value: sc.SpanID().String()},
+				glog.Field{Key: glog.KeyTraceFlags, Value: sc.TraceFlags().String()},
+			)
+		}
+	}
+
+	if l.cfg != nil {
+		for _, key := range l.cfg.ExtraKeys {
+			if l.enableOTELTrace && isOTELKey(key) {
+				continue
+			}
+			if v := ctx.Value(key); v != nil {
+				dst = append(dst, glog.Field{Key: key, Value: v})
+			}
+		}
+	}
+
+	return dst
+}
+
+func isOTELKey(key string) bool {
+	return key == glog.KeyTraceID || key == glog.KeySpanID || key == glog.KeyTraceFlags
+}
+
+var fieldsPool = sync.Pool{
+	New: func() any {
+		s := make([]glog.Field, 0, 8)
+		return &s
+	},
+}
+
+func acquireFields() []glog.Field {
+	p := fieldsPool.Get().(*[]glog.Field)
+	return (*p)[:0]
+}
+
+func releaseFields(fields []glog.Field) {
+	if cap(fields) > 64 {
+		return
+	}
+	p := &fields
+	fieldsPool.Put(p)
 }
 
 func init() {
