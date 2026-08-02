@@ -16,55 +16,51 @@ type ScopePlugin struct {
 	extractFunc func(context.Context) (any, bool)
 }
 
-type Option func(*options)
-
-type options struct {
-	fieldName   string
-	skipTables  map[string]struct{}
-	extractFunc func(context.Context) (any, bool)
+// ScopeConfig 是创建 ScopePlugin 的配置，为必填入参。
+// FieldName 与 ExtractFunc 为必填项，缺失时 New 返回 error。
+type ScopeConfig struct {
+	// FieldName 指定租户过滤字段名（如 tenant_id、company_id），必填。
+	FieldName string
+	// ExtractFunc 从 context 中提取租户过滤值及是否存在，必填。
+	ExtractFunc func(context.Context) (any, bool)
+	// SkipTables 指定跳过条件注入的表名列表，可选。
+	SkipTables []string
 }
 
-func WithField(name string) Option {
-	return func(o *options) {
-		o.fieldName = name
+// New 创建 ScopePlugin。FieldName 与 ExtractFunc 为必填配置，
+// 缺失时返回 error，确保通用组件不隐含默认字段名。
+func New(cfg *ScopeConfig) (*ScopePlugin, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("gormplugin: ScopeConfig is required")
 	}
-}
+	if strings.TrimSpace(cfg.FieldName) == "" {
+		return nil, fmt.Errorf("gormplugin: FieldName is required")
+	}
+	if cfg.ExtractFunc == nil {
+		return nil, fmt.Errorf("gormplugin: ExtractFunc is required")
+	}
 
-func WithSkipTables(tables []string) Option {
-	return func(o *options) {
-		for _, t := range tables {
-			normalized := normalizeTableName(t)
-			if normalized != "" {
-				o.skipTables[normalized] = struct{}{}
-			}
+	skipTables := make(map[string]struct{})
+	for _, t := range cfg.SkipTables {
+		normalized := normalizeTableName(t)
+		if normalized != "" {
+			skipTables[normalized] = struct{}{}
 		}
 	}
-}
 
-func WithExtractFunc(fn func(context.Context) (any, bool)) Option {
-	return func(o *options) {
-		o.extractFunc = fn
-	}
-}
-
-func New(opts ...Option) *ScopePlugin {
-	o := &options{
-		fieldName:  "tenant_id",
-		skipTables: make(map[string]struct{}),
-	}
-	for _, opt := range opts {
-		opt(o)
-	}
 	return &ScopePlugin{
-		fieldName:   o.fieldName,
-		skipTables:  o.skipTables,
-		extractFunc: o.extractFunc,
-	}
+		fieldName:   cfg.FieldName,
+		skipTables:  skipTables,
+		extractFunc: cfg.ExtractFunc,
+	}, nil
 }
 
 func (p *ScopePlugin) Name() string { return "scope_condition_plugin" }
 
 func (p *ScopePlugin) Initialize(db *gorm.DB) error {
+	if strings.TrimSpace(p.fieldName) == "" || p.extractFunc == nil {
+		return fmt.Errorf("gormplugin: FieldName and ExtractFunc are required")
+	}
 	callbacks := []struct {
 		name   string
 		typ    string
@@ -110,10 +106,6 @@ func (p *ScopePlugin) addScope(db *gorm.DB) {
 	}
 
 	if p.isSkipped(tableName) {
-		return
-	}
-
-	if p.extractFunc == nil {
 		return
 	}
 

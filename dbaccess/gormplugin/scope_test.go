@@ -38,12 +38,13 @@ func setupTestDB(t *testing.T, tables ...any) *gorm.DB {
 
 func TestScopePlugin_InjectCondition(t *testing.T) {
 	db := setupTestDB(t, &testModel{})
-	plugin := New(
-		WithField("tenant_id"),
-		WithExtractFunc(func(ctx context.Context) (any, bool) {
+	plugin, err := New(&ScopeConfig{
+		FieldName: "tenant_id",
+		ExtractFunc: func(ctx context.Context) (any, bool) {
 			return ctx.Value("test_tenant"), true
-		}),
-	)
+		},
+	})
+	require.NoError(t, err)
 	require.NoError(t, db.Use(plugin))
 
 	require.NoError(t, db.Create(&testModel{TenantID: 1, Name: "a"}).Error)
@@ -58,12 +59,13 @@ func TestScopePlugin_InjectCondition(t *testing.T) {
 
 func TestScopePlugin_FieldConfigurable(t *testing.T) {
 	db := setupTestDB(t, &testCompanyModel{})
-	plugin := New(
-		WithField("company_id"),
-		WithExtractFunc(func(ctx context.Context) (any, bool) {
+	plugin, err := New(&ScopeConfig{
+		FieldName: "company_id",
+		ExtractFunc: func(ctx context.Context) (any, bool) {
 			return ctx.Value("test_company"), true
-		}),
-	)
+		},
+	})
+	require.NoError(t, err)
 	require.NoError(t, db.Use(plugin))
 
 	require.NoError(t, db.Create(&testCompanyModel{CompanyID: "co_a", Name: "a"}).Error)
@@ -78,13 +80,14 @@ func TestScopePlugin_FieldConfigurable(t *testing.T) {
 
 func TestScopePlugin_StaticSkipTable(t *testing.T) {
 	db := setupTestDB(t, &testModel{})
-	plugin := New(
-		WithField("tenant_id"),
-		WithSkipTables([]string{"test_models"}),
-		WithExtractFunc(func(ctx context.Context) (any, bool) {
+	plugin, err := New(&ScopeConfig{
+		FieldName:  "tenant_id",
+		SkipTables: []string{"test_models"},
+		ExtractFunc: func(ctx context.Context) (any, bool) {
 			return ctx.Value("test_tenant"), true
-		}),
-	)
+		},
+	})
+	require.NoError(t, err)
 	require.NoError(t, db.Use(plugin))
 
 	require.NoError(t, db.Create(&testModel{TenantID: 1, Name: "a"}).Error)
@@ -98,12 +101,13 @@ func TestScopePlugin_StaticSkipTable(t *testing.T) {
 
 func TestScopePlugin_Skip(t *testing.T) {
 	db := setupTestDB(t, &testModel{})
-	plugin := New(
-		WithField("tenant_id"),
-		WithExtractFunc(func(ctx context.Context) (any, bool) {
+	plugin, err := New(&ScopeConfig{
+		FieldName: "tenant_id",
+		ExtractFunc: func(ctx context.Context) (any, bool) {
 			return ctx.Value("test_tenant"), true
-		}),
-	)
+		},
+	})
+	require.NoError(t, err)
 	require.NoError(t, db.Use(plugin))
 
 	require.NoError(t, db.Create(&testModel{TenantID: 1, Name: "a"}).Error)
@@ -115,28 +119,34 @@ func TestScopePlugin_Skip(t *testing.T) {
 	require.Len(t, out, 2)
 }
 
-func TestScopePlugin_ExtractFuncMissing(t *testing.T) {
-	db := setupTestDB(t, &testModel{})
-	plugin := New(WithField("tenant_id"))
-	require.NoError(t, db.Use(plugin))
-
-	require.NoError(t, db.Create(&testModel{TenantID: 1, Name: "a"}).Error)
-	require.NoError(t, db.Create(&testModel{TenantID: 2, Name: "b"}).Error)
-
-	ctx := context.WithValue(context.Background(), "test_tenant", uint(1))
-	var out []testModel
-	require.NoError(t, db.WithContext(ctx).Find(&out).Error)
-	require.Len(t, out, 2)
+func TestScopePlugin_ConfigRequired(t *testing.T) {
+	t.Run("nil config", func(t *testing.T) {
+		_, err := New(nil)
+		require.Error(t, err)
+	})
+	t.Run("missing field name", func(t *testing.T) {
+		_, err := New(&ScopeConfig{
+			ExtractFunc: func(ctx context.Context) (any, bool) {
+				return ctx.Value("test_tenant"), true
+			},
+		})
+		require.Error(t, err)
+	})
+	t.Run("missing extract func", func(t *testing.T) {
+		_, err := New(&ScopeConfig{FieldName: "tenant_id"})
+		require.Error(t, err)
+	})
 }
 
 func TestScopePlugin_ExtractFuncFalse(t *testing.T) {
 	db := setupTestDB(t, &testModel{})
-	plugin := New(
-		WithField("tenant_id"),
-		WithExtractFunc(func(ctx context.Context) (any, bool) {
+	plugin, err := New(&ScopeConfig{
+		FieldName: "tenant_id",
+		ExtractFunc: func(ctx context.Context) (any, bool) {
 			return nil, false
-		}),
-	)
+		},
+	})
+	require.NoError(t, err)
 	require.NoError(t, db.Use(plugin))
 
 	require.NoError(t, db.Create(&testModel{TenantID: 1, Name: "a"}).Error)
