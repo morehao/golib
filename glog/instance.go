@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-var defaultLoggerInstance Logger
+var defaultLogger Logger
 
 var registeredFactories = map[LoggerType]LoggerFactory{}
 
@@ -18,7 +18,7 @@ func InitLogger(cfg *LogConfig, opts ...Option) error {
 	if err != nil {
 		return err
 	}
-	defaultLoggerInstance = logger
+	defaultLogger = logger
 	return nil
 }
 
@@ -42,8 +42,8 @@ func newLogger(cfg *LogConfig, opts ...Option) (Logger, error) {
 }
 
 func getDefaultLogger() (Logger, error) {
-	if defaultLoggerInstance != nil {
-		return defaultLoggerInstance, nil
+	if defaultLogger != nil {
+		return defaultLogger, nil
 	}
 	return newLogger(GetDefaultLogConfig())
 }
@@ -218,17 +218,17 @@ func Fatalw(ctx context.Context, msg string, kvs ...any) {
 }
 
 func Close() error {
-	if defaultLoggerInstance == nil {
+	if defaultLogger == nil {
 		return nil
 	}
-	return defaultLoggerInstance.Close()
+	return defaultLogger.Close()
 }
 
 func ensureLogger() Logger {
-	if defaultLoggerInstance == nil {
+	if defaultLogger == nil {
 		return newNopLogger()
 	}
-	return defaultLoggerInstance
+	return defaultLogger
 }
 
 // logEntryFallback 处理未实现 CallerOffsetLogger 的第三方 driver。

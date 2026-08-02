@@ -56,14 +56,14 @@ func AsErrors(err error) (Errors, bool) {
 
 // ── 内部单例 ────────────────────────────────────────────────────────
 
-type instance struct {
+type gvalidator struct {
 	once     sync.Once
 	validate *validator.Validate
 	trans    unTrans.Translator
 	initErr  error
 }
 
-func (ins *instance) init() error {
+func (ins *gvalidator) init() error {
 	ins.once.Do(func() {
 		v := validator.New()
 		uni := unTrans.New(zh_Hans_CN.New())
@@ -94,7 +94,7 @@ func (ins *instance) init() error {
 	return ins.initErr
 }
 
-func (ins *instance) check(data any) error {
+func (ins *gvalidator) check(data any) error {
 	if err := ins.init(); err != nil {
 		return err
 	}
@@ -116,23 +116,23 @@ func (ins *instance) check(data any) error {
 	return result
 }
 
-func (ins *instance) registerValidation(tag string, fn validator.Func) error {
+func (ins *gvalidator) registerValidation(tag string, fn validator.Func) error {
 	if err := ins.init(); err != nil {
 		return err
 	}
 	return ins.validate.RegisterValidation(tag, fn)
 }
 
-var std = &instance{}
+var defaultGValidator = &gvalidator{}
 
 // ── 公开 API ────────────────────────────────────────────────────────
 
 // Check 校验结构体，通过返回 nil，失败返回 Errors
 func Check(data any) error {
-	return std.check(data)
+	return defaultGValidator.check(data)
 }
 
 // RegisterValidation 注册自定义校验规则
 func RegisterValidation(tag string, fn validator.Func) error {
-	return std.registerValidation(tag, fn)
+	return defaultGValidator.registerValidation(tag, fn)
 }
