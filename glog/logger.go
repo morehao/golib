@@ -36,24 +36,24 @@ func newNopLogger() *nopLogger {
 	return &nopLogger{}
 }
 
-func (n *nopLogger) Debug(ctx context.Context, args ...any)                   {}
-func (n *nopLogger) Debugf(ctx context.Context, format string, kvs ...any)     {}
-func (n *nopLogger) Debugw(ctx context.Context, msg string, kvs ...any)        {}
-func (n *nopLogger) Info(ctx context.Context, args ...any)                    {}
-func (n *nopLogger) Infof(ctx context.Context, format string, kvs ...any)      {}
-func (n *nopLogger) Infow(ctx context.Context, msg string, kvs ...any)         {}
-func (n *nopLogger) Warn(ctx context.Context, args ...any)                    {}
-func (n *nopLogger) Warnf(ctx context.Context, format string, kvs ...any)      {}
-func (n *nopLogger) Warnw(ctx context.Context, msg string, kvs ...any)         {}
-func (n *nopLogger) Error(ctx context.Context, args ...any)                   {}
-func (n *nopLogger) Errorf(ctx context.Context, format string, kvs ...any)     {}
-func (n *nopLogger) Errorw(ctx context.Context, msg string, kvs ...any)        {}
-func (n *nopLogger) Panic(ctx context.Context, args ...any)                   {}
-func (n *nopLogger) Panicf(ctx context.Context, format string, args ...any)    {}
-func (n *nopLogger) Panicw(ctx context.Context, msg string, kvs ...any)        {}
-func (n *nopLogger) Fatal(ctx context.Context, args ...any)                   {}
-func (n *nopLogger) Fatalf(ctx context.Context, format string, args ...any)    {}
-func (n *nopLogger) Fatalw(ctx context.Context, msg string, kvs ...any)        {}
-func (n *nopLogger) With(kvs ...any) Logger                                   { return n }
-func (n *nopLogger) Close() error                                             { return nil }
-func (n *nopLogger) GetConfig() *LogConfig                                    { return nil }
+func (n *nopLogger) Debug(ctx context.Context, args ...any)                 {}
+func (n *nopLogger) Debugf(ctx context.Context, format string, kvs ...any)  {}
+func (n *nopLogger) Debugw(ctx context.Context, msg string, kvs ...any)     {}
+func (n *nopLogger) Info(ctx context.Context, args ...any)                  {}
+func (n *nopLogger) Infof(ctx context.Context, format string, kvs ...any)   {}
+func (n *nopLogger) Infow(ctx context.Context, msg string, kvs ...any)      {}
+func (n *nopLogger) Warn(ctx context.Context, args ...any)                  {}
+func (n *nopLogger) Warnf(ctx context.Context, format string, kvs ...any)   {}
+func (n *nopLogger) Warnw(ctx context.Context, msg string, kvs ...any)      {}
+func (n *nopLogger) Error(ctx context.Context, args ...any)                 {}
+func (n *nopLogger) Errorf(ctx context.Context, format string, kvs ...any)  {}
+func (n *nopLogger) Errorw(ctx context.Context, msg string, kvs ...any)     {}
+func (n *nopLogger) Panic(ctx context.Context, args ...any)                 {}
+func (n *nopLogger) Panicf(ctx context.Context, format string, args ...any) {}
+func (n *nopLogger) Panicw(ctx context.Context, msg string, kvs ...any)     {}
+func (n *nopLogger) Fatal(ctx context.Context, args ...any)                 {}
+func (n *nopLogger) Fatalf(ctx context.Context, format string, args ...any) {}
+func (n *nopLogger) Fatalw(ctx context.Context, msg string, kvs ...any)     {}
+func (n *nopLogger) With(kvs ...any) Logger                                 { return n }
+func (n *nopLogger) Close() error                                           { return nil }
+func (n *nopLogger) GetConfig() *LogConfig                                  { return nil }

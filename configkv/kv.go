@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	instance *kv
-	adminAPI *AdminAPI
-	once     sync.Once
+	defaultKV *kv
+	adminAPI  *AdminAPI
+	once      sync.Once
 )
 
 type kv struct {
@@ -113,28 +113,28 @@ func Init(db *gorm.DB) {
 		}
 		s := newStore(getDB, registry, c)
 		adminAPI = newAdmin(s)
-		instance = &kv{store: s}
+		defaultKV = &kv{store: s}
 	})
 }
 
 func GetValue(ctx context.Context, group, key string, dest any) error {
-	return instance.GetValue(ctx, group, key, dest)
+	return defaultKV.GetValue(ctx, group, key, dest)
 }
 
 func GetString(ctx context.Context, group, key string) (string, error) {
-	return instance.GetString(ctx, group, key)
+	return defaultKV.GetString(ctx, group, key)
 }
 
 func GetInt64(ctx context.Context, group, key string) (int64, error) {
-	return instance.GetInt64(ctx, group, key)
+	return defaultKV.GetInt64(ctx, group, key)
 }
 
 func GetFloat64(ctx context.Context, group, key string) (float64, error) {
-	return instance.GetFloat64(ctx, group, key)
+	return defaultKV.GetFloat64(ctx, group, key)
 }
 
 func GetBool(ctx context.Context, group, key string) (bool, error) {
-	return instance.GetBool(ctx, group, key)
+	return defaultKV.GetBool(ctx, group, key)
 }
 
 func GetAdmin() *AdminAPI {

@@ -5,5 +5,5 @@ func init() {
 	if err != nil {
 		return
 	}
-	defaultLoggerInstance = logger
+	defaultLogger = logger
 }
