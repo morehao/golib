@@ -5,21 +5,29 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/morehao/golib/biz/gcontext"
-	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 )
 
-type Plugin struct {
-	skipTablesMap map[string]struct{}
-	TenantIDField string
+const SkipKey = "gorm:condition:skip"
+
+type ScopePlugin struct {
+	fieldName   string
+	skipTables  map[string]struct{}
+	extractFunc func(context.Context) (any, bool)
 }
 
 type Option func(*options)
 
 type options struct {
-	skipTablesMap map[string]struct{}
-	tenantIDField string
+	fieldName   string
+	skipTables  map[string]struct{}
+	extractFunc func(context.Context) (any, bool)
+}
+
+func WithField(name string) Option {
+	return func(o *options) {
+		o.fieldName = name
+	}
 }
 
 func WithSkipTables(tables []string) Option {
@@ -27,44 +35,45 @@ func WithSkipTables(tables []string) Option {
 		for _, t := range tables {
 			normalized := normalizeTableName(t)
 			if normalized != "" {
-				o.skipTablesMap[normalized] = struct{}{}
+				o.skipTables[normalized] = struct{}{}
 			}
 		}
 	}
 }
 
-func WithTenantIDField(field string) Option {
+func WithExtractFunc(fn func(context.Context) (any, bool)) Option {
 	return func(o *options) {
-		o.tenantIDField = field
+		o.extractFunc = fn
 	}
 }
 
-func New(opts ...Option) *Plugin {
+func New(opts ...Option) *ScopePlugin {
 	o := &options{
-		skipTablesMap: make(map[string]struct{}),
-		tenantIDField: "tenant_id",
+		fieldName:  "tenant_id",
+		skipTables: make(map[string]struct{}),
 	}
 	for _, opt := range opts {
 		opt(o)
 	}
-	return &Plugin{
-		skipTablesMap: o.skipTablesMap,
-		TenantIDField: o.tenantIDField,
+	return &ScopePlugin{
+		fieldName:   o.fieldName,
+		skipTables:  o.skipTables,
+		extractFunc: o.extractFunc,
 	}
 }
 
-func (p *Plugin) Name() string { return "tenant_scope_plugin" }
+func (p *ScopePlugin) Name() string { return "scope_condition_plugin" }
 
-func (p *Plugin) Initialize(db *gorm.DB) error {
+func (p *ScopePlugin) Initialize(db *gorm.DB) error {
 	callbacks := []struct {
 		name   string
 		typ    string
 		before string
 		fn     func(*gorm.DB)
 	}{
-		{"tenant:query", "query", "gorm:query", p.addTenantScope},
-		{"tenant:update", "update", "gorm:update", p.addTenantScope},
-		{"tenant:delete", "delete", "gorm:delete", p.addTenantScope},
+		{"gormplugin:query", "query", "gorm:query", p.addScope},
+		{"gormplugin:update", "update", "gorm:update", p.addScope},
+		{"gormplugin:delete", "delete", "gorm:delete", p.addScope},
 	}
 
 	for _, cb := range callbacks {
@@ -84,9 +93,15 @@ func (p *Plugin) Initialize(db *gorm.DB) error {
 	return nil
 }
 
-func (p *Plugin) addTenantScope(db *gorm.DB) {
+func (p *ScopePlugin) addScope(db *gorm.DB) {
 	if db.Statement == nil || db.Statement.Context == nil {
 		return
+	}
+
+	if v, ok := db.Get(SkipKey); ok {
+		if skip, ok := v.(bool); ok && skip {
+			return
+		}
 	}
 
 	tableName := resolveTableName(db)
@@ -98,31 +113,29 @@ func (p *Plugin) addTenantScope(db *gorm.DB) {
 		return
 	}
 
-	tenantID, ok := getTenantID(db.Statement.Context)
+	if p.extractFunc == nil {
+		return
+	}
+
+	value, ok := p.extractFunc(db.Statement.Context)
 	if !ok {
 		return
 	}
 
-	db.Statement.Where(fmt.Sprintf("`%s`.%s = ?", tableName, p.TenantIDField), tenantID)
+	db.Statement.Where(fmt.Sprintf("`%s`.%s = ?", tableName, p.fieldName), value)
 }
 
-func (p *Plugin) isSkipped(tableName string) bool {
+func (p *ScopePlugin) isSkipped(tableName string) bool {
 	normalized := normalizeTableName(tableName)
 	if normalized == "" {
 		return false
 	}
-	_, ok := p.skipTablesMap[normalized]
+	_, ok := p.skipTables[normalized]
 	return ok
 }
 
-func getTenantID(ctx context.Context) (uint, bool) {
-	if ctx == nil {
-		return 0, false
-	}
-
-	v := ctx.Value(gcontext.KeyTenantID)
-	tenantID := uint(gutil.VToInt64(v))
-	return tenantID, tenantID > 0
+func Skip(db *gorm.DB) *gorm.DB {
+	return db.Set(SkipKey, true)
 }
 
 func normalizeTableName(tableName string) string {
