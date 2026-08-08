@@ -14,7 +14,7 @@ func TestIssueOptionsApplied(t *testing.T) {
 	}
 
 	now := time.Now()
-	auth, err := New[CustomData]("secret")
+	auth, err := New[CustomData](mustHS256(t, "secret"))
 	require.NoError(t, err)
 
 	token, err := auth.Issue(

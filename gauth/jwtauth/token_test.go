@@ -15,7 +15,7 @@ func TestIssueAndParse(t *testing.T) {
 		Role string `json:"role"`
 	}
 
-	auth, err := New[CustomData]("secret")
+	auth, err := New[CustomData](mustHS256(t, "secret"))
 	require.NoError(t, err)
 
 	token, err := auth.Issue(
@@ -42,10 +42,13 @@ func TestIssueValidation(t *testing.T) {
 		Role string `json:"role"`
 	}
 
-	_, err := New[CustomData]("")
-	assert.True(t, errors.Is(err, ErrEmptySignKey))
+	_, err := New[CustomData](nil)
+	assert.True(t, errors.Is(err, ErrNilSigner))
 
-	auth, err := New[CustomData]("secret")
+	_, err = NewHS256Signer("")
+	assert.True(t, errors.Is(err, ErrInvalidVerifyKey))
+
+	auth, err := New[CustomData](mustHS256(t, "secret"))
 	require.NoError(t, err)
 
 	_, err = auth.Issue("", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
@@ -66,7 +69,7 @@ func TestParseTokenValidation(t *testing.T) {
 		Role string `json:"role"`
 	}
 
-	auth, err := New[CustomData]("secret")
+	auth, err := New[CustomData](mustHS256(t, "secret"))
 	require.NoError(t, err)
 	token, err := auth.Issue("user123", "example.com", time.Now().Add(time.Hour), CustomData{Role: "admin"})
 	require.NoError(t, err)
@@ -74,7 +77,7 @@ func TestParseTokenValidation(t *testing.T) {
 	_, err = auth.Parse("")
 	assert.True(t, errors.Is(err, ErrEmptyToken))
 
-	wrongAuth, err := New[CustomData]("wrong-secret")
+	wrongAuth, err := New[CustomData](mustHS256(t, "wrong-secret"))
 	require.NoError(t, err)
 	_, err = wrongAuth.Parse(token)
 	assert.Error(t, err)
@@ -98,7 +101,7 @@ func TestParseTokenRejectUnexpectedAlg(t *testing.T) {
 	tokenStr, err := unsafeToken.SignedString([]byte("secret"))
 	require.NoError(t, err)
 
-	auth, err := New[CustomData]("secret")
+	auth, err := New[CustomData](mustHS256(t, "secret"))
 	require.NoError(t, err)
 	_, err = auth.Parse(tokenStr)
 	assert.Error(t, err)
@@ -109,7 +112,7 @@ func TestIssueWithAudience(t *testing.T) {
 		Role string `json:"role"`
 	}
 
-	auth, err := New[CustomData]("secret")
+	auth, err := New[CustomData](mustHS256(t, "secret"))
 	require.NoError(t, err)
 
 	token, err := auth.Issue(
@@ -125,4 +128,11 @@ func TestIssueWithAudience(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, jwt.ClaimStrings{"web", "mobile"}, claims.Audience)
+}
+
+func mustHS256(t *testing.T, secret string) *HS256Signer {
+	t.Helper()
+	signer, err := NewHS256Signer(secret)
+	require.NoError(t, err)
+	return signer
 }
