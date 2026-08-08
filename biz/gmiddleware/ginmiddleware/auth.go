@@ -35,7 +35,13 @@ func JWTAuth(secretKey string, opts ...AuthOption) gin.HandlerFunc {
 	}
 
 	return func(ctx *gin.Context) {
-		auth, err := jwtauth.New[gobject.UserClaims](secretKey)
+		signer, err := jwtauth.NewHS256Signer(secretKey)
+		if err != nil {
+			gincontext.Abort(ctx, err)
+			return
+		}
+
+		auth, err := jwtauth.New[gobject.UserClaims](signer)
 		if err != nil {
 			gincontext.Abort(ctx, err)
 			return

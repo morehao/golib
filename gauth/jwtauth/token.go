@@ -18,26 +18,20 @@ type issueConfig struct {
 
 // Auth 封装 JWT 的签发与解析能力。
 //
-// 当前实现固定使用 HS256，签名密钥在内部以 []byte 持有，
-// 便于直接参与 HMAC 签名与验签。
+// 具体的签名算法与密钥由 Verifier/Signer 提供，Auth 对算法无感知，
+// 新算法只需实现对应接口即可接入。仅需验签的下游服务可传入任何
+// Verifier（如 RS256Verifier）；持有私钥的一方传入同时实现 Signer 的
+// 实例以获签发能力。
 type Auth[T any] struct {
-	signKey []byte
+	verifier Verifier
 }
 
-// New 使用给定的签名密钥构造 Auth 实例。
-// signKey 在内部转换为 []byte 并做防御性复制，
-// 防止调用方后续修改影响内部状态。
-func New[T any](signKey string) (*Auth[T], error) {
-	if signKey == "" {
-		return nil, ErrEmptySignKey
+// New 使用给定的 Verifier 构造 Auth 实例。
+func New[T any](verifier Verifier) (*Auth[T], error) {
+	if verifier == nil {
+		return nil, ErrNilSigner
 	}
-
-	// 防御性复制，防止调用方后续修改影响内部状态。
-	key := []byte(signKey)
-	keyCopy := make([]byte, len(key))
-	copy(keyCopy, key)
-
-	return &Auth[T]{signKey: keyCopy}, nil
+	return &Auth[T]{verifier: verifier}, nil
 }
 
 // Issue 签发一枚新 JWT。
@@ -82,8 +76,13 @@ func (a *Auth[T]) Issue(subject, issuer string, expiresAt time.Time, customData 
 		claims.ID = *cfg.id
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(a.signKey)
+	signer, ok := a.verifier.(Signer)
+	if !ok {
+		return "", ErrNotSignable
+	}
+
+	token := jwt.NewWithClaims(jwt.GetSigningMethod(a.verifier.alg()), claims)
+	return token.SignedString(signer.signingKey())
 }
 
 // Parse 解析并验证 tokenStr，返回其中的载荷。
@@ -99,8 +98,8 @@ func (a *Auth[T]) Parse(tokenStr string) (*Claims[T], error) {
 	token, err := jwt.ParseWithClaims(
 		tokenStr,
 		claims,
-		a.keyFunc,
-		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		a.verifier.keyFunc,
+		jwt.WithValidMethods([]string{a.verifier.alg()}),
 	)
 	if err != nil {
 		return nil, err
@@ -111,10 +110,4 @@ func (a *Auth[T]) Parse(tokenStr string) (*Claims[T], error) {
 	}
 
 	return claims, nil
-}
-
-// keyFunc 是传给 jwt 库的密钥回调。
-// 使用类型断言确认签名算法为 HMAC，防止算法混淆攻击。
-func (a *Auth[T]) keyFunc(token *jwt.Token) (any, error) {
-	return a.signKey, nil
 }
