@@ -4,7 +4,7 @@
 组件列表：
 - [biz](#biz) 业务组件包
 - [codegen](#codegen) 代码生成工具
-- [concurrency](#concurrency) 并发控制组件（包含 concpool、concqueue、concsem）
+- [gconc](#gconc) 并发任务池组件
 - [configkv](#configkv) 配置管理组件
 - [dbaccess](#dbaccess) 数据库客户端组件（支持 MySQL、Redis、Elasticsearch）
 - [distlock](#distlock) 分布式锁组件（不支持可重入）
@@ -61,24 +61,28 @@ go get github.com/morehao/golib
 ### 使用
 使用示例参照 [codegen 单测](codegen/gen_test.go)
 
-## concurrency
+## gconc
 
 ### 简介
-`concurrency` 是并发控制组件集合，提供了多种并发场景的解决方案。
+`gconc` 是一个基于固定数量 worker 与有缓冲任务队列的统一并发任务池。
 
-### 子组件
-- **concpool**: 工作池，支持任务提交、并发控制、优雅关闭等功能
-- **concqueue**: 基于生产者-消费者模型的并发任务队列，支持并发控制和错误统计
-- **concsem**: 信号量控制，用于限制并发数量
+### 组件
+提供单一 `*Pool` 类型，支持：
+- 非阻塞 / 限时 / 阻塞任务提交
+- 优雅与立即关闭
+- 错误收集与回调
+- panic 安全的 worker 池
+- 运行时统计
 
 ### 特性
 - 支持灵活的并发数控制
 - 支持任务队列管理
 - 支持优雅关闭和错误收集
+- panic 安全的 worker 池
 - 线程安全
 
 ### 使用
-使用示例参照 [concqueue 使用说明](concurrency/concqueue/README.md)
+使用示例参照 [gconc 使用说明](gconc/README.md)
 
 ## configkv
 
