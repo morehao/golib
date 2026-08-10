@@ -5,7 +5,7 @@
 Components:
 - [biz](#biz) Business components
 - [codegen](#codegen) Code generation tools
-- [concurrency](#concurrency) Concurrency control components (includes concpool, concqueue, concsem)
+- [gconc](#gconc) Concurrent task pool component
 - [configkv](#configkv) Configuration management component
 - [dbaccess](#dbaccess) Database client components (supports MySQL, Redis, Elasticsearch)
 - [distlock](#distlock) Distributed lock component (non-reentrant)
@@ -102,24 +102,28 @@ Test-specific environment variables:
 ### Usage
 For usage examples, refer to [codegen unit tests](codegen/gen_test.go)
 
-## concurrency
+## gconc
 
 ### Overview
-`concurrency` is a concurrency control component collection providing solutions for various concurrency scenarios.
+`gconc` is a unified concurrent task pool built on fixed workers and a buffered task queue.
 
-### Sub-components
-- **concpool**: Worker pool, supports task submission, concurrency control, graceful shutdown and other features
-- **concqueue**: Concurrent task queue based on producer-consumer model, supports concurrency control and error statistics
-- **concsem**: Semaphore control, used to limit concurrent numbers
+### Component
+Provides a single `*Pool` type with:
+- non-blocking / timeout / blocking task submission
+- graceful & immediate shutdown
+- error collection & callback
+- panic-safe worker pool
+- runtime stats
 
 ### Features
 - Flexible concurrency control
 - Task queue management
 - Graceful shutdown and error collection
+- Panic-safe worker pool
 - Thread-safe
 
 ### Usage
-For usage examples, refer to [concqueue usage](concurrency/concqueue/README.md)
+For usage examples, refer to [gconc usage](gconc/README.md)
 
 ## configkv
 
