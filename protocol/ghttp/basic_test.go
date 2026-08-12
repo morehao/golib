@@ -2,6 +2,9 @@ package ghttp
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -11,9 +14,34 @@ import (
 
 // TestBasicFunctionality 测试基本功能
 func TestBasicFunctionality(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/get":
+			args := map[string]string{}
+			for k, v := range r.URL.Query() {
+				if len(v) > 0 {
+					args[k] = v[0]
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"args": args,
+				"url":  r.URL.String(),
+			})
+		case "/post":
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"json": body})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
 	cfg := &protocol.HttpClientConfig{
 		Module:   "test",
-		Host:     "http://httpbin.org",
+		Host:     srv.URL,
 		Timeout:  10 * time.Second,
 		MaxRetry: 1,
 	}
@@ -35,7 +63,7 @@ func TestBasicFunctionality(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		assert.True(t, result.IsSuccess())
-		
+
 		// 验证响应包含我们的参数
 		responseStr := result.String()
 		assert.Contains(t, responseStr, "test")
@@ -48,7 +76,7 @@ func TestBasicFunctionality(t *testing.T) {
 			Args map[string]string `json:"args"`
 			URL  string            `json:"url"`
 		}
-		
+
 		var result Response
 		err := client.GetJSON(ctx, "/get", &result, RequestOption{
 			RequestBody: map[string]string{"name": "test"},
@@ -63,14 +91,14 @@ func TestBasicFunctionality(t *testing.T) {
 		type RequestData struct {
 			Name string `json:"name"`
 		}
-		
+
 		type ResponseData struct {
 			JSON RequestData `json:"json"`
 		}
-		
+
 		requestData := RequestData{Name: "test"}
 		var result ResponseData
-		
+
 		err := client.PostJSON(ctx, "/post", &result, RequestOption{
 			RequestBody: requestData,
 		})
@@ -82,7 +110,7 @@ func TestBasicFunctionality(t *testing.T) {
 	t.Run("ResponseMethods", func(t *testing.T) {
 		result, err := client.Get(ctx, "/get", RequestOption{})
 		assert.Nil(t, err)
-		
+
 		// 测试各种响应方法
 		assert.True(t, result.IsSuccess())
 		assert.False(t, result.IsError())

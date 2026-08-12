@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,38 +17,64 @@ import (
 	"github.com/morehao/golib/protocol"
 )
 
+const (
+	defaultMaxIdleConns    = 100
+	defaultMaxConnsPerHost = 10
+	defaultTimeout         = 3 * time.Second
+	defaultRetryInterval   = 100 * time.Millisecond
+	maxRetryDelay          = time.Second
+)
+
 type Client struct {
-	Service         string        `yaml:"service"`
-	Host            string        `yaml:"host"`
-	Timeout         time.Duration `yaml:"timeout"`
-	Retry           int           `yaml:"retry"`
-	MaxIdleConns    int           `yaml:"max_idle_conns"`     // 最大空闲连接数
-	MaxConnsPerHost int           `yaml:"max_conns_per_host"` // 每个主机的最大连接数
-	httpClient      *http.Client  // 缓存的HTTP客户端
-	once            sync.Once     // 确保 httpClient 只初始化一次
-	mu              sync.RWMutex  // 保护配置字段的读写
+	Service         string        // 服务名
+	Host            string        // 基础地址
+	Timeout         time.Duration // 客户端默认超时
+	Retry           int           // 最大重试次数
+	MaxIdleConns    int           // 最大空闲连接数
+	MaxConnsPerHost int           // 每个主机的最大连接数
+	RetryInterval   time.Duration // 基础重试间隔
+	RetryOnStatus   []int         // 额外重试的 HTTP 状态码
+	Retryable       bool          // 网络错误是否重试
+
+	httpClient *http.Client // 缓存的HTTP客户端
+	once       sync.Once    // 确保 httpClient 只初始化一次
 }
 
+// 配置字段在 NewClient 后视为只读，不提供运行时可修改入口，避免数据竞争。
+
 func NewClient(cfg *protocol.HttpClientConfig) *Client {
-	client := &Client{}
+	client := &Client{
+		Retryable:       true,
+		MaxIdleConns:    defaultMaxIdleConns,
+		MaxConnsPerHost: defaultMaxConnsPerHost,
+		RetryInterval:   defaultRetryInterval,
+	}
 	if cfg != nil {
 		client.Service = cfg.Module
 		client.Host = cfg.Host
 		client.Timeout = cfg.Timeout
 		client.Retry = cfg.MaxRetry
-		client.MaxIdleConns = cfg.MaxIdleConns
-		client.MaxConnsPerHost = cfg.MaxConnsPerHost
-	}
-	if client.MaxIdleConns <= 0 {
-		client.MaxIdleConns = 100
-	}
-	if client.MaxConnsPerHost <= 0 {
-		client.MaxConnsPerHost = 10
+		if cfg.MaxIdleConns > 0 {
+			client.MaxIdleConns = cfg.MaxIdleConns
+		}
+		if cfg.MaxConnsPerHost > 0 {
+			client.MaxConnsPerHost = cfg.MaxConnsPerHost
+		}
+		if cfg.RetryInterval > 0 {
+			client.RetryInterval = cfg.RetryInterval
+		}
+		client.RetryOnStatus = cfg.RetryOnStatus
+		if cfg.Retryable != nil {
+			client.Retryable = *cfg.Retryable
+		}
+		if client.RetryInterval <= 0 {
+			client.RetryInterval = defaultRetryInterval
+		}
 	}
 	return client
 }
 
-func (c *Client) getHTTPClient(timeout time.Duration) *http.Client {
+func (c *Client) getHTTPClient() *http.Client {
 	c.once.Do(func() {
 		transport := &http.Transport{
 			MaxIdleConns:        c.MaxIdleConns,
@@ -57,7 +84,6 @@ func (c *Client) getHTTPClient(timeout time.Duration) *http.Client {
 
 		c.httpClient = &http.Client{
 			Transport: transport,
-			Timeout:   timeout,
 		}
 	})
 	return c.httpClient
@@ -76,19 +102,7 @@ func (c *Client) buildQueryParams(data interface{}) (string, error) {
 			values.Set(key, fmt.Sprintf("%v", val))
 		}
 	default:
-		jsonData, err := json.Marshal(v)
-		if err != nil {
-			return "", fmt.Errorf("failed to marshal data to JSON: %w", err)
-		}
-
-		var jsonMap map[string]interface{}
-		if err := json.Unmarshal(jsonData, &jsonMap); err != nil {
-			return "", fmt.Errorf("failed to unmarshal JSON: %w", err)
-		}
-
-		for key, val := range jsonMap {
-			values.Set(key, fmt.Sprintf("%v", val))
-		}
+		return "", fmt.Errorf("query params only support map[string]string or map[string]interface{}, got %T", data)
 	}
 
 	return values.Encode(), nil
@@ -175,6 +189,20 @@ func (e *HTTPError) IsClientError() bool {
 
 func (e *HTTPError) IsServerError() bool {
 	return e.HttpCode >= 500
+}
+
+func newHTTPError(statusCode int, body []byte, header http.Header) *HTTPError {
+	httpErr := &HTTPError{
+		HttpCode: statusCode,
+		Body:     body,
+		Header:   header,
+	}
+	if statusCode >= 500 {
+		httpErr.Message = "server error"
+	} else {
+		httpErr.Message = "client error"
+	}
+	return httpErr
 }
 
 type Result struct {
@@ -280,57 +308,75 @@ func (c *Client) PatchJSON(ctx context.Context, path string, result any, opt Req
 
 func (c *Client) httpDo(ctx context.Context, method, path string, opt RequestOption) (*Result, error) {
 	reqURL := c.Host + path
-	var payload io.Reader
-	var urlData []byte
-	var err error
 
-	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodDelete:
-		payload = nil
-		if opt.RequestBody != nil {
-			queryParams, err := c.buildQueryParams(opt.RequestBody)
-			if err != nil {
-				glog.Errorf(ctx, "http client build query params error: %s", err.Error())
-				return nil, err
-			}
-			if queryParams != "" {
-				if strings.Contains(reqURL, "?") {
-					reqURL = reqURL + "&" + queryParams
-				} else {
-					reqURL = reqURL + "?" + queryParams
-				}
-			}
-		}
-		urlData = []byte(reqURL)
-	case http.MethodPost, http.MethodPatch, http.MethodPut:
-		urlData, err = opt.getData()
-		if err != nil {
-			glog.Errorf(ctx, "http client get data error: %s", err.Error())
-			return nil, err
-		}
-		payload = bytes.NewReader(urlData)
+	payload, requestBody, err := c.buildPayloadAndURL(method, &reqURL, opt)
+	if err != nil {
+		glog.Errorf(ctx, "http client build request error: %s", err.Error())
+		return nil, err
 	}
+
 	request, err := c.makeRequest(ctx, method, reqURL, payload, opt)
 	if err != nil {
 		glog.Errorf(ctx, "http client make request error: %s", err.Error())
 		return nil, err
 	}
-	body, fields, err := c.do(ctx, request, &opt, urlData)
-	reqData, respData := c.formatLogMsg(urlData, body.Response)
-	glog.Debugw(ctx, "http "+method+" request",
-		glog.KV(glog.KeyService, c.Service),
-		glog.KV(glog.KeyUrlFull, reqURL),
-		glog.KV(glog.KeyHttpRequestBody, reqData),
-		glog.KV(glog.KeyHttpResponseCode, body.HttpCode),
-		glog.KV(glog.KeyHttpResponseBody, string(respData)),
-	)
 
-	msg := "http request success"
+	startTime := time.Now()
+	result, err := c.do(ctx, request, &opt, requestBody)
+	costTime := time.Since(startTime).Milliseconds()
+
+	reqData, respData := c.formatLogMsg(requestBody, result.Response)
 	if err != nil {
-		msg = err.Error()
+		glog.Errorw(ctx, err.Error(),
+			glog.KV(glog.KeyService, c.Service),
+			glog.KV(glog.KeyUrlFull, reqURL),
+			glog.KV(glog.KeyHttpRequestBody, reqData),
+			glog.KV(glog.KeyHttpResponseCode, result.HttpCode),
+			glog.KV(glog.KeyHttpResponseBody, string(respData)),
+			glog.KV(glog.KeyAppRequestDurationMs, costTime),
+		)
+	} else {
+		glog.Infow(ctx, "http request success",
+			glog.KV(glog.KeyService, c.Service),
+			glog.KV(glog.KeyUrlFull, reqURL),
+			glog.KV(glog.KeyHttpRequestBody, reqData),
+			glog.KV(glog.KeyHttpResponseCode, result.HttpCode),
+			glog.KV(glog.KeyHttpResponseBody, string(respData)),
+			glog.KV(glog.KeyAppRequestDurationMs, costTime),
+		)
 	}
-	glog.Infow(ctx, msg, fields)
-	return &body, err
+
+	return &result, err
+}
+
+// buildPayloadAndURL 根据方法构造请求体并调整 URL：
+// GET/HEAD/DELETE 将 RequestBody 作为 query 参数拼入 URL；POST/PATCH/PUT 序列化为请求体。
+func (c *Client) buildPayloadAndURL(method string, reqURL *string, opt RequestOption) (io.Reader, []byte, error) {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodDelete:
+		if opt.RequestBody != nil {
+			queryParams, err := c.buildQueryParams(opt.RequestBody)
+			if err != nil {
+				return nil, nil, err
+			}
+			if queryParams != "" {
+				if strings.Contains(*reqURL, "?") {
+					*reqURL = *reqURL + "&" + queryParams
+				} else {
+					*reqURL = *reqURL + "?" + queryParams
+				}
+			}
+		}
+		return nil, nil, nil
+	case http.MethodPost, http.MethodPatch, http.MethodPut:
+		body, err := opt.getData()
+		if err != nil {
+			return nil, nil, err
+		}
+		return bytes.NewReader(body), body, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported http method: %s", method)
+	}
 }
 
 func (c *Client) makeRequest(ctx context.Context, method, url string, data io.Reader, opts RequestOption) (*http.Request, error) {
@@ -359,36 +405,74 @@ func (c *Client) makeRequest(ctx context.Context, method, url string, data io.Re
 	return request.WithContext(ctx), nil
 }
 
-func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOption, requestBody []byte) (Result, []glog.Field, error) {
-	startTime := time.Now()
+// resolveTimeout 计算有效超时：opt.Timeout 与 client.Timeout 取较小值，均未配置时默认 defaultTimeout。
+func resolveTimeout(opt *RequestOption, clientTimeout time.Duration) time.Duration {
+	timeout := defaultTimeout
 
-	c.mu.RLock()
-	clientTimeout := c.Timeout
-	c.mu.RUnlock()
-
-	timeout := 3 * time.Second
+	optTimeout := time.Duration(0)
 	if opt != nil && opt.Timeout > 0 {
-		timeout = opt.Timeout
-	} else if clientTimeout > 0 {
-		timeout = clientTimeout
+		optTimeout = opt.Timeout
 	}
 
-	if opt != nil && opt.Timeout > 0 && clientTimeout > 0 {
-		if opt.Timeout < clientTimeout {
-			timeout = opt.Timeout
+	switch {
+	case optTimeout > 0 && clientTimeout > 0:
+		if optTimeout < clientTimeout {
+			timeout = optTimeout
 		} else {
 			timeout = clientTimeout
 		}
+	case optTimeout > 0:
+		timeout = optTimeout
+	case clientTimeout > 0:
+		timeout = clientTimeout
 	}
 
-	httpClient := c.getHTTPClient(timeout)
+	return timeout
+}
 
-	var resp *http.Response
-	var err error
+func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOption, requestBody []byte) (Result, error) {
+	timeout := resolveTimeout(opt, c.Timeout)
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	retryCount := c.Retry
-	if retryCount <= 0 {
-		retryCount = 1
+	request = request.WithContext(reqCtx)
+
+	resp, err := c.executeCore(reqCtx, request, requestBody)
+	result := Result{Ctx: ctx}
+
+	if err != nil {
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) {
+			return result, httpErr
+		}
+		return result, fmt.Errorf("http request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return result, fmt.Errorf("read response body failed: %w", err)
+	}
+
+	result.HttpCode = resp.StatusCode
+	result.Response = body
+	result.Header = resp.Header
+
+	if resp.StatusCode >= 400 {
+		return result, newHTTPError(resp.StatusCode, body, resp.Header)
+	}
+
+	return result, nil
+}
+
+// executeCore 处理超时、退避重试并返回原始响应，不读取响应体。
+// 网络错误（Retryable）以及命中 RetryOnStatus 的响应会按 RetryInterval 指数退避重试，等待可被 ctx 取消。
+func (c *Client) executeCore(ctx context.Context, request *http.Request, requestBody []byte) (*http.Response, error) {
+	httpClient := c.getHTTPClient()
+
+	attempts := c.Retry
+	if attempts <= 0 {
+		attempts = 1
 	}
 
 	var originalBody []byte
@@ -397,85 +481,67 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 		copy(originalBody, requestBody)
 	}
 
-	for i := 0; i < retryCount; i++ {
+	var resp *http.Response
+	for i := 0; i < attempts; i++ {
 		if i > 0 && originalBody != nil {
 			request.Body = io.NopCloser(bytes.NewReader(originalBody))
 		}
 
+		var err error
 		resp, err = httpClient.Do(request)
-		if err == nil {
-			break
-		}
-
-		if i < retryCount-1 {
-			delay := time.Millisecond * 100 * time.Duration(i+1)
-			if delay > time.Second {
-				delay = time.Second
+		if err != nil {
+			glog.Warnf(ctx, "http request retry %d/%d, error: %v", i+1, attempts, err)
+			if i == attempts-1 || !c.Retryable {
+				return nil, err
 			}
-			time.Sleep(delay)
-			glog.Warnf(ctx, "http request retry %d/%d, error: %v", i+1, retryCount, err)
-		}
-	}
-
-	result := Result{
-		Ctx: ctx,
-	}
-
-	if err != nil {
-		costTime := time.Since(startTime).Milliseconds()
-		fields := []glog.Field{
-			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrlFull, request.URL.String()),
-			glog.KV(glog.KeyHttpResponseStatusCode, 0),
-			glog.KV(glog.KeyAppRequestDurationMs, costTime),
-			glog.KV("error", err.Error()),
-		}
-		return result, fields, fmt.Errorf("http request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		costTime := time.Since(startTime).Milliseconds()
-		fields := []glog.Field{
-			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrlFull, request.URL.String()),
-			glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
-			glog.KV(glog.KeyAppRequestDurationMs, costTime),
-			glog.KV("error", err.Error()),
-		}
-		return result, fields, fmt.Errorf("read response body failed: %w", err)
-	}
-
-	result.HttpCode = resp.StatusCode
-	result.Response = body
-	result.Header = resp.Header
-
-	costTime := time.Since(startTime).Milliseconds()
-	fields := []glog.Field{
-		glog.KV(glog.KeyService, c.Service),
-		glog.KV(glog.KeyUrlFull, request.URL.String()),
-		glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
-		glog.KV(glog.KeyAppRequestDurationMs, costTime),
-	}
-
-	if resp.StatusCode >= 400 {
-		httpErr := &HTTPError{
-			HttpCode: resp.StatusCode,
-			Body:     body,
-			Header:   resp.Header,
+			if waitErr := retryWait(ctx, c.RetryInterval, i); waitErr != nil {
+				return nil, waitErr
+			}
+			continue
 		}
 
-		if resp.StatusCode >= 500 {
-			httpErr.Message = "server error"
-		} else {
-			httpErr.Message = "client error"
+		if retryOnStatus(c.RetryOnStatus, resp.StatusCode) {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if i == attempts-1 {
+				return nil, newHTTPError(resp.StatusCode, body, resp.Header)
+			}
+			if waitErr := retryWait(ctx, c.RetryInterval, i); waitErr != nil {
+				return nil, waitErr
+			}
+			continue
 		}
 
-		return result, fields, httpErr
+		return resp, nil
 	}
 
-	return result, fields, nil
+	return nil, fmt.Errorf("http request failed after %d attempts", attempts)
+}
+
+// retryWait 按 retryInterval 指数退避等待，可通过 ctx 取消提前返回。
+func retryWait(ctx context.Context, retryInterval time.Duration, attempt int) error {
+	delay := retryInterval * time.Duration(1<<uint(attempt))
+	if delay > maxRetryDelay {
+		delay = maxRetryDelay
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// retryOnStatus 判断指定状态码是否命中可重试集合。
+func retryOnStatus(retryOnStatus []int, statusCode int) bool {
+	for _, s := range retryOnStatus {
+		if s == statusCode {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) formatLogMsg(requestParam, responseData []byte) ([]byte, []byte) {

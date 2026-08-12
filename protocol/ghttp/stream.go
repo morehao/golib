@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/morehao/golib/glog"
@@ -17,6 +16,7 @@ type StreamResult struct {
 	Header   http.Header
 	Ctx      context.Context
 	reader   io.ReadCloser
+	cancel   context.CancelFunc
 }
 
 func (r *StreamResult) Read(p []byte) (n int, err error) {
@@ -27,6 +27,10 @@ func (r *StreamResult) Read(p []byte) (n int, err error) {
 }
 
 func (r *StreamResult) Close() error {
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
 	if r.reader == nil {
 		return nil
 	}
@@ -46,14 +50,13 @@ func (r *StreamResult) ToResult() (*Result, error) {
 	if r.reader == nil {
 		return nil, fmt.Errorf("stream reader is nil")
 	}
-	defer r.reader.Close()
+	defer r.Close()
 
 	body, err := io.ReadAll(r.reader)
+	r.reader = nil
 	if err != nil {
-		r.reader = nil
 		return nil, fmt.Errorf("read stream body failed: %w", err)
 	}
-	r.reader = nil
 
 	return &Result{
 		HttpCode: r.HttpCode,
@@ -73,35 +76,11 @@ func (c *Client) PostStream(ctx context.Context, path string, opt RequestOption)
 
 func (c *Client) streamDo(ctx context.Context, method, path string, opt RequestOption) (*StreamResult, error) {
 	reqURL := c.Host + path
-	var payload io.Reader
-	var urlData []byte
-	var err error
 
-	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodDelete:
-		payload = nil
-		if opt.RequestBody != nil {
-			queryParams, err := c.buildQueryParams(opt.RequestBody)
-			if err != nil {
-				glog.Errorf(ctx, "http stream client build query params error: %s", err.Error())
-				return nil, err
-			}
-			if queryParams != "" {
-				if strings.Contains(reqURL, "?") {
-					reqURL = reqURL + "&" + queryParams
-				} else {
-					reqURL = reqURL + "?" + queryParams
-				}
-			}
-		}
-		urlData = []byte(reqURL)
-	case http.MethodPost, http.MethodPatch, http.MethodPut:
-		urlData, err = opt.getData()
-		if err != nil {
-			glog.Errorf(ctx, "http stream client get data error: %s", err.Error())
-			return nil, err
-		}
-		payload = bytes.NewReader(urlData)
+	payload, requestBody, err := c.buildPayloadAndURL(method, &reqURL, opt)
+	if err != nil {
+		glog.Errorf(ctx, "http stream client build request error: %s", err.Error())
+		return nil, err
 	}
 
 	request, err := c.makeRequest(ctx, method, reqURL, payload, opt)
@@ -110,88 +89,33 @@ func (c *Client) streamDo(ctx context.Context, method, path string, opt RequestO
 		return nil, err
 	}
 
-	reqData, _ := c.formatLogMsg(urlData, nil)
+	reqData, _ := c.formatLogMsg(requestBody, nil)
 	glog.Debugw(ctx, "http stream "+method+" request started",
 		glog.KV(glog.KeyService, c.Service),
 		glog.KV(glog.KeyUrlFull, reqURL),
 		glog.KV(glog.KeyHttpRequestBody, reqData),
 	)
 
-	result, err := c.doStream(ctx, request, &opt, urlData)
-	if err != nil {
-		glog.Errorf(ctx, "http stream request failed: %s", err.Error())
-	}
-
-	return result, err
+	return c.doStream(ctx, request, &opt, requestBody)
 }
 
 func (c *Client) doStream(ctx context.Context, request *http.Request, opt *RequestOption, requestBody []byte) (*StreamResult, error) {
 	startTime := time.Now()
 
-	c.mu.RLock()
-	clientTimeout := c.Timeout
-	c.mu.RUnlock()
+	timeout := resolveTimeout(opt, c.Timeout)
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 
-	timeout := 3 * time.Second
-	if opt != nil && opt.Timeout > 0 {
-		timeout = opt.Timeout
-	} else if clientTimeout > 0 {
-		timeout = clientTimeout
-	}
+	request = request.WithContext(reqCtx)
 
-	if opt != nil && opt.Timeout > 0 && clientTimeout > 0 {
-		if opt.Timeout < clientTimeout {
-			timeout = opt.Timeout
-		} else {
-			timeout = clientTimeout
-		}
-	}
-
-	httpClient := c.getHTTPClient(timeout)
-
-	var resp *http.Response
-	var err error
-
-	retryCount := c.Retry
-	if retryCount <= 0 {
-		retryCount = 1
-	}
-
-	var originalBody []byte
-	if request.Body != nil && requestBody != nil {
-		originalBody = make([]byte, len(requestBody))
-		copy(originalBody, requestBody)
-	}
-
-	for i := 0; i < retryCount; i++ {
-		if i > 0 && originalBody != nil {
-			request.Body = io.NopCloser(bytes.NewReader(originalBody))
-		}
-
-		resp, err = httpClient.Do(request)
-		if err == nil {
-			break
-		}
-
-		if i < retryCount-1 {
-			delay := time.Millisecond * 100 * time.Duration(i+1)
-			if delay > time.Second {
-				delay = time.Second
-			}
-			time.Sleep(delay)
-			glog.Warnf(ctx, "http stream request retry %d/%d, error: %v", i+1, retryCount, err)
-		}
-	}
-
-	costTime := time.Since(startTime).Milliseconds()
-
+	resp, err := c.executeCore(reqCtx, request, requestBody)
 	if err != nil {
-		glog.Infow(ctx, "http stream request failed",
+		cancel()
+		costTime := time.Since(startTime).Milliseconds()
+		glog.Errorw(ctx, "http stream request failed",
 			glog.KV(glog.KeyService, c.Service),
 			glog.KV(glog.KeyUrlFull, request.URL.String()),
 			glog.KV(glog.KeyHttpResponseStatusCode, 0),
 			glog.KV(glog.KeyAppRequestDurationMs, costTime),
-			glog.KV("error", err.Error()),
 		)
 		return nil, fmt.Errorf("http stream request failed: %w", err)
 	}
@@ -201,6 +125,30 @@ func (c *Client) doStream(ctx context.Context, request *http.Request, opt *Reque
 		Header:   resp.Header,
 		Ctx:      ctx,
 		reader:   resp.Body,
+		cancel:   cancel,
+	}
+
+	costTime := time.Since(startTime).Milliseconds()
+	if resp.StatusCode >= 400 {
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		result.cancel = nil
+		cancel()
+		if readErr != nil {
+			result.reader = nil
+		} else {
+			result.reader = io.NopCloser(bytes.NewReader(body))
+		}
+
+		glog.Errorw(ctx, "http stream request failed",
+			glog.KV(glog.KeyService, c.Service),
+			glog.KV(glog.KeyUrlFull, request.URL.String()),
+			glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
+			glog.KV(glog.KeyHttpResponseBody, string(body)),
+			glog.KV(glog.KeyAppRequestDurationMs, costTime),
+		)
+
+		return result, newHTTPError(resp.StatusCode, body, resp.Header)
 	}
 
 	glog.Infow(ctx, "http stream request connected",
@@ -209,28 +157,6 @@ func (c *Client) doStream(ctx context.Context, request *http.Request, opt *Reque
 		glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
 		glog.KV(glog.KeyAppRequestDurationMs, costTime),
 	)
-
-	if resp.StatusCode >= 400 {
-		body, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			result.reader = nil
-		} else {
-			result.reader = io.NopCloser(bytes.NewReader(body))
-		}
-
-		httpErr := &HTTPError{
-			HttpCode: resp.StatusCode,
-			Body:     body,
-			Header:   resp.Header,
-		}
-		if resp.StatusCode >= 500 {
-			httpErr.Message = "server error"
-		} else {
-			httpErr.Message = "client error"
-		}
-		return result, httpErr
-	}
 
 	return result, nil
 }

@@ -2,6 +2,7 @@ package ghttp
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,10 +16,57 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+// newHTTPBinHandler 构造一个模拟 httpbin.gets/get/post 行为的服务，返回其 URL。
+func newHTTPBinHandler() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/get":
+			args := map[string]string{}
+			for k, v := range r.URL.Query() {
+				if len(v) > 0 {
+					args[k] = v[0]
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"args":    args,
+				"headers": headerMap(r.Header),
+				"origin":  "127.0.0.1",
+				"url":     r.URL.String(),
+			})
+		case "/post":
+			var requestData map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&requestData)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"json":    requestData,
+				"data":    requestData,
+				"headers": headerMap(r.Header),
+				"url":     r.URL.String(),
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func headerMap(h http.Header) map[string]string {
+	m := make(map[string]string, len(h))
+	for k, vs := range h {
+		if len(vs) > 0 {
+			m[k] = vs[0]
+		}
+	}
+	return m
+}
+
 func TestGet(t *testing.T) {
+	srv := newHTTPBinHandler()
+	defer srv.Close()
+
 	cfg := &protocol.HttpClientConfig{
-		Module:   "httpbin",
-		Host:     "http://httpbin.org",
+		Module:   "ghttp",
+		Host:     srv.URL,
 		Timeout:  5 * time.Second,
 		MaxRetry: 3,
 	}
@@ -32,9 +80,12 @@ func TestGet(t *testing.T) {
 }
 
 func TestGetJSON(t *testing.T) {
+	srv := newHTTPBinHandler()
+	defer srv.Close()
+
 	cfg := &protocol.HttpClientConfig{
-		Module:   "httpbin",
-		Host:     "http://httpbin.org",
+		Module:   "ghttp",
+		Host:     srv.URL,
 		Timeout:  5 * time.Second,
 		MaxRetry: 3,
 	}
@@ -63,9 +114,12 @@ func TestGetJSON(t *testing.T) {
 }
 
 func TestPostJSON(t *testing.T) {
+	srv := newHTTPBinHandler()
+	defer srv.Close()
+
 	cfg := &protocol.HttpClientConfig{
-		Module:   "httpbin",
-		Host:     "http://httpbin.org",
+		Module:   "ghttp",
+		Host:     srv.URL,
 		Timeout:  5 * time.Second,
 		MaxRetry: 3,
 	}
@@ -80,7 +134,7 @@ func TestPostJSON(t *testing.T) {
 
 	type HttpBinPostResponse struct {
 		JSON    RequestData       `json:"json"`
-		Data    string            `json:"data"`
+		Data    RequestData       `json:"data"`
 		Headers map[string]string `json:"headers"`
 		URL     string            `json:"url"`
 	}
@@ -101,9 +155,12 @@ func TestPostJSON(t *testing.T) {
 }
 
 func TestGetWithChineseParams(t *testing.T) {
+	srv := newHTTPBinHandler()
+	defer srv.Close()
+
 	cfg := &protocol.HttpClientConfig{
-		Module:   "httpbin",
-		Host:     "http://httpbin.org",
+		Module:   "ghttp",
+		Host:     srv.URL,
 		Timeout:  5 * time.Second,
 		MaxRetry: 3,
 	}
@@ -126,15 +183,18 @@ func TestGetWithChineseParams(t *testing.T) {
 	assert.NotEmpty(t, result.URL)
 	// 检查args中是否包含我们的中文参数
 	assert.Equal(t, "张三", result.Args["name"])
-	// 检查URL是否包含参数（可能是URL编码的）
-	assert.True(t, strings.Contains(result.URL, "name=张三") || strings.Contains(result.URL, "name%3D%E5%BC%A0%E4%B8%89"))
+	// 检查URL是否包含中文字符的 URL 编码
+	assert.True(t, strings.Contains(result.URL, "name=%E5%BC%A0%E4%B8%89") || strings.Contains(result.URL, "name%3D%E5%BC%A0%E4%B8%89"))
 	t.Logf("Chinese params response: %+v", result)
 }
 
 func TestResultMethods(t *testing.T) {
+	srv := newHTTPBinHandler()
+	defer srv.Close()
+
 	cfg := &protocol.HttpClientConfig{
-		Module:   "httpbin",
-		Host:     "http://httpbin.org",
+		Module:   "ghttp",
+		Host:     srv.URL,
 		Timeout:  5 * time.Second,
 		MaxRetry: 3,
 	}
@@ -151,7 +211,6 @@ func TestResultMethods(t *testing.T) {
 	// 测试 String 方法
 	responseStr := res.String()
 	assert.NotEmpty(t, responseStr)
-	assert.Contains(t, responseStr, "httpbin.org")
 
 	// 测试 Bytes 方法
 	responseBytes := res.Bytes()
@@ -160,12 +219,13 @@ func TestResultMethods(t *testing.T) {
 
 	// 测试 JSON 方法
 	type HttpBinResponse struct {
-		URL string `json:"url"`
+		Args map[string]string `json:"args"`
+		URL  string            `json:"url"`
 	}
 	var result HttpBinResponse
 	err = res.JSON(&result)
 	assert.Nil(t, err)
-	assert.Contains(t, result.URL, "httpbin.org")
+	assert.Contains(t, result.URL, "/get")
 }
 
 func TestGetInjectsOTelTraceAndRequestID(t *testing.T) {
