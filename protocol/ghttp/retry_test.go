@@ -2,6 +2,7 @@ package ghttp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -73,6 +74,37 @@ func TestRetryOnStatus(t *testing.T) {
 	result, err := client.Get(ctx, "/", RequestOption{})
 	assert.Nil(t, err)
 	assert.True(t, result.IsSuccess())
+	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts))
+}
+
+// TestRetryOnStatusExhausted 验证重试耗尽命中 RetryOnStatus 时返回 HTTPError（错误类型一致）。
+func TestRetryOnStatusExhausted(t *testing.T) {
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error":"boom"}`))
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:        "test",
+		Host:          srv.URL,
+		Timeout:       2 * time.Second,
+		MaxRetry:      3,
+		RetryOnStatus: []int{http.StatusBadGateway},
+		RetryInterval: 10 * time.Millisecond,
+	}
+	client := NewClient(cfg)
+	ctx := context.Background()
+
+	_, err := client.Get(ctx, "/", RequestOption{})
+	var httpErr *HTTPError
+	ok := errors.As(err, &httpErr)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusBadGateway, httpErr.HttpCode)
+	assert.Equal(t, "server error", httpErr.Message)
+	assert.Equal(t, `{"error":"boom"}`, string(httpErr.Body))
 	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts))
 }
 
@@ -182,26 +214,37 @@ func TestUnsupportedMethod(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported http method")
 }
 
-// TestPerRequestTimeout 验证 RequestOption.Timeout 生效（修复 sync.Once 缓存 bug）。
+// TestPerRequestTimeout 验证 RequestOption.Timeout 每次请求独立生效（修复 sync.Once 缓存 bug）。
 func TestPerRequestTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(300 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/fast":
+			w.WriteHeader(http.StatusOK)
+		case "/slow":
+			time.Sleep(400 * time.Millisecond)
+			w.WriteHeader(http.StatusOK)
+		}
 	}))
 	defer srv.Close()
 
 	cfg := &protocol.HttpClientConfig{
-		Module:  "test",
-		Host:    srv.URL,
-		Timeout: 5 * time.Second,
+		Module:   "test",
+		Host:     srv.URL,
+		Timeout:  5 * time.Second,
+		MaxRetry: 0, // 不重试，让超时原样返回
 	}
 	client := NewClient(cfg)
 	ctx := context.Background()
 
+	// 第一次：短超时应成功（接口响应快），但如果 bug 存在会把 100ms 缓存进全局 httpClient。
 	start := time.Now()
-	_, err := client.Get(ctx, "/", RequestOption{Timeout: 100 * time.Millisecond})
-	assert.NotNil(t, err)
+	_, err := client.Get(ctx, "/fast", RequestOption{Timeout: 100 * time.Millisecond})
+	assert.Nil(t, err)
 	assert.Less(t, time.Since(start), 500*time.Millisecond)
+
+	// 第二次：长超时应独立生效（1s > 400ms成功）；若复用了第一次的 100ms 超时则会失败。
+	_, err = client.Get(ctx, "/slow", RequestOption{Timeout: time.Second})
+	assert.Nil(t, err)
 }
 
 // TestRetryAfterDelete 验证 DELETE 方法仍可作为 query 参数请求。
@@ -228,15 +271,14 @@ func TestRetryAfterDelete(t *testing.T) {
 	assert.True(t, result.IsSuccess())
 }
 
-// TestRetryableDisabled 验证 Retryable 关闭时不重试网络错误。
+// TestRetryableDisabled 验证 Retryable 关闭时网络错误不重试。
 func TestRetryableDisabled(t *testing.T) {
 	var attempts int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&attempts, 1) == 1 {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
+		atomic.AddInt32(&attempts, 1)
+		hj := w.(http.Hijacker)
+		conn, _, _ := hj.Hijack()
+		conn.Close()
 	}))
 	defer srv.Close()
 
@@ -253,6 +295,6 @@ func TestRetryableDisabled(t *testing.T) {
 
 	_, err := client.Get(ctx, "/", RequestOption{})
 	assert.NotNil(t, err)
-	// 5xx 不重试，且不触发状态码重试（未配置），所以只请求一次
+	// 网络错误重试被 Retryable=false 关闭，只请求一次
 	assert.Equal(t, int32(1), atomic.LoadInt32(&attempts))
 }

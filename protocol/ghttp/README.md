@@ -39,6 +39,8 @@
 ### 基本配置
 
 ```go
+// Retryable 为 *bool，默认 true（网络错误重试开启），仅显式 false 时关闭。
+retryable := true
 cfg := &protocol.HttpClientConfig{
     Module:          "my-service",
     Host:            "https://api.example.com",
@@ -46,7 +48,7 @@ cfg := &protocol.HttpClientConfig{
     MaxRetry:        3,
     RetryInterval:   200 * time.Millisecond, // 基础重试间隔，默认 100ms，指数退避
     RetryOnStatus:   []int{429, 502, 503},   // 可选：按状态码重试
-    Retryable:       &trueVal,               // 可选：网络错误是否重试，默认 true
+    Retryable:       &retryable,             // 可选：网络错误是否重试，默认 true
 }
 client := NewClient(cfg)
 ```
@@ -149,6 +151,9 @@ result, err := client.Get(ctx, "/protected-resource", opt)
 
 > **查询参数约束**：GET/HEAD/DELETE 的 `RequestBody` 作为 URL 查询参数时仅支持
 > `map[string]string` 或 `map[string]interface{}`，传入其他类型（如 struct）会返回明确错误。
+>
+> **流式超时说明**：`Timeout` 同样作用于流式响应（`GetStream`/`PostStream`）的读取阶段，
+> 对于长期存活的 SSE 流请传入足够大的 `RequestOption.Timeout` 以覆盖整个读取周期。
 
 ## 改进内容
 

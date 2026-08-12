@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -440,6 +441,10 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 	result := Result{Ctx: ctx}
 
 	if err != nil {
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) {
+			return result, httpErr
+		}
 		return result, fmt.Errorf("http request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -496,10 +501,10 @@ func (c *Client) executeCore(ctx context.Context, request *http.Request, request
 		}
 
 		if retryOnStatus(c.RetryOnStatus, resp.StatusCode) {
-			_, _ = io.Copy(io.Discard, resp.Body)
+			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if i == attempts-1 {
-				return nil, fmt.Errorf("http request failed with retryable status %d", resp.StatusCode)
+				return nil, newHTTPError(resp.StatusCode, body, resp.Header)
 			}
 			if waitErr := retryWait(ctx, c.RetryInterval, i); waitErr != nil {
 				return nil, waitErr
@@ -519,10 +524,12 @@ func retryWait(ctx context.Context, retryInterval time.Duration, attempt int) er
 	if delay > maxRetryDelay {
 		delay = maxRetryDelay
 	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(delay):
+	case <-timer.C:
 		return nil
 	}
 }
