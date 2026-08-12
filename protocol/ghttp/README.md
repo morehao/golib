@@ -15,9 +15,11 @@
 - 提高并发性能
 
 ### 3. 智能重试机制
-- 仅网络错误时自动重试（超时、DNS解析失败、连接被拒绝等）
-- 服务端成功响应后不重试，无论状态码（2xx/4xx/5xx）
-- 可配置重试次数和延迟
+- 默认仅当网络错误时自动重试（超时、DNS解析失败、连接被拒绝等）
+- 通过 `RetryOnStatus` 可选配置按 HTTP 状态码重试（如 429、5xx）
+- 通过 `Retryable` 可关闭网络错误重试（默认开启）
+- 重试间隔通过 `RetryInterval` 配置，呈指数退避（`base * 2^(n-1)`，封顶 1s）
+- 重试等待可被 context 取消，不会阻塞积压请求
 - 支持请求体重试（POST/PUT/PATCH）
 
 ### 4. 丰富的响应处理
@@ -38,10 +40,13 @@
 
 ```go
 cfg := &protocol.HttpClientConfig{
-    Module:   "my-service",
-    Host:     "https://api.example.com",
-    Timeout:  10 * time.Second,
-    MaxRetry: 3,
+    Module:          "my-service",
+    Host:            "https://api.example.com",
+    Timeout:         10 * time.Second,
+    MaxRetry:        3,
+    RetryInterval:   200 * time.Millisecond, // 基础重试间隔，默认 100ms，指数退避
+    RetryOnStatus:   []int{429, 502, 503},   // 可选：按状态码重试
+    Retryable:       &trueVal,               // 可选：网络错误是否重试，默认 true
 }
 client := NewClient(cfg)
 ```
@@ -141,6 +146,9 @@ opt := RequestOption{
 
 result, err := client.Get(ctx, "/protected-resource", opt)
 ```
+
+> **查询参数约束**：GET/HEAD/DELETE 的 `RequestBody` 作为 URL 查询参数时仅支持
+> `map[string]string` 或 `map[string]interface{}`，传入其他类型（如 struct）会返回明确错误。
 
 ## 改进内容
 
