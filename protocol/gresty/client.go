@@ -5,7 +5,7 @@ import (
 
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/protocol"
+	"github.com/morehao/golib/gtrace"
 	"resty.dev/v3"
 )
 
@@ -54,7 +54,7 @@ func NewClient(opts ...Option) *Client {
 	c.SetLogger(newGlogAdapter(c.logger))
 	c.SetDebug(false)
 	c.AddRequestMiddleware(func(client *resty.Client, req *resty.Request) error {
-		req.Header = protocol.InjectTraceAndRequestID(req.Context(), req.Header)
+		req.Header = gtrace.InjectTraceAndRequestID(req.Context(), req.Header)
 		return nil
 	})
 

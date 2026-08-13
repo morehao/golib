@@ -63,3 +63,38 @@ func TestInjectHTTPResponseTraceInvalidSkips(t *testing.T) {
 	assert.False(t, InjectHTTPResponseTrace(context.Background(), h))
 	assert.Empty(t, h.Get(gconstant.HeaderTraceParent))
 }
+
+func TestInjectTraceAndRequestIDTraceHeader(t *testing.T) {
+	ctx := trace.ContextWithSpanContext(context.Background(), testSpanContext(true))
+	h := InjectTraceAndRequestID(ctx, http.Header{})
+	assert.NotEmpty(t, h.Get(gconstant.HeaderTraceParent))
+	assert.NotEmpty(t, h.Get(gconstant.HeaderRequestID))
+	assert.Contains(t, h.Get(gconstant.HeaderTraceParent), "00-")
+}
+
+func TestInjectTraceAndRequestIDNoSpan(t *testing.T) {
+	h := InjectTraceAndRequestID(context.Background(), http.Header{})
+	// No valid span -> no traceparent, but a request id is still generated.
+	assert.Empty(t, h.Get(gconstant.HeaderTraceParent))
+	assert.NotEmpty(t, h.Get(gconstant.HeaderRequestID))
+}
+
+func TestInjectTraceAndRequestIDUsesContextRequestID(t *testing.T) {
+	ctx := context.WithValue(context.Background(), gconstant.KeyAppRequestID, "req-123")
+	h := InjectTraceAndRequestID(ctx, http.Header{})
+	assert.Equal(t, "req-123", h.Get(gconstant.HeaderRequestID))
+}
+
+func TestInjectTraceAndRequestIDKeepsExistingHeaderRequestID(t *testing.T) {
+	// No request id on context and header already set -> keep existing.
+	h := http.Header{gconstant.HeaderRequestID: []string{"existing"}}
+	got := InjectTraceAndRequestID(context.Background(), h)
+	assert.Equal(t, "existing", got.Get(gconstant.HeaderRequestID))
+}
+
+func TestInjectTraceAndRequestIDNilCtxNilHeader(t *testing.T) {
+	h := InjectTraceAndRequestID(nil, nil)
+	assert.NotNil(t, h)
+	assert.Empty(t, h.Get(gconstant.HeaderTraceParent))
+	assert.NotEmpty(t, h.Get(gconstant.HeaderRequestID))
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 )
 
 // slogBaseCallerSkip 是从 logSkip 内 runtime.Callers 抓取调用点时，到"调用 glog API 的那一帧"的固定栈帧数。
@@ -251,7 +252,7 @@ func (l *slogLogger) Close() error {
 // 接口调用 Handle），超过 Go 内联器预算而不会被内联，因此
 // "业务 → Infow(接口分派) → logSkip → runtime.Callers" 的帧数稳定，无需 //go:noinline。
 func (l *slogLogger) logSkip(ctx context.Context, level glog.Level, extra int, msg string, kvs []any) {
-	if glog.SkipLog(ctx) {
+	if gutil.SkipLog(ctx) {
 		return
 	}
 	kvs = normalizeKVs(kvs)

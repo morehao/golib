@@ -232,7 +232,7 @@ func (l *zapLogger) allFields(ctx context.Context, kvs []any) []zap.Field {
 // 超过 Go 内联器预算而不会被内联，因此 "业务 → Infow(接口分派) → entry → zap.Logger"
 // 的帧数稳定，无需 //go:noinline。caller 深度由 zapBaseCallerSkip + callerSkip + extra 固定。
 func (l *zapLogger) entry(level glog.Level, ctx context.Context, extra int, msg string, kvs []any) {
-	if gutil.NilCtx(ctx) || glog.SkipLog(ctx) {
+	if gutil.NilCtx(ctx) || gutil.SkipLog(ctx) {
 		return
 	}
 	if !l.logger.Core().Enabled(levelToZapLevel(level)) {

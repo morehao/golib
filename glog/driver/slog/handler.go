@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -70,7 +71,7 @@ func (h *gSlogHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *gSlogHandler) Handle(ctx context.Context, r slog.Record) error {
-	if glog.SkipLog(ctx) {
+	if gutil.SkipLog(ctx) {
 		return nil
 	}
 	if h.messageHookFunc != nil {

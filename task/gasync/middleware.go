@@ -6,7 +6,6 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/morehao/golib/gconstant"
-	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/gtrace"
 	"github.com/morehao/golib/gutil"
 	"go.opentelemetry.io/otel"
@@ -65,7 +64,7 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 		maxRetry, _ := asynq.GetMaxRetry(ctx)
 
 		traceID, _ := ctx.Value(gconstant.KeyTraceID).(string)
-		requestID := glog.GetRequestID(ctx)
+		requestID := gutil.GetRequestID(ctx)
 
 		start := time.Now()
 		run := &AsyncTaskRun{

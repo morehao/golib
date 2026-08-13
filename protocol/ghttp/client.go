@@ -15,6 +15,7 @@ import (
 
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gtrace"
 	"github.com/morehao/golib/protocol"
 )
 
@@ -432,7 +433,7 @@ func (c *Client) makeRequest(ctx context.Context, method, url string, data io.Re
 
 	request.Header.Set("Content-Type", opts.GetContentType())
 
-	request.Header = protocol.InjectTraceAndRequestID(ctx, request.Header)
+	request.Header = gtrace.InjectTraceAndRequestID(ctx, request.Header)
 
 	return request.WithContext(ctx), nil
 }
