@@ -22,22 +22,28 @@ const (
 	defaultMaxConnsPerHost = 10
 	defaultTimeout         = 3 * time.Second
 	defaultRetryInterval   = 100 * time.Millisecond
+	defaultIdleConnTimeout = 90 * time.Second
 	maxRetryDelay          = time.Second
+	maxRetryBackoffShift   = 20 // 2^20 ≈ 1s，封顶移位，防止无意义的大位移溢出
+	maxLogSize             = 10240
 )
 
 type Client struct {
 	Service         string        // 服务名
 	Host            string        // 基础地址
 	Timeout         time.Duration // 客户端默认超时
-	Retry           int           // 最大重试次数
+	Retry           int           // 总尝试次数（含首次），Retry<=0 视为 1 次
 	MaxIdleConns    int           // 最大空闲连接数
 	MaxConnsPerHost int           // 每个主机的最大连接数
 	RetryInterval   time.Duration // 基础重试间隔
 	RetryOnStatus   []int         // 额外重试的 HTTP 状态码
 	Retryable       bool          // 网络错误是否重试
+	IdleConnTimeout time.Duration // 空闲连接超时回收时间
 
-	httpClient *http.Client // 缓存的HTTP客户端
-	once       sync.Once    // 确保 httpClient 只初始化一次
+	httpClient   *http.Client // 缓存的HTTP客户端
+	streamClient *http.Client // 流式请求客户端（仅限制响应头阶段超时，不截断 body 读取）
+	once         sync.Once    // 确保 httpClient 只初始化一次
+	streamOnce   sync.Once    // 确保 streamClient 只初始化一次
 }
 
 // 配置字段在 NewClient 后视为只读，不提供运行时可修改入口，避免数据竞争。
@@ -48,6 +54,7 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 		MaxIdleConns:    defaultMaxIdleConns,
 		MaxConnsPerHost: defaultMaxConnsPerHost,
 		RetryInterval:   defaultRetryInterval,
+		IdleConnTimeout: defaultIdleConnTimeout,
 	}
 	if cfg != nil {
 		client.Service = cfg.Module
@@ -63,6 +70,9 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 		if cfg.RetryInterval > 0 {
 			client.RetryInterval = cfg.RetryInterval
 		}
+		if cfg.IdleConnTimeout > 0 {
+			client.IdleConnTimeout = cfg.IdleConnTimeout
+		}
 		client.RetryOnStatus = cfg.RetryOnStatus
 		if cfg.Retryable != nil {
 			client.Retryable = *cfg.Retryable
@@ -74,19 +84,40 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 	return client
 }
 
+func (c *Client) newTransport() *http.Transport {
+	return &http.Transport{
+		MaxIdleConns:        c.MaxIdleConns,
+		MaxIdleConnsPerHost: c.MaxConnsPerHost,
+		IdleConnTimeout:     c.IdleConnTimeout,
+	}
+}
+
 func (c *Client) getHTTPClient() *http.Client {
 	c.once.Do(func() {
-		transport := &http.Transport{
-			MaxIdleConns:        c.MaxIdleConns,
-			MaxIdleConnsPerHost: c.MaxConnsPerHost,
-			IdleConnTimeout:     90 * time.Second,
-		}
-
 		c.httpClient = &http.Client{
-			Transport: transport,
+			Transport: c.newTransport(),
 		}
 	})
 	return c.httpClient
+}
+
+// getStreamClient 返回流式请求专用客户端。
+// 与普通请求不同，流式客户端通过 ResponseHeaderTimeout 仅限制「连接 + 响应头」阶段超时，
+// 响应体读取不受超时截断，适配长期存活的 SSE/流式场景。
+//
+// 流式场景始终复用共享连接池，仅以 Client.Timeout（或缺省值）作为响应头阶段超时，
+// 不为单次请求的 RequestOption.Timeout 分裂连接池。
+func (c *Client) getStreamClient() *http.Client {
+	c.streamOnce.Do(func() {
+		transport := c.newTransport()
+		// ResponseHeaderTimeout 仅作用于等待响应头阶段，一旦响应头返回即失效，
+		// 不会在服务端持续推送时中断慢速 body 读取。
+		transport.ResponseHeaderTimeout = resolveTimeout(nil, c.Timeout)
+		c.streamClient = &http.Client{
+			Transport: transport,
+		}
+	})
+	return c.streamClient
 }
 
 func (c *Client) buildQueryParams(data interface{}) (string, error) {
@@ -468,8 +499,13 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 // executeCore 处理超时、退避重试并返回原始响应，不读取响应体。
 // 网络错误（Retryable）以及命中 RetryOnStatus 的响应会按 RetryInterval 指数退避重试，等待可被 ctx 取消。
 func (c *Client) executeCore(ctx context.Context, request *http.Request, requestBody []byte) (*http.Response, error) {
-	httpClient := c.getHTTPClient()
+	return c.executeCoreWithClient(c.getHTTPClient(), ctx, request, requestBody)
+}
 
+// executeCoreWithClient 是 executeCore 的底层实现，允许传入不同的 http.Client，
+// 供流式客户端复用同一套重试逻辑。
+func (c *Client) executeCoreWithClient(httpClient *http.Client, ctx context.Context, request *http.Request, requestBody []byte) (*http.Response, error) {
+	// Retry 表示总尝试次数（含首次），Retry=3 即最多发起 3 次请求（1 次初始 + 2 次重试）。
 	attempts := c.Retry
 	if attempts <= 0 {
 		attempts = 1
@@ -520,7 +556,11 @@ func (c *Client) executeCore(ctx context.Context, request *http.Request, request
 
 // retryWait 按 retryInterval 指数退避等待，可通过 ctx 取消提前返回。
 func retryWait(ctx context.Context, retryInterval time.Duration, attempt int) error {
-	delay := retryInterval * time.Duration(1<<uint(attempt))
+	shift := uint(attempt)
+	if shift > maxRetryBackoffShift {
+		shift = maxRetryBackoffShift
+	}
+	delay := retryInterval * time.Duration(1<<shift)
 	if delay > maxRetryDelay {
 		delay = maxRetryDelay
 	}
@@ -545,17 +585,17 @@ func retryOnStatus(retryOnStatus []int, statusCode int) bool {
 }
 
 func (c *Client) formatLogMsg(requestParam, responseData []byte) ([]byte, []byte) {
-	const maxLogSize = 10240
+	return truncateBytes(requestParam, maxLogSize), truncateBytes(responseData, maxLogSize)
+}
 
-	reqData := requestParam
-	if len(reqData) > maxLogSize {
-		reqData = requestParam[:maxLogSize]
+// truncateBytes 按 UTF-8 rune 边界安全截断字节切片，避免截出非法多字节序列导致日志乱码。
+func truncateBytes(data []byte, max int) []byte {
+	if len(data) <= max {
+		return data
 	}
-
-	respData := responseData
-	if len(respData) > maxLogSize {
-		respData = responseData[:maxLogSize]
+	cut := max
+	for cut > 0 && data[cut]&0xc0 == 0x80 {
+		cut--
 	}
-
-	return reqData, respData
+	return data[:cut]
 }
