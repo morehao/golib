@@ -18,6 +18,7 @@ Components:
 - [gtrace](#gtrace) OpenTelemetry Trace initialization component
 - [gtree](#gtree) Tree structure construction tool
 - [gutil](#gutil) Common utility functions collection
+- [job](#job) Task scheduling components
 - [protocol](#protocol) Protocol components (includes ghttp, gresty)
 - [ratelimit](#ratelimit) Rate limiting component
 - [storage](#storage) Unified object storage component (supports S3, MinIO, OSS, COS, TOS)
@@ -283,6 +284,26 @@ For usage examples, refer to [gtrace usage](gtrace/README.md)
 - Type conversion
 - Slice/Map operations
 - File processing
+
+## job
+
+### Overview
+`job` is a task scheduling component package containing cron and async task sub-packages, both persisting execution records via GORM and integrating glog logging and gtrace distributed tracing.
+
+### Sub-components
+- **gcron**: Cron tasks, based on `robfig/cron/v3`, supporting second-level cron, multi-instance distributed lock mutual exclusion, and execution record persistence
+- **gasync**: Async tasks, based on `hibiken/asynq`, supporting retry, timeout, delay, priority queues, execution record persistence, and cross-process trace propagation
+
+### Features
+- Second-level cron expressions and custom timezone
+- Multi-instance distributed lock mutual exclusion (with optional auto-renewal)
+- Retry, timeout, retention, and multi-queue priority
+- Automatic execution record persistence
+- Automatic TraceID/RequestID injection and logging
+- Cross-process trace propagation
+
+### Usage
+For usage examples, refer to [job usage](job/README.md)
 
 ## protocol
 

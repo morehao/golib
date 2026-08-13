@@ -17,6 +17,7 @@
 - [gtrace](#gtrace) OpenTelemetry Trace 初始化组件
 - [gtree](#gtree) 树结构构建工具
 - [gutil](#gutil) 常用工具函数集合
+- [job](#job) 任务调度组件
 - [protocol](#protocol) 协议组件（包含 ghttp、gresty）
 - [ratelimit](#ratelimit) 限流组件
 
@@ -242,6 +243,26 @@ go get github.com/morehao/golib
 - 类型转换
 - Slice/Map 操作
 - 文件处理
+
+## job
+
+### 简介
+`job` 是任务调度组件包，包含定时任务与异步任务两个子包，均基于 GORM 持久化执行记录，并打通 glog 日志与 gtrace 链路追踪。
+
+### 子组件
+- **gcron**: 定时任务，基于 `robfig/cron/v3`，支持秒级 cron、多实例分布式锁互斥、执行记录落库
+- **gasync**: 异步任务，基于 `hibiken/asynq`，支持重试、超时、延迟、优先级队列、执行记录落库、跨进程 trace 传递
+
+### 特性
+- 秒级 cron 表达式与自定义时区
+- 多实例分布式锁互斥（可自动续期）
+- 重试、超时、保留时长、多队列优先级
+- 执行记录自动落库
+- 自动注入 TraceID、RequestID 与日志
+- 跨进程 trace 传递
+
+### 使用
+使用示例参照 [job 使用说明](job/README.md)
 
 ## protocol
 
