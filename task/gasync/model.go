@@ -7,6 +7,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const AsyncTaskRunTableName = "core_async_task_run"
+
 type AsyncTaskRunStatus string
 
 const (
@@ -34,7 +36,7 @@ type AsyncTaskRun struct {
 	RequestID  string             `gorm:"column:request_id;type:varchar(64);index:idx_request_id;comment:请求 ID"`
 }
 
-func (AsyncTaskRun) TableName() string { return "core_async_task_run" }
+func (AsyncTaskRun) TableName() string { return AsyncTaskRunTableName }
 
 type AsyncTaskRunCond struct {
 	gormdao.BaseCond

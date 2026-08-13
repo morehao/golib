@@ -26,6 +26,27 @@ func TestStoreUpsertAndGetTask(t *testing.T) {
 	require.Equal(t, "*/5 * * * *", got.Spec)
 }
 
+func TestStoreDeleteTaskByCode(t *testing.T) {
+	s := newStoreForTest(t)
+	task := &CronTask{TaskCode: "foo", TaskType: "report", Spec: "*/5 * * * *", Status: CronTaskEnabled}
+	require.NoError(t, s.upsertTask(context.Background(), task))
+
+	require.NoError(t, s.DeleteTaskByCode(context.Background(), "foo"))
+
+	got, err := s.GetTaskByCode(context.Background(), "foo")
+	require.NoError(t, err)
+	require.Equal(t, uint(0), got.ID)
+
+	list, _, err := s.ListTask(context.Background(), &CronTaskCond{TaskCode: "foo"})
+	require.NoError(t, err)
+	require.Len(t, list, 0)
+
+	var raw CronTask
+	err = s.dbGetter(context.Background()).Unscoped().Where("task_code = ?", "foo").First(&raw).Error
+	require.NoError(t, err)
+	require.NotNil(t, raw.DeletedAt.Time)
+}
+
 func TestStoreRunLifecycle(t *testing.T) {
 	s := newStoreForTest(t)
 	e := &CronTaskRun{TaskCode: "foo", TaskType: "report", RunCode: "run-1", StartAt: time.Now(), Status: TaskRunRunning, RequestID: "req-1"}

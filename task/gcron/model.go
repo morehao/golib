@@ -7,6 +7,11 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	CronTaskTableName    = "core_cron_task"
+	CronTaskRunTableName = "core_cron_task_run"
+)
+
 type CronTaskStatus string
 
 const (
@@ -34,7 +39,7 @@ type CronTask struct {
 	NextRunAt *time.Time     `gorm:"column:next_run_at;comment:下次执行时间"`
 }
 
-func (CronTask) TableName() string { return "core_cron_task" }
+func (CronTask) TableName() string { return CronTaskTableName }
 
 type CronTaskRun struct {
 	ID         uint              `gorm:"column:id;primaryKey;autoIncrement"`
@@ -51,7 +56,7 @@ type CronTaskRun struct {
 	RequestID  string            `gorm:"column:request_id;type:varchar(64);index:idx_request_id;comment:请求 ID"`
 }
 
-func (CronTaskRun) TableName() string { return "core_cron_task_run" }
+func (CronTaskRun) TableName() string { return CronTaskRunTableName }
 
 type CronTaskCond struct {
 	gormdao.BaseCond
