@@ -18,17 +18,17 @@ func newStoreForTest(t *testing.T) *store {
 
 func TestStoreUpsertAndGetTask(t *testing.T) {
 	s := newStoreForTest(t)
-	task := &CronTask{Name: "foo", Spec: "*/5 * * * *", Desc: "demo", Status: CronTaskEnabled}
+	task := &CronTask{TaskID: "foo", TaskType: "report", Spec: "*/5 * * * *", Desc: "demo", Status: CronTaskEnabled}
 	require.NoError(t, s.upsertTask(context.Background(), task))
 
-	got, err := s.GetTaskByName(context.Background(), "foo")
+	got, err := s.GetTaskByID(context.Background(), "foo")
 	require.NoError(t, err)
 	require.Equal(t, "*/5 * * * *", got.Spec)
 }
 
 func TestStoreExecutionLifecycle(t *testing.T) {
 	s := newStoreForTest(t)
-	e := &CronExecution{TaskName: "foo", StartAt: time.Now(), Status: ExecutionRunning, RequestID: "req-1"}
+	e := &CronExecution{TaskID: "foo", TaskType: "report", RunID: "run-1", StartAt: time.Now(), Status: ExecutionRunning, RequestID: "req-1"}
 	require.NoError(t, s.insertExecution(context.Background(), e))
 	require.NotZero(t, e.ID)
 

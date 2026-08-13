@@ -23,10 +23,10 @@ func TestAutoMigrate(t *testing.T) {
 	var tables []string
 	require.NoError(t, db.Raw("SELECT name FROM sqlite_master WHERE type='table'").Scan(&tables).Error)
 	require.Contains(t, tables, "core_cron_task")
-	require.Contains(t, tables, "core_cron_execution")
+	require.Contains(t, tables, "core_cron_task_run")
 }
 
 func TestTableNames(t *testing.T) {
 	require.Equal(t, "core_cron_task", CronTask{}.TableName())
-	require.Equal(t, "core_cron_execution", CronExecution{}.TableName())
+	require.Equal(t, "core_cron_task_run", CronExecution{}.TableName())
 }

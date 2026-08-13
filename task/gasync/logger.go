@@ -10,7 +10,7 @@ func newGasyncLogger(cfg *Config) (glog.Logger, *glog.LogConfig) {
 	if logConfig == nil {
 		logConfig = glog.GetDefaultLogConfig()
 	}
-	glog.AppendExtraKeys(logConfig, glog.KeyAppRequestID)
-	logger := glog.GetDefaultLogger().With("job.type", "async")
+	glog.AppendExtraKeys(logConfig, glog.KeyAppRequestID, glog.KeyRunID)
+	logger := glog.GetDefaultLogger().With(glog.KeyTaskType, "async")
 	return logger, logConfig
 }

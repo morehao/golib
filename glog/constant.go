@@ -24,6 +24,10 @@ const (
 	KeyAppTenantID  = "app.tenant.id"
 	KeyAppDeptID    = "app.dept.id"
 
+	KeyTaskType = "task.type"
+	KeyTaskID   = "task.id"
+	KeyRunID    = "task.run.id"
+
 	MsgEventNotice = "notice"
 
 	KeySkipLog                = "app.log.skip"

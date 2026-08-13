@@ -21,6 +21,7 @@ type AsyncExecution struct {
 	CreatedAt  time.Time            `gorm:"column:created_at"`
 	TaskID     string               `gorm:"column:task_id;type:varchar(64);not null;index:idx_task_id;comment:asynq 任务 ID"`
 	TaskType   string               `gorm:"column:task_type;type:varchar(128);index:idx_task_type;comment:任务类型"`
+	RunID      string               `gorm:"column:run_id;type:varchar(64);index:idx_run_id;comment:运行 ID"`
 	Queue      string               `gorm:"column:queue;type:varchar(64);comment:队列"`
 	Status     AsyncExecutionStatus `gorm:"column:status;type:varchar(16);not null;comment:状态"`
 	Retried    int                  `gorm:"column:retried;not null;default:0;comment:已重试次数"`
@@ -34,13 +35,14 @@ type AsyncExecution struct {
 	RequestID  string               `gorm:"column:request_id;type:varchar(64);index:idx_request_id;comment:请求 ID"`
 }
 
-func (AsyncExecution) TableName() string { return "core_async_execution" }
+func (AsyncExecution) TableName() string { return "core_async_task_run" }
 
 type AsyncExecutionCond struct {
 	gormdao.BaseCond
 	TaskID   string
 	TaskType string
 	Queue    string
+	RunID    string
 	Status   string
 }
 
@@ -54,6 +56,9 @@ func (c *AsyncExecutionCond) BuildCondition(db *gorm.DB, tableName string) {
 	}
 	if c.Queue != "" {
 		db.Where(tableName+".queue = ?", c.Queue)
+	}
+	if c.RunID != "" {
+		db.Where(tableName+".run_id = ?", c.RunID)
 	}
 	if c.Status != "" {
 		db.Where(tableName+".status = ?", c.Status)

@@ -17,28 +17,30 @@ func newStore(dbGetter gormdao.DBGetter) *store {
 	return &store{
 		dbGetter: dbGetter,
 		taskDao:  gormdao.NewDao[CronTask, []CronTask]("core_cron_task", "gcron_task", dbGetter, gormdao.WithoutSoftDelete()),
-		execDao:  gormdao.NewDao[CronExecution, []CronExecution]("core_cron_execution", "gcron_exec", dbGetter, gormdao.WithoutSoftDelete()),
+		execDao:  gormdao.NewDao[CronExecution, []CronExecution]("core_cron_task_run", "gcron_exec", dbGetter, gormdao.WithoutSoftDelete()),
 	}
 }
 
 func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
-	existing, err := s.GetTaskByName(ctx, t.Name)
+	existing, err := s.GetTaskByID(ctx, t.TaskID)
 	if err != nil {
 		return err
 	}
 	if existing.ID == 0 {
 		return s.taskDao.Insert(ctx, t)
 	}
+	existing.TaskType = t.TaskType
 	existing.Spec = t.Spec
 	existing.Desc = t.Desc
 	existing.Status = t.Status
+	existing.RunID = t.RunID
 	return s.taskDao.UpdateByID(ctx, existing.ID, existing)
 }
 
-func (s *store) updateRunTimes(ctx context.Context, name string, lastRun, nextRun *time.Time) error {
+func (s *store) updateRunTimes(ctx context.Context, taskID string, lastRun, nextRun *time.Time) error {
 	updates := map[string]any{"last_run_at": lastRun, "next_run_at": nextRun}
 	return s.dbGetter(ctx).Model(&CronTask{}).Table("core_cron_task").
-		Where("name = ?", name).Updates(updates).Error
+		Where("task_id = ?", taskID).Updates(updates).Error
 }
 
 func (s *store) insertExecution(ctx context.Context, e *CronExecution) error {
@@ -52,12 +54,12 @@ func (s *store) finishExecution(ctx context.Context, id uint64, endAt time.Time,
 		"status":      status,
 		"error_msg":   errMsg,
 	}
-	return s.dbGetter(ctx).Model(&CronExecution{}).Table("core_cron_execution").
+	return s.dbGetter(ctx).Model(&CronExecution{}).Table("core_cron_task_run").
 		Where("id = ?", id).Updates(updates).Error
 }
 
-func (s *store) GetTaskByName(ctx context.Context, name string) (*CronTask, error) {
-	return s.taskDao.GetByCond(ctx, &CronTaskCond{Name: name})
+func (s *store) GetTaskByID(ctx context.Context, taskID string) (*CronTask, error) {
+	return s.taskDao.GetByCond(ctx, &CronTaskCond{TaskID: taskID})
 }
 
 func (s *store) ListTask(ctx context.Context, cond *CronTaskCond) ([]CronTask, int64, error) {

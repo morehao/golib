@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const tracerName = "github.com/morehao/golib/job/gcron"
+const tracerName = "github.com/morehao/golib/task/gcron"
 
 func buildTraceContext(ctx context.Context, name string) (context.Context, trace.Span, string, string, string) {
 	tr := otel.Tracer(tracerName)

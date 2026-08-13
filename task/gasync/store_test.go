@@ -23,7 +23,7 @@ func TestAsyncAutoMigrate(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 	var tables []string
 	require.NoError(t, db.Raw("SELECT name FROM sqlite_master WHERE type='table'").Scan(&tables).Error)
-	require.Contains(t, tables, "core_async_execution")
+	require.Contains(t, tables, "core_async_task_run")
 }
 
 func TestAsyncExecutionLifecycle(t *testing.T) {

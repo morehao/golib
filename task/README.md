@@ -1,9 +1,11 @@
-# job 任务包
+# task 任务包
 
-`job` 是任务调度组件包，包含定时任务与异步任务两个子包，均基于 GORM 持久化执行记录，并打通 glog 日志与 gtrace 链路追踪。
+`task` 是任务调度组件包，包含定时任务与异步任务两个子包，均基于 GORM 持久化执行记录，并打通 glog 日志与 gtrace 链路追踪。
 
 - **gcron**: 定时任务，基于 `robfig/cron/v3`，支持秒级 cron、多实例分布式锁互斥、执行记录落库。
 - **gasync**: 异步任务，基于 `hibiken/asynq`，支持重试、超时、延迟、优先级队列、执行记录落库、跨进程 trace 传递。
+
+两个子包统一了任务标识模型：`task_id`（任务标识）、`task_type`（任务类型）、`run_id`（每次运行的唯一 ID，注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印）、`trace_id`、`request_id`。
 
 ## gcron
 
@@ -17,8 +19,9 @@
 - 支持自定义时区（`Location`）
 - 支持多实例分布式锁互斥（基于 distlock，可选自动续期）
 - 执行记录自动落库（running/success/failed/skipped）
-- 自动注入 TraceID、RequestID 与日志
+- 自动注入 TraceID、RequestID、RunID 与日志
 - 任务处理器 panic 安全（自动 recover）
+- 任务需显式指定 `TaskID` 与 `TaskType`（均不允许为空）
 
 ### 数据表
 
@@ -26,8 +29,8 @@
 
 | 表名 | 说明 |
 |---|---|
-| `core_cron_task` | 定时任务定义（名称、cron 表达式、描述、状态等） |
-| `core_cron_execution` | 定时任务执行记录（起止时间、耗时、状态、trace/request id 等） |
+| `core_cron_task` | 定时任务定义（task_id、task_type、cron 表达式、描述、状态、run_id 等） |
+| `core_cron_task_run` | 定时任务执行记录（task_id、task_type、run_id、起止时间、耗时、状态、trace/request id 等） |
 
 ### 使用示例
 
@@ -36,10 +39,9 @@ package main
 
 import (
 	"context"
-	"time"
 
 	"github.com/morehao/golib/distlock"
-	"github.com/morehao/golib/job/gcron"
+	"github.com/morehao/golib/task/gcron"
 	"gorm.io/gorm"
 )
 
@@ -57,9 +59,10 @@ func main() {
 
 	// 注册任务
 	if err := s.Register(gcron.Task{
-		Name: "demo-task",
-		Spec: "*/5 * * * * *",
-		Desc: "示例任务",
+		TaskID:   "demo-task",
+		TaskType: "report",
+		Spec:     "*/5 * * * * *",
+		Desc:     "示例任务",
 		Handler: func(ctx context.Context) error {
 			// TODO: 业务逻辑
 			return nil
@@ -73,7 +76,6 @@ func main() {
 
 	// 退出前停止
 	defer s.Stop(context.Background())
-	_ = time.Second
 }
 ```
 
@@ -90,6 +92,7 @@ func main() {
 - 基于 Redis 的任务队列
 - 执行记录自动落库（pending/processing/completed/failed）
 - 跨进程 trace 传递与统一日志
+- 自动注入 RunID，可通过日志 `extra_keys` 配置 `task.run.id`
 - 支持自定义并发数
 
 ### 数据表
@@ -98,7 +101,7 @@ func main() {
 
 | 表名 | 说明 |
 |---|---|
-| `core_async_execution` | 异步任务执行记录（任务 ID、类型、队列、状态、重试、trace/request id 等） |
+| `core_async_task_run` | 异步任务执行记录（task_id、task_type、run_id、队列、状态、重试、trace/request id 等） |
 
 ### 使用示例
 
@@ -109,7 +112,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/morehao/golib/job/gasync"
+	"github.com/morehao/golib/task/gasync"
 	"gorm.io/gorm"
 )
 
@@ -167,3 +170,15 @@ func main() {
 	}
 }
 ```
+
+## 日志追踪
+
+任务执行时会将以下字段写入 ctx，供 `glog`（slog/zap driver）在配置了对应 `extra_keys` 后自动打印：
+
+| 字段 | glog 常量 | 含义 |
+|---|---|---|
+| `task.type` | `glog.KeyTaskType` | 任务类型（gcron 为 `TaskType`，gasync 为 `async`） |
+| `task.id` | `glog.KeyTaskID` | 任务标识 |
+| `task.run.id` | `glog.KeyRunID` | 每次运行的唯一 ID |
+
+在服务启动的日志配置里将 `task.run.id` 加入 `extra_keys`，即可在任务执行日志中追踪单次运行。

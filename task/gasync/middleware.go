@@ -6,25 +6,31 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/morehao/golib/glog"
+	taskkit "github.com/morehao/golib/task"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
-const gasyncTracerName = "github.com/morehao/golib/job/gasync"
+const gasyncTracerName = "github.com/morehao/golib/task/gasync"
 
 func (s *Server) logMiddleware(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 		requestID := glog.GenRequestID()
+		runID := taskkit.GenRunID()
 		queue, _ := asynq.GetQueueName(ctx)
 
 		ctx = context.WithValue(ctx, glog.KeyAppRequestID, requestID)
+		ctx = context.WithValue(ctx, glog.KeyRunID, runID)
+		ctx = context.WithValue(ctx, glog.KeyTaskID, task.Type())
+		ctx = context.WithValue(ctx, glog.KeyTaskType, "async")
 
 		logger := s.logger.With(
-			"job.type", "async",
-			"job.name", task.Type(),
+			glog.KeyTaskType, "async",
+			glog.KeyTaskID, task.Type(),
 			"queue", queue,
 			glog.KeyAppRequestID, requestID,
+			glog.KeyRunID, runID,
 		)
 		start := time.Now()
 		logger.Infow(ctx, "async task start", "task_id", taskResultID(ctx))
@@ -63,11 +69,13 @@ func (s *Server) executionRecordMiddleware(next asynq.Handler) asynq.Handler {
 
 		traceID, _ := ctx.Value(glog.KeyTraceID).(string)
 		requestID := glog.GetRequestID(ctx)
+		runID, _ := ctx.Value(glog.KeyRunID).(string)
 
 		start := time.Now()
 		exec := &AsyncExecution{
 			TaskID:    taskID,
 			TaskType:  task.Type(),
+			RunID:     runID,
 			Queue:     queue,
 			Status:    AsyncProcessing,
 			Retried:   retried,

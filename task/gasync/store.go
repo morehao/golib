@@ -15,7 +15,7 @@ type store struct {
 func newStore(dbGetter gormdao.DBGetter) *store {
 	return &store{
 		dbGetter: dbGetter,
-		execDao:  gormdao.NewDao[AsyncExecution, []AsyncExecution]("core_async_execution", "gasync_exec", dbGetter, gormdao.WithoutSoftDelete()),
+		execDao:  gormdao.NewDao[AsyncExecution, []AsyncExecution]("core_async_task_run", "gasync_exec", dbGetter, gormdao.WithoutSoftDelete()),
 	}
 }
 
@@ -30,7 +30,7 @@ func (s *store) finishExecution(ctx context.Context, id uint64, endAt time.Time,
 		"status":      status,
 		"error_msg":   errMsg,
 	}
-	return s.dbGetter(ctx).Model(&AsyncExecution{}).Table("core_async_execution").
+	return s.dbGetter(ctx).Model(&AsyncExecution{}).Table("core_async_task_run").
 		Where("id = ?", id).Updates(updates).Error
 }
 

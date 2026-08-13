@@ -6,6 +6,7 @@ import (
 
 	"github.com/morehao/golib/distlock"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/task"
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 )
@@ -13,7 +14,8 @@ import (
 type TaskFunc func(ctx context.Context) error
 
 type Task struct {
-	Name        string
+	TaskID      string
+	TaskType    string
 	Spec        string
 	Desc        string
 	Handler     TaskFunc
@@ -50,7 +52,7 @@ func New(db *gorm.DB, cfg *Config, lock distlock.Lock, opts ...Option) *Schedule
 	c := cron.New(cronOpts...)
 
 	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
-	logger, _ := newTaskLogger(cfg, "")
+	logger, _ := newTaskLogger(cfg, "", "cron")
 
 	return &Scheduler{
 		cron:   c,
@@ -62,8 +64,11 @@ func New(db *gorm.DB, cfg *Config, lock distlock.Lock, opts ...Option) *Schedule
 }
 
 func (s *Scheduler) Register(t Task) error {
-	if t.Name == "" {
-		return errEmptyName
+	if t.TaskID == "" {
+		return errEmptyTaskID
+	}
+	if t.TaskType == "" {
+		return errEmptyTaskType
 	}
 	if t.Spec == "" {
 		return errEmptySpec
@@ -71,10 +76,10 @@ func (s *Scheduler) Register(t Task) error {
 	if t.Handler == nil {
 		return errNilHandler
 	}
-	if existing, err := s.store.GetTaskByName(context.Background(), t.Name); err != nil {
+	if existing, err := s.store.GetTaskByID(context.Background(), t.TaskID); err != nil {
 		return err
 	} else if existing.ID != 0 {
-		return errDuplicateName
+		return errDuplicateTask
 	}
 
 	enableLock := t.EnableLock || s.cfg.EnableLock
@@ -82,7 +87,7 @@ func (s *Scheduler) Register(t Task) error {
 		return errLockNotSet
 	}
 
-	taskEntity := &CronTask{Name: t.Name, Spec: t.Spec, Desc: t.Desc, Status: CronTaskEnabled}
+	taskEntity := &CronTask{TaskID: t.TaskID, TaskType: t.TaskType, Spec: t.Spec, Desc: t.Desc, Status: CronTaskEnabled}
 	if err := s.store.upsertTask(context.Background(), taskEntity); err != nil {
 		return err
 	}
@@ -96,31 +101,37 @@ func (s *Scheduler) Register(t Task) error {
 	var entryID cron.EntryID
 	entryID, err := s.cron.AddFunc(t.Spec, func() {
 		ctx := context.Background()
+		runID := task.GenRunID()
+		ctx = context.WithValue(ctx, glog.KeyRunID, runID)
+		ctx = context.WithValue(ctx, glog.KeyTaskID, t.TaskID)
+		ctx = context.WithValue(ctx, glog.KeyTaskType, t.TaskType)
 
 		if enableLock {
 			taskLock := distlock.NewDistLock(s.lock, &distlock.Config{
 				AutoRenewal: autoRenewal,
 				TTL:         lockTTL,
-				Key:         "cron:lock:" + t.Name,
+				Key:         "cron:lock:" + t.TaskID,
 			})
 			ok, lerr := taskLock.Lock(ctx)
 			if lerr != nil || !ok {
-				s.logger.Infow(ctx, "cron task skipped, lock not acquired", "job.name", t.Name)
+				s.logger.Infow(ctx, "cron task skipped, lock not acquired", glog.KeyTaskID, t.TaskID, glog.KeyRunID, runID)
 				_ = s.store.insertExecution(ctx, &CronExecution{
-					TaskName: t.Name, StartAt: time.Now(), Status: ExecutionSkipped, RequestID: glog.GenRequestID(),
+					TaskID: t.TaskID, TaskType: t.TaskType, RunID: runID, StartAt: time.Now(), Status: ExecutionSkipped, RequestID: glog.GenRequestID(),
 				})
 				return
 			}
 			defer taskLock.Unlock(context.Background())
 		}
 
-		taskLogger, _ := newTaskLogger(s.cfg, t.Name)
-		ctx, span, traceID, _, requestID := buildTraceContext(ctx, t.Name)
+		taskLogger, _ := newTaskLogger(s.cfg, t.TaskID, t.TaskType)
+		ctx, span, traceID, _, requestID := buildTraceContext(ctx, t.TaskID)
 		defer span.End()
 		start := time.Now()
 
 		exec := &CronExecution{
-			TaskName:  t.Name,
+			TaskID:    t.TaskID,
+			TaskType:  t.TaskType,
+			RunID:     runID,
 			StartAt:   start,
 			Status:    ExecutionRunning,
 			TraceID:   traceID,
@@ -135,7 +146,7 @@ func (s *Scheduler) Register(t Task) error {
 			next := entry.Next
 			nextRun = &next
 		}
-		if rerr := s.store.updateRunTimes(ctx, t.Name, &start, nextRun); rerr != nil {
+		if rerr := s.store.updateRunTimes(ctx, t.TaskID, &start, nextRun); rerr != nil {
 			taskLogger.Errorw(ctx, "update run times failed", "error", rerr)
 		}
 
@@ -150,7 +161,7 @@ func (s *Scheduler) Register(t Task) error {
 		if ferr := s.store.finishExecution(ctx, exec.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
 			taskLogger.Errorw(ctx, "finish execution failed", "error", ferr)
 		}
-		taskLogger.Infow(ctx, "cron task done", "job.name", t.Name, "status", status, "duration_ms", end.Sub(start).Milliseconds())
+		taskLogger.Infow(ctx, "cron task done", glog.KeyTaskID, t.TaskID, glog.KeyRunID, runID, "status", status, "duration_ms", end.Sub(start).Milliseconds())
 	})
 
 	return err
