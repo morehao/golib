@@ -2,6 +2,7 @@ package gresty
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,34 +22,75 @@ func TestNewClient(t *testing.T) {
 	client := NewClient()
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.Client)
+	assert.NotNil(t, client.logger)
+}
+
+func TestNewClient_WithLogger(t *testing.T) {
+	logger := glog.GetDefaultLogger()
+	client := NewClient(WithLogger(logger))
+	assert.Equal(t, logger, client.logger)
+}
+
+func TestNewClient_WithLogConfig(t *testing.T) {
+	client := NewClient(WithLogConfig(glog.GetDefaultLogConfig()))
+	assert.NotNil(t, client.logger)
 }
 
 func TestClientGetRequest(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Encode()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
 	client := NewClient()
 
 	resp, err := client.R().
 		SetQueryParam("name", "test").
-		Get("https://httpbin.org/get")
+		Get(srv.URL)
 
 	assert.Nil(t, err)
 	assert.NotNil(t, resp)
-	assert.Equal(t, 200, resp.StatusCode())
+	assert.Equal(t, http.StatusOK, resp.StatusCode())
+	assert.Equal(t, "name=test", gotQuery)
 }
 
 func TestClientPostRequest(t *testing.T) {
+	var gotMethod string
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
 	client := NewClient()
 
 	body := map[string]string{"name": "test"}
 	resp, err := client.R().
 		SetBody(body).
-		Post("https://httpbin.org/post")
+		Post(srv.URL)
 
 	assert.Nil(t, err)
 	assert.NotNil(t, resp)
-	assert.Equal(t, 200, resp.StatusCode())
+	assert.Equal(t, http.StatusOK, resp.StatusCode())
+	assert.Equal(t, http.MethodPost, gotMethod)
+	assert.Equal(t, map[string]string{"name": "test"}, gotBody)
 }
 
 func TestClientWithTraceID(t *testing.T) {
+	var gotTraceID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceID = r.Header.Get(glog.HeaderRequestID)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
 	client := NewClient()
 
 	ctx := context.WithValue(context.Background(), glog.KeyTraceID, "trace-123")
@@ -56,11 +98,12 @@ func TestClientWithTraceID(t *testing.T) {
 	resp, err := client.R().
 		SetContext(ctx).
 		SetQueryParam("name", "test").
-		Get("https://httpbin.org/get")
+		Get(srv.URL)
 
 	assert.Nil(t, err)
 	assert.NotNil(t, resp)
-	assert.Equal(t, 200, resp.StatusCode())
+	assert.Equal(t, http.StatusOK, resp.StatusCode())
+	assert.NotEmpty(t, gotTraceID)
 }
 
 func TestSSEStream(t *testing.T) {
