@@ -31,7 +31,7 @@ func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
 	}
 	existing.TaskType = t.TaskType
 	existing.Spec = t.Spec
-	existing.Desc = t.Desc
+	existing.Description = t.Description
 	existing.Status = t.Status
 	return s.taskDao.UpdateByID(ctx, existing.ID, existing)
 }

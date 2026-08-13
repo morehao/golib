@@ -18,7 +18,7 @@ func newStoreForTest(t *testing.T) *store {
 
 func TestStoreUpsertAndGetTask(t *testing.T) {
 	s := newStoreForTest(t)
-	task := &CronTask{TaskCode: "foo", TaskType: "report", Spec: "*/5 * * * *", Desc: "demo", Status: CronTaskEnabled}
+	task := &CronTask{TaskCode: "foo", TaskType: "report", Spec: "*/5 * * * *", Description: "demo", Status: CronTaskEnabled}
 	require.NoError(t, s.upsertTask(context.Background(), task))
 
 	got, err := s.GetTaskByCode(context.Background(), "foo")

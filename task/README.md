@@ -62,7 +62,7 @@ func main() {
 		TaskCode:  "demo-task",
 		TaskType: "report",
 		Spec:     "*/5 * * * * *",
-		Desc:     "示例任务",
+		Description: "示例任务",
 		Handler: func(ctx context.Context) error {
 			// TODO: 业务逻辑
 			return nil

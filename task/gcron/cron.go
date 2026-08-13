@@ -17,7 +17,7 @@ type Task struct {
 	TaskCode    string
 	TaskType    string
 	Spec        string
-	Desc        string
+	Description string
 	Handler     TaskFunc
 	EnableLock  bool
 	LockTTL     time.Duration
@@ -87,7 +87,7 @@ func (s *Scheduler) Register(t Task) error {
 		return errLockNotSet
 	}
 
-	taskEntity := &CronTask{TaskCode: t.TaskCode, TaskType: t.TaskType, Spec: t.Spec, Desc: t.Desc, Status: CronTaskEnabled}
+	taskEntity := &CronTask{TaskCode: t.TaskCode, TaskType: t.TaskType, Spec: t.Spec, Description: t.Description, Status: CronTaskEnabled}
 	if err := s.store.upsertTask(context.Background(), taskEntity); err != nil {
 		return err
 	}
