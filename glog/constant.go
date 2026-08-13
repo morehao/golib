@@ -25,8 +25,8 @@ const (
 	KeyAppDeptID    = "app.dept.id"
 
 	KeyTaskType = "task.type"
-	KeyTaskID   = "task.id"
-	KeyRunID    = "task.run.id"
+	KeyTaskCode = "task.code"
+	KeyRunCode  = "task.run.code"
 
 	MsgEventNotice = "notice"
 

@@ -14,7 +14,7 @@ import (
 type TaskFunc func(ctx context.Context) error
 
 type Task struct {
-	TaskID      string
+	TaskCode    string
 	TaskType    string
 	Spec        string
 	Desc        string
@@ -64,7 +64,7 @@ func New(db *gorm.DB, cfg *Config, lock distlock.Lock, opts ...Option) *Schedule
 }
 
 func (s *Scheduler) Register(t Task) error {
-	if t.TaskID == "" {
+	if t.TaskCode == "" {
 		return errEmptyTaskID
 	}
 	if t.TaskType == "" {
@@ -76,7 +76,7 @@ func (s *Scheduler) Register(t Task) error {
 	if t.Handler == nil {
 		return errNilHandler
 	}
-	if existing, err := s.store.GetTaskByID(context.Background(), t.TaskID); err != nil {
+	if existing, err := s.store.GetTaskByCode(context.Background(), t.TaskCode); err != nil {
 		return err
 	} else if existing.ID != 0 {
 		return errDuplicateTask
@@ -87,7 +87,7 @@ func (s *Scheduler) Register(t Task) error {
 		return errLockNotSet
 	}
 
-	taskEntity := &CronTask{TaskID: t.TaskID, TaskType: t.TaskType, Spec: t.Spec, Desc: t.Desc, Status: CronTaskEnabled}
+	taskEntity := &CronTask{TaskCode: t.TaskCode, TaskType: t.TaskType, Spec: t.Spec, Desc: t.Desc, Status: CronTaskEnabled}
 	if err := s.store.upsertTask(context.Background(), taskEntity); err != nil {
 		return err
 	}
@@ -101,39 +101,39 @@ func (s *Scheduler) Register(t Task) error {
 	var entryID cron.EntryID
 	entryID, err := s.cron.AddFunc(t.Spec, func() {
 		ctx := context.Background()
-		runID := task.GenRunID()
-		ctx = context.WithValue(ctx, glog.KeyRunID, runID)
-		ctx = context.WithValue(ctx, glog.KeyTaskID, t.TaskID)
+		runCode := task.GenRunID()
+		ctx = context.WithValue(ctx, glog.KeyRunCode, runCode)
+		ctx = context.WithValue(ctx, glog.KeyTaskCode, t.TaskCode)
 		ctx = context.WithValue(ctx, glog.KeyTaskType, t.TaskType)
 
 		if enableLock {
 			taskLock := distlock.NewDistLock(s.lock, &distlock.Config{
 				AutoRenewal: autoRenewal,
 				TTL:         lockTTL,
-				Key:         "cron:lock:" + t.TaskID,
+				Key:         "cron:lock:" + t.TaskCode,
 			})
 			ok, lerr := taskLock.Lock(ctx)
 			if lerr != nil || !ok {
-				s.logger.Infow(ctx, "cron task skipped, lock not acquired", glog.KeyTaskID, t.TaskID, glog.KeyRunID, runID)
-				_ = s.store.insertExecution(ctx, &CronExecution{
-					TaskID: t.TaskID, TaskType: t.TaskType, RunID: runID, StartAt: time.Now(), Status: ExecutionSkipped, RequestID: glog.GenRequestID(),
+				s.logger.Infow(ctx, "cron task skipped, lock not acquired", glog.KeyTaskCode, t.TaskCode, glog.KeyRunCode, runCode)
+				_ = s.store.insertExecution(ctx, &CronTaskRun{
+					TaskCode: t.TaskCode, TaskType: t.TaskType, RunCode: runCode, StartAt: time.Now(), Status: TaskRunSkipped, RequestID: glog.GenRequestID(),
 				})
 				return
 			}
 			defer taskLock.Unlock(context.Background())
 		}
 
-		taskLogger, _ := newTaskLogger(s.cfg, t.TaskID, t.TaskType)
-		ctx, span, traceID, _, requestID := buildTraceContext(ctx, t.TaskID)
+		taskLogger, _ := newTaskLogger(s.cfg, t.TaskCode, t.TaskType)
+		ctx, span, traceID, _, requestID := buildTraceContext(ctx, t.TaskCode)
 		defer span.End()
 		start := time.Now()
 
-		exec := &CronExecution{
-			TaskID:    t.TaskID,
+		exec := &CronTaskRun{
+			TaskCode:  t.TaskCode,
 			TaskType:  t.TaskType,
-			RunID:     runID,
+			RunCode:   runCode,
 			StartAt:   start,
-			Status:    ExecutionRunning,
+			Status:    TaskRunRunning,
 			TraceID:   traceID,
 			RequestID: requestID,
 		}
@@ -146,22 +146,22 @@ func (s *Scheduler) Register(t Task) error {
 			next := entry.Next
 			nextRun = &next
 		}
-		if rerr := s.store.updateRunTimes(ctx, t.TaskID, &start, nextRun); rerr != nil {
+		if rerr := s.store.updateRunTimes(ctx, t.TaskCode, &start, nextRun); rerr != nil {
 			taskLogger.Errorw(ctx, "update run times failed", "error", rerr)
 		}
 
 		err := safeRun(ctx, t.Handler)
 		end := time.Now()
-		status := ExecutionSuccess
+		status := TaskRunSuccess
 		errMsg := ""
 		if err != nil {
-			status = ExecutionFailed
+			status = TaskRunFailed
 			errMsg = err.Error()
 		}
 		if ferr := s.store.finishExecution(ctx, exec.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
 			taskLogger.Errorw(ctx, "finish execution failed", "error", ferr)
 		}
-		taskLogger.Infow(ctx, "cron task done", glog.KeyTaskID, t.TaskID, glog.KeyRunID, runID, "status", status, "duration_ms", end.Sub(start).Milliseconds())
+		taskLogger.Infow(ctx, "cron task done", glog.KeyTaskCode, t.TaskCode, glog.KeyRunCode, runCode, "status", status, "duration_ms", end.Sub(start).Milliseconds())
 	})
 
 	return err

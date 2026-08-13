@@ -28,5 +28,5 @@ func TestAutoMigrate(t *testing.T) {
 
 func TestTableNames(t *testing.T) {
 	require.Equal(t, "core_cron_task", CronTask{}.TableName())
-	require.Equal(t, "core_cron_task_run", CronExecution{}.TableName())
+	require.Equal(t, "core_cron_task_run", CronTaskRun{}.TableName())
 }
