@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 	"resty.dev/v3"
 )
 
@@ -26,24 +28,24 @@ func (m *loggingMiddleware) handle(resp *resty.Response) error {
 	}
 
 	fields := []any{
-		glog.KeyNetworkProtocolName, glog.ValueNetworkProtoHTTP,
-		glog.KeyUrlFull, resp.Request.URL,
-		glog.KeyHttpRequestMethod, resp.Request.Method,
-		glog.KeyHttpResponseStatusCode, resp.StatusCode(),
-		glog.KeyAppRequestDurationMs, glog.GetRequestCost(resp.Request.Time, time.Now()),
-		glog.KeyUrlQuery, resp.Request.QueryParams.Encode(),
+		gconstant.KeyNetworkProtocolName, gconstant.ValueNetworkProtoHTTP,
+		gconstant.KeyUrlFull, resp.Request.URL,
+		gconstant.KeyHttpRequestMethod, resp.Request.Method,
+		gconstant.KeyHttpResponseStatusCode, resp.StatusCode(),
+		gconstant.KeyAppRequestDurationMs, gutil.GetRequestCost(resp.Request.Time, time.Now()),
+		gconstant.KeyUrlQuery, resp.Request.QueryParams.Encode(),
 	}
 
 	if resp.Request.Body != nil {
-		fields = append(fields, glog.KeyHttpRequestBody, resp.Request.Body)
+		fields = append(fields, gconstant.KeyHttpRequestBody, resp.Request.Body)
 	}
 
 	if !isStreaming(resp) {
-		fields = append(fields, glog.KeyHttpResponseBody, truncate(resp.String(), maxBodySize))
+		fields = append(fields, gconstant.KeyHttpResponseBody, truncate(resp.String(), maxBodySize))
 	}
 
 	if resp.IsError() {
-		fields = append(fields, glog.KeyAppErrorMessage, resp.Error())
+		fields = append(fields, gconstant.KeyAppErrorMessage, resp.Error())
 		m.logger.Errorw(ctx, "HTTP request failed", fields...)
 	} else {
 		m.logger.Infow(ctx, "HTTP request success", fields...)

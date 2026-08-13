@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -24,17 +26,17 @@ func InjectTraceAndRequestID(ctx context.Context, header http.Header) http.Heade
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(header))
 	spanCtx := trace.SpanContextFromContext(ctx)
 	if spanCtx.IsValid() {
-		header.Set(glog.HeaderTraceParent, fmt.Sprintf("00-%s-%s-%s", spanCtx.TraceID().String(), spanCtx.SpanID().String(), spanCtx.TraceFlags().String()))
+		header.Set(gconstant.HeaderTraceParent, fmt.Sprintf("00-%s-%s-%s", spanCtx.TraceID().String(), spanCtx.SpanID().String(), spanCtx.TraceFlags().String()))
 		if traceState := spanCtx.TraceState().String(); traceState != "" {
-			header.Set(glog.HeaderTraceState, traceState)
+			header.Set(gconstant.HeaderTraceState, traceState)
 		}
 	}
 
 	requestID := glog.GetRequestID(ctx)
 	if requestID != "" {
-		header.Set(glog.HeaderRequestID, requestID)
-	} else if header.Get(glog.HeaderRequestID) == "" {
-		header.Set(glog.HeaderRequestID, glog.GenRequestID())
+		header.Set(gconstant.HeaderRequestID, requestID)
+	} else if header.Get(gconstant.HeaderRequestID) == "" {
+		header.Set(gconstant.HeaderRequestID, gutil.GenUUID())
 	}
 
 	return header

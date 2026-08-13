@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gconstant"
+	"github.com/morehao/golib/gutil"
 	_ "github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
@@ -76,7 +77,7 @@ func TestGet(t *testing.T) {
 		RequestBody: map[string]string{"foo": "bar"},
 	})
 	assert.Nil(t, err)
-	t.Log(glog.ToJsonString(res))
+	t.Log(gutil.ToJsonString(res))
 }
 
 func TestGetJSON(t *testing.T) {
@@ -257,7 +258,7 @@ func TestGetInjectsOTelTraceAndRequestID(t *testing.T) {
 
 	ctx, span := tp.Tracer("ghttp-test").Start(context.Background(), "outbound")
 	defer span.End()
-	ctx = context.WithValue(ctx, glog.KeyAppRequestID, requestID)
+	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
 
 	_, err := client.Get(ctx, "/", RequestOption{
 		Headers: map[string]string{

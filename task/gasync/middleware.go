@@ -5,7 +5,10 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gtrace"
+	"github.com/morehao/golib/gutil"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -15,18 +18,18 @@ const gasyncTracerName = "github.com/morehao/golib/task/gasync"
 
 func (s *Server) logMiddleware(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
-		requestID := glog.GenRequestID()
+		requestID := gutil.GenUUID()
 		queue, _ := asynq.GetQueueName(ctx)
 
-		ctx = context.WithValue(ctx, glog.KeyAppRequestID, requestID)
-		ctx = context.WithValue(ctx, glog.KeyRunCode, taskResultID(ctx))
-		ctx = context.WithValue(ctx, glog.KeyTaskType, "async")
+		ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
+		ctx = context.WithValue(ctx, gconstant.KeyRunCode, taskResultID(ctx))
+		ctx = context.WithValue(ctx, gconstant.KeyTaskType, "async")
 
 		logger := s.logger.With(
-			glog.KeyTaskType, "async",
+			gconstant.KeyTaskType, "async",
 			"queue", queue,
-			glog.KeyAppRequestID, requestID,
-			glog.KeyRunCode, taskResultID(ctx),
+			gconstant.KeyAppRequestID, requestID,
+			gconstant.KeyRunCode, taskResultID(ctx),
 		)
 		start := time.Now()
 		logger.Infow(ctx, "async task start", "run_code", taskResultID(ctx))
@@ -48,9 +51,7 @@ func (s *Server) traceMiddleware(next asynq.Handler) asynq.Handler {
 		ctx, span := tracer.Start(ctx, task.Type(), trace.WithSpanKind(trace.SpanKindConsumer))
 		defer span.End()
 
-		spanCtx := span.SpanContext()
-		ctx = context.WithValue(ctx, glog.KeyTraceID, spanCtx.TraceID().String())
-		ctx = context.WithValue(ctx, glog.KeySpanID, spanCtx.SpanID().String())
+		ctx = gtrace.InjectTraceFields(ctx)
 
 		return next.ProcessTask(ctx, task)
 	})
@@ -63,7 +64,7 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 		retried, _ := asynq.GetRetryCount(ctx)
 		maxRetry, _ := asynq.GetMaxRetry(ctx)
 
-		traceID, _ := ctx.Value(glog.KeyTraceID).(string)
+		traceID, _ := ctx.Value(gconstant.KeyTraceID).(string)
 		requestID := glog.GetRequestID(ctx)
 
 		start := time.Now()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 	"github.com/redis/go-redis/v9"
 )
@@ -17,7 +18,7 @@ func New(cfg *RedisConfig, opts ...Option) (*redis.Client, error) {
 	for _, opt := range opts {
 		opt.apply(cfg)
 	}
-	glog.AppendExtraKeys(cfg.loggerConfig, glog.KeyAppRequestID)
+	glog.AppendExtraKeys(cfg.loggerConfig, gconstant.KeyAppRequestID)
 
 	opt := &redis.Options{
 		Addr:             cfg.Addr,

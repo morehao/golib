@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gconstant"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,7 +14,7 @@ func TestBuildTraceContext(t *testing.T) {
 	require.NotEmpty(t, traceID)
 	require.NotEmpty(t, spanID)
 	require.NotEmpty(t, requestID)
-	require.Equal(t, traceID, ctx.Value(glog.KeyTraceID))
-	require.Equal(t, spanID, ctx.Value(glog.KeySpanID))
-	require.Equal(t, requestID, ctx.Value(glog.KeyAppRequestID))
+	require.Equal(t, traceID, ctx.Value(gconstant.KeyTraceID))
+	require.Equal(t, spanID, ctx.Value(gconstant.KeySpanID))
+	require.Equal(t, requestID, ctx.Value(gconstant.KeyAppRequestID))
 }

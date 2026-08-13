@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // slogBaseCallerSkip 是从 logSkip 内 runtime.Callers 抓取调用点时，到"调用 glog API 的那一帧"的固定栈帧数。
@@ -320,20 +320,20 @@ func normalizeKVs(kvs []any) []any {
 }
 
 func (l *slogLogger) extractFields(ctx context.Context, dst []glog.Field) []glog.Field {
+	hasOTELTraceFields := false
+
 	if l.enableOTELTrace {
-		sc := trace.SpanFromContext(ctx).SpanContext()
-		if sc.IsValid() {
-			dst = append(dst,
-				glog.Field{Key: glog.KeyTraceID, Value: sc.TraceID().String()},
-				glog.Field{Key: glog.KeySpanID, Value: sc.SpanID().String()},
-				glog.Field{Key: glog.KeyTraceFlags, Value: sc.TraceFlags().String()},
-			)
+		for _, key := range []string{gconstant.KeyTraceID, gconstant.KeySpanID, gconstant.KeyTraceFlags} {
+			if v := ctx.Value(key); v != nil {
+				hasOTELTraceFields = true
+				dst = append(dst, glog.Field{Key: key, Value: v})
+			}
 		}
 	}
 
 	if l.cfg != nil {
 		for _, key := range l.cfg.ExtraKeys {
-			if l.enableOTELTrace && isOTELKey(key) {
+			if hasOTELTraceFields && isOTELKey(key) {
 				continue
 			}
 			if v := ctx.Value(key); v != nil {
@@ -346,7 +346,7 @@ func (l *slogLogger) extractFields(ctx context.Context, dst []glog.Field) []glog
 }
 
 func isOTELKey(key string) bool {
-	return key == glog.KeyTraceID || key == glog.KeySpanID || key == glog.KeyTraceFlags
+	return key == gconstant.KeyTraceID || key == gconstant.KeySpanID || key == gconstant.KeyTraceFlags
 }
 
 var fieldsPool = sync.Pool{

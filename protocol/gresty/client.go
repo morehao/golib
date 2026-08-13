@@ -3,6 +3,7 @@ package gresty
 import (
 	"context"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/protocol"
 	"resty.dev/v3"
@@ -26,7 +27,7 @@ func WithLogConfig(cfg *glog.LogConfig) Option {
 		logger, err := glog.NewLogger(cfg)
 		if err != nil {
 			glog.GetDefaultLogger().Warnw(context.Background(),
-				"gresty: create logger failed, fallback to default", glog.KeyErrorMessage, err)
+				"gresty: create logger failed, fallback to default", gconstant.KeyErrorMessage, err)
 			c.logger = glog.GetDefaultLogger()
 			return
 		}

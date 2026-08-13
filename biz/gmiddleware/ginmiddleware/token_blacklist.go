@@ -2,8 +2,8 @@ package ginmiddleware
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/biz/gcontext/gincontext"
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/gcrypto"
 	"github.com/morehao/golib/gerror"
 	"github.com/morehao/golib/glog"

@@ -1,6 +1,9 @@
 package gcron
 
-import "github.com/morehao/golib/glog"
+import (
+	"github.com/morehao/golib/gconstant"
+	"github.com/morehao/golib/glog"
+)
 
 func newTaskLogger(cfg *Config, taskCode, taskType string) (glog.Logger, *glog.LogConfig) {
 	logConfig := cfg.LogConfig
@@ -10,10 +13,10 @@ func newTaskLogger(cfg *Config, taskCode, taskType string) (glog.Logger, *glog.L
 	if logConfig == nil {
 		logConfig = glog.GetDefaultLogConfig()
 	}
-	glog.AppendExtraKeys(logConfig, glog.KeyAppRequestID, glog.KeyRunCode)
-	fields := []any{glog.KeyTaskType, taskType}
+	glog.AppendExtraKeys(logConfig, gconstant.KeyAppRequestID, gconstant.KeyRunCode)
+	fields := []any{gconstant.KeyTaskType, taskType}
 	if taskCode != "" {
-		fields = append(fields, glog.KeyTaskCode, taskCode)
+		fields = append(fields, gconstant.KeyTaskCode, taskCode)
 	}
 	logger := glog.GetDefaultLogger().With(fields...)
 	return logger, logConfig

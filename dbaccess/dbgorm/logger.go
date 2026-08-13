@@ -5,7 +5,9 @@ import (
 	"errors"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -32,7 +34,7 @@ func newOrmLogger(cfg *ormConfig) (*ormLogger, error) {
 	if cfg.Service == "" {
 		s = cfg.Database
 	}
-	glog.AppendExtraKeys(cfg.loggerConfig, glog.KeyAppRequestID)
+	glog.AppendExtraKeys(cfg.loggerConfig, gconstant.KeyAppRequestID)
 	callerSkip := cfg.callerSkip
 	if callerSkip <= 0 {
 		callerSkip = 3
@@ -68,7 +70,7 @@ func (l *ormLogger) Error(ctx context.Context, msg string, data ...any) {
 
 func (l *ormLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
 	end := time.Now()
-	cost := glog.GetRequestCost(begin, end)
+	cost := gutil.GetRequestCost(begin, end)
 
 	msg := "sql execute success"
 	var ralCode int
@@ -84,10 +86,10 @@ func (l *ormLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 
 	fields := l.commonFields(ctx)
 	fields = append(fields,
-		glog.KeyDbAffectedRows, rows,
-		glog.KeyAppRequestDurationMs, cost,
-		glog.KeyAppResponseCode, ralCode,
-		glog.KeyDbStatement, sql,
+		gconstant.KeyDbAffectedRows, rows,
+		gconstant.KeyAppRequestDurationMs, cost,
+		gconstant.KeyAppResponseCode, ralCode,
+		gconstant.KeyDbStatement, sql,
 	)
 
 	if l.SlowThreshold > 0 && cost >= float64(l.SlowThreshold/time.Millisecond) {
@@ -100,6 +102,6 @@ func (l *ormLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 
 func (l *ormLogger) commonFields(ctx context.Context) []any {
 	return []any{
-		glog.KeyDbName, l.Database,
+		gconstant.KeyDbName, l.Database,
 	}
 }

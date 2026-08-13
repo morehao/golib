@@ -5,7 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/google/uuid"
 )
+
+// GenUUID 生成一个全局唯一的 UUID(v7) 字符串，常用于请求 ID、任务运行 ID 等。
+func GenUUID() string {
+	return uuid.Must(uuid.NewV7()).String()
+}
 
 func RandomBytes(n int) ([]byte, error) {
 	b := make([]byte, n)

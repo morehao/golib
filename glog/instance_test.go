@@ -3,6 +3,7 @@ package glog
 import (
 	"testing"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -12,12 +13,12 @@ func TestAppendExtraKeys(t *testing.T) {
 	assert.Equal(t, []string{"a", "b", "c"}, cfg.ExtraKeys)
 
 	cfg = &LogConfig{}
-	AppendExtraKeys(cfg, KeyAppRequestID)
-	assert.Equal(t, []string{KeyAppRequestID}, cfg.ExtraKeys)
+	AppendExtraKeys(cfg, gconstant.KeyAppRequestID)
+	assert.Equal(t, []string{gconstant.KeyAppRequestID}, cfg.ExtraKeys)
 
-	cfg = &LogConfig{ExtraKeys: []string{KeyAppRequestID}}
-	AppendExtraKeys(cfg, KeyAppRequestID)
-	assert.Equal(t, []string{KeyAppRequestID}, cfg.ExtraKeys)
+	cfg = &LogConfig{ExtraKeys: []string{gconstant.KeyAppRequestID}}
+	AppendExtraKeys(cfg, gconstant.KeyAppRequestID)
+	assert.Equal(t, []string{gconstant.KeyAppRequestID}, cfg.ExtraKeys)
 }
 
 func TestRegisterLoggerType(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 	_ "github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -85,7 +86,7 @@ func TestClientPostRequest(t *testing.T) {
 func TestClientWithTraceID(t *testing.T) {
 	var gotTraceID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotTraceID = r.Header.Get(glog.HeaderRequestID)
+		gotTraceID = r.Header.Get(gconstant.HeaderRequestID)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
@@ -93,7 +94,7 @@ func TestClientWithTraceID(t *testing.T) {
 
 	client := NewClient()
 
-	ctx := context.WithValue(context.Background(), glog.KeyTraceID, "trace-123")
+	ctx := context.WithValue(context.Background(), gconstant.KeyTraceID, "trace-123")
 
 	resp, err := client.R().
 		SetContext(ctx).
@@ -187,7 +188,7 @@ func TestClientInjectsOTelTraceAndRequestID(t *testing.T) {
 
 	ctx, span := tp.Tracer("gresty-test").Start(context.Background(), "outbound")
 	defer span.End()
-	ctx = context.WithValue(ctx, glog.KeyAppRequestID, requestID)
+	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
 
 	resp, err := client.R().
 		SetContext(ctx).

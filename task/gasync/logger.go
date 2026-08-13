@@ -1,6 +1,9 @@
 package gasync
 
-import "github.com/morehao/golib/glog"
+import (
+	"github.com/morehao/golib/gconstant"
+	"github.com/morehao/golib/glog"
+)
 
 func newGasyncLogger(cfg *Config) (glog.Logger, *glog.LogConfig) {
 	logConfig := cfg.LogConfig
@@ -10,7 +13,7 @@ func newGasyncLogger(cfg *Config) (glog.Logger, *glog.LogConfig) {
 	if logConfig == nil {
 		logConfig = glog.GetDefaultLogConfig()
 	}
-	glog.AppendExtraKeys(logConfig, glog.KeyAppRequestID, glog.KeyRunCode)
-	logger := glog.GetDefaultLogger().With(glog.KeyTaskType, "async")
+	glog.AppendExtraKeys(logConfig, gconstant.KeyAppRequestID, gconstant.KeyRunCode)
+	logger := glog.GetDefaultLogger().With(gconstant.KeyTaskType, "async")
 	return logger, logConfig
 }

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -32,18 +34,18 @@ func (l redisLogger) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		begin := time.Now()
 		fields := l.commonFields(ctx)
 		fields = append(fields,
-			glog.KeyDbOperation, cmd.FullName(),
+			gconstant.KeyDbOperation, cmd.FullName(),
 		)
 		var ralCode int
 		if err := cmd.Err(); err != nil {
 			msg := err.Error()
 			ralCode = -1
 			end := time.Now()
-			cost := glog.GetRequestCost(begin, end)
+			cost := gutil.GetRequestCost(begin, end)
 			fields = append(fields,
-				glog.KeyDbOperationContent, cmd.String(),
-				glog.KeyAppResponseCode, ralCode,
-				glog.KeyAppRequestDurationMs, cost,
+				gconstant.KeyDbOperationContent, cmd.String(),
+				gconstant.KeyAppResponseCode, ralCode,
+				gconstant.KeyAppRequestDurationMs, cost,
 			)
 			l.Logger.Errorw(ctx, msg, fields...)
 			return err
@@ -52,11 +54,11 @@ func (l redisLogger) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		hook := next(ctx, cmd)
 
 		end := time.Now()
-		cost := glog.GetRequestCost(begin, end)
+		cost := gutil.GetRequestCost(begin, end)
 		fields = append(fields,
-			glog.KeyDbOperationContent, cmd.String(),
-			glog.KeyAppResponseCode, ralCode,
-			glog.KeyAppRequestDurationMs, cost,
+			gconstant.KeyDbOperationContent, cmd.String(),
+			gconstant.KeyAppResponseCode, ralCode,
+			gconstant.KeyAppRequestDurationMs, cost,
 		)
 
 		l.Logger.Debugw(ctx, "redis execute success", fields...)
@@ -70,21 +72,21 @@ func (l redisLogger) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.P
 		begin := time.Now() // 记录开始时间
 		err := next(ctx, cmds)
 		end := time.Now() // 记录结束时间
-		cost := glog.GetRequestCost(begin, end)
+		cost := gutil.GetRequestCost(begin, end)
 
 		// 准备日志字段
 		fields := l.commonFields(ctx)
 		fields = append(fields,
-			glog.KeyDbOperationContent, l.cmdsToString(cmds),
-			glog.KeyAppRequestDurationMs, cost,
+			gconstant.KeyDbOperationContent, l.cmdsToString(cmds),
+			gconstant.KeyAppRequestDurationMs, cost,
 		)
 
 		// 根据执行结果记录日志
 		if err != nil {
-			fields = append(fields, glog.KeyAppResponseCode, -1)
+			fields = append(fields, gconstant.KeyAppResponseCode, -1)
 			l.Logger.Errorw(ctx, fmt.Sprintf("redis pipeline execute failed, err: %v", err), fields...)
 		} else {
-			fields = append(fields, glog.KeyAppResponseCode, 0)
+			fields = append(fields, gconstant.KeyAppResponseCode, 0)
 			l.Logger.Debugw(ctx, "redis pipeline execute success", fields...)
 		}
 		return err
@@ -101,8 +103,8 @@ func (l redisLogger) cmdsToString(cmds []redis.Cmder) string {
 }
 func (l redisLogger) commonFields(ctx context.Context) []any {
 	fields := []any{
-		glog.KeyServerAddress, l.Addr,
-		glog.KeyDbName, l.Database,
+		gconstant.KeyServerAddress, l.Addr,
+		gconstant.KeyDbName, l.Database,
 	}
 	return fields
 }

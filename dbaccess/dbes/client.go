@@ -2,6 +2,7 @@ package dbes
 
 import (
 	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 )
 
@@ -10,7 +11,7 @@ func New(cfg *ESConfig, opts ...Option) (*elasticsearch.Client, *elasticsearch.T
 	for _, opt := range opts {
 		opt.apply(cfg)
 	}
-	glog.AppendExtraKeys(cfg.loggerConfig, glog.KeyAppRequestID)
+	glog.AppendExtraKeys(cfg.loggerConfig, gconstant.KeyAppRequestID)
 
 	customLogger, getLoggerErr := newEsLogger(cfg)
 	if getLoggerErr != nil {

@@ -16,6 +16,16 @@ const (
 	DayDuration = 24 * time.Hour
 )
 
+// FormatRequestTime 将时间格式化为常用于请求日志的时间字符串。
+func FormatRequestTime(t time.Time) string {
+	return t.Format("2006-01-02 15:04:05.999999")
+}
+
+// GetRequestCost 计算 start 与 end 之间的耗时，返回毫秒（保留两位小数）。
+func GetRequestCost(start, end time.Time) float64 {
+	return float64(end.Sub(start).Nanoseconds()/1e4) / 100.0
+}
+
 func TimeFormat(t time.Time, format string) string {
 	if t.Unix() <= 0 {
 		return ""

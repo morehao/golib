@@ -5,8 +5,9 @@ import (
 	"time"
 
 	"github.com/morehao/golib/distlock"
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/task"
+	"github.com/morehao/golib/gutil"
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 )
@@ -101,10 +102,10 @@ func (s *Scheduler) Register(t Task) error {
 	var entryID cron.EntryID
 	entryID, err := s.cron.AddFunc(t.Spec, func() {
 		ctx := context.Background()
-		runCode := task.GenRunID()
-		ctx = context.WithValue(ctx, glog.KeyRunCode, runCode)
-		ctx = context.WithValue(ctx, glog.KeyTaskCode, t.TaskCode)
-		ctx = context.WithValue(ctx, glog.KeyTaskType, t.TaskType)
+		runCode := gutil.GenUUID()
+		ctx = context.WithValue(ctx, gconstant.KeyRunCode, runCode)
+		ctx = context.WithValue(ctx, gconstant.KeyTaskCode, t.TaskCode)
+		ctx = context.WithValue(ctx, gconstant.KeyTaskType, t.TaskType)
 
 		if enableLock {
 			taskLock := distlock.NewDistLock(s.lock, &distlock.Config{
@@ -114,9 +115,9 @@ func (s *Scheduler) Register(t Task) error {
 			})
 			ok, lerr := taskLock.Lock(ctx)
 			if lerr != nil || !ok {
-				s.logger.Infow(ctx, "cron task skipped, lock not acquired", glog.KeyTaskCode, t.TaskCode, glog.KeyRunCode, runCode)
+				s.logger.Infow(ctx, "cron task skipped, lock not acquired", gconstant.KeyTaskCode, t.TaskCode, gconstant.KeyRunCode, runCode)
 				_ = s.store.insertRun(ctx, &CronTaskRun{
-					TaskCode: t.TaskCode, TaskType: t.TaskType, RunCode: runCode, StartAt: time.Now(), Status: TaskRunSkipped, RequestID: glog.GenRequestID(),
+					TaskCode: t.TaskCode, TaskType: t.TaskType, RunCode: runCode, StartAt: time.Now(), Status: TaskRunSkipped, RequestID: gutil.GenUUID(),
 				})
 				return
 			}
@@ -161,7 +162,7 @@ func (s *Scheduler) Register(t Task) error {
 		if ferr := s.store.finishRun(ctx, run.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
 			taskLogger.Errorw(ctx, "finish run failed", "error", ferr)
 		}
-		taskLogger.Infow(ctx, "cron task done", glog.KeyTaskCode, t.TaskCode, glog.KeyRunCode, runCode, "status", status, "duration_ms", end.Sub(start).Milliseconds())
+		taskLogger.Infow(ctx, "cron task done", gconstant.KeyTaskCode, t.TaskCode, gconstant.KeyRunCode, runCode, "status", status, "duration_ms", end.Sub(start).Milliseconds())
 	})
 
 	return err
