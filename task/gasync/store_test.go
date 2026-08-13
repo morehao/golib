@@ -26,18 +26,18 @@ func TestAsyncAutoMigrate(t *testing.T) {
 	require.Contains(t, tables, "core_async_task_run")
 }
 
-func TestAsyncExecutionLifecycle(t *testing.T) {
+func TestAsyncRunLifecycle(t *testing.T) {
 	db := newGasyncTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
 	s := newStore(getDB)
 
 	e := &AsyncTaskRun{RunCode: "t-1", TaskType: "email", Queue: "default", Status: AsyncProcessing}
-	require.NoError(t, s.insertExecution(context.Background(), e))
+	require.NoError(t, s.insertRun(context.Background(), e))
 	require.NotZero(t, e.ID)
 
-	require.NoError(t, s.finishExecution(context.Background(), e.ID, time.Now(), 30, AsyncCompleted, ""))
-	got, err := s.GetExecutionByRunCode(context.Background(), "t-1")
+	require.NoError(t, s.finishRun(context.Background(), e.ID, time.Now(), 30, AsyncCompleted, ""))
+	got, err := s.GetRunByRunCode(context.Background(), "t-1")
 	require.NoError(t, err)
 	require.Equal(t, AsyncCompleted, got.Status)
 }

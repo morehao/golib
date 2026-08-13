@@ -17,8 +17,8 @@ const (
 )
 
 type AsyncTaskRun struct {
-	ID         uint64             `gorm:"column:id;primaryKey;autoIncrement"`
-	CreatedAt  time.Time          `gorm:"column:created_at"`
+	ID        uint               `gorm:"column:id;primaryKey;autoIncrement"`
+	CreatedAt time.Time          `gorm:"column:created_at"`
 	RunCode    string             `gorm:"column:run_code;type:varchar(64);not null;index:idx_run_code;comment:asynq 任务实例 ID（运行唯一标识）"`
 	TaskType   string             `gorm:"column:task_type;type:varchar(128);index:idx_task_type;comment:任务类型"`
 	Queue      string             `gorm:"column:queue;type:varchar(64);comment:队列"`

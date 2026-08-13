@@ -10,14 +10,14 @@ import (
 type store struct {
 	dbGetter gormdao.DBGetter
 	taskDao  *gormdao.Dao[CronTask, []CronTask]
-	execDao  *gormdao.Dao[CronTaskRun, []CronTaskRun]
+	runDao   *gormdao.Dao[CronTaskRun, []CronTaskRun]
 }
 
 func newStore(dbGetter gormdao.DBGetter) *store {
 	return &store{
 		dbGetter: dbGetter,
 		taskDao:  gormdao.NewDao[CronTask, []CronTask]("core_cron_task", "gcron_task", dbGetter, gormdao.WithoutSoftDelete()),
-		execDao:  gormdao.NewDao[CronTaskRun, []CronTaskRun]("core_cron_task_run", "gcron_exec", dbGetter, gormdao.WithoutSoftDelete()),
+		runDao:   gormdao.NewDao[CronTaskRun, []CronTaskRun]("core_cron_task_run", "gcron_run", dbGetter, gormdao.WithoutSoftDelete()),
 	}
 }
 
@@ -42,11 +42,11 @@ func (s *store) updateRunTimes(ctx context.Context, taskCode string, lastRun, ne
 		Where("task_code = ?", taskCode).Updates(updates).Error
 }
 
-func (s *store) insertExecution(ctx context.Context, e *CronTaskRun) error {
-	return s.execDao.Insert(ctx, e)
+func (s *store) insertRun(ctx context.Context, e *CronTaskRun) error {
+	return s.runDao.Insert(ctx, e)
 }
 
-func (s *store) finishExecution(ctx context.Context, id uint64, endAt time.Time, durationMS int64, status CronTaskRunStatus, errMsg string) error {
+func (s *store) finishRun(ctx context.Context, id uint, endAt time.Time, durationMS int64, status CronTaskRunStatus, errMsg string) error {
 	updates := map[string]any{
 		"end_at":      endAt,
 		"duration_ms": durationMS,
@@ -65,10 +65,10 @@ func (s *store) ListTask(ctx context.Context, cond *CronTaskCond) ([]CronTask, i
 	return s.taskDao.GetPageListByCond(ctx, cond)
 }
 
-func (s *store) GetExecutionByID(ctx context.Context, id uint64) (*CronTaskRun, error) {
-	return s.execDao.GetByID(ctx, uint(id))
+func (s *store) GetRunByID(ctx context.Context, id uint) (*CronTaskRun, error) {
+	return s.runDao.GetByID(ctx, id)
 }
 
-func (s *store) ListExecution(ctx context.Context, cond *CronTaskRunCond) ([]CronTaskRun, int64, error) {
-	return s.execDao.GetPageListByCond(ctx, cond)
+func (s *store) ListRun(ctx context.Context, cond *CronTaskRunCond) ([]CronTaskRun, int64, error) {
+	return s.runDao.GetPageListByCond(ctx, cond)
 }

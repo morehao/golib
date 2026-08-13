@@ -9,21 +9,21 @@ import (
 
 type store struct {
 	dbGetter gormdao.DBGetter
-	execDao  *gormdao.Dao[AsyncTaskRun, []AsyncTaskRun]
+	runDao  *gormdao.Dao[AsyncTaskRun, []AsyncTaskRun]
 }
 
 func newStore(dbGetter gormdao.DBGetter) *store {
 	return &store{
 		dbGetter: dbGetter,
-		execDao:  gormdao.NewDao[AsyncTaskRun, []AsyncTaskRun]("core_async_task_run", "gasync_exec", dbGetter, gormdao.WithoutSoftDelete()),
+		runDao:   gormdao.NewDao[AsyncTaskRun, []AsyncTaskRun]("core_async_task_run", "gasync_run", dbGetter, gormdao.WithoutSoftDelete()),
 	}
 }
 
-func (s *store) insertExecution(ctx context.Context, e *AsyncTaskRun) error {
-	return s.execDao.Insert(ctx, e)
+func (s *store) insertRun(ctx context.Context, e *AsyncTaskRun) error {
+	return s.runDao.Insert(ctx, e)
 }
 
-func (s *store) finishExecution(ctx context.Context, id uint64, endAt time.Time, durationMS int64, status AsyncTaskRunStatus, errMsg string) error {
+func (s *store) finishRun(ctx context.Context, id uint, endAt time.Time, durationMS int64, status AsyncTaskRunStatus, errMsg string) error {
 	updates := map[string]any{
 		"end_at":      endAt,
 		"duration_ms": durationMS,
@@ -34,14 +34,14 @@ func (s *store) finishExecution(ctx context.Context, id uint64, endAt time.Time,
 		Where("id = ?", id).Updates(updates).Error
 }
 
-func (s *store) GetExecutionByRunCode(ctx context.Context, runCode string) (*AsyncTaskRun, error) {
-	return s.execDao.GetByCond(ctx, &AsyncTaskRunCond{RunCode: runCode})
+func (s *store) GetRunByRunCode(ctx context.Context, runCode string) (*AsyncTaskRun, error) {
+	return s.runDao.GetByCond(ctx, &AsyncTaskRunCond{RunCode: runCode})
 }
 
-func (s *store) GetExecutionByID(ctx context.Context, id uint64) (*AsyncTaskRun, error) {
-	return s.execDao.GetByID(ctx, uint(id))
+func (s *store) GetRunByID(ctx context.Context, id uint) (*AsyncTaskRun, error) {
+	return s.runDao.GetByID(ctx, id)
 }
 
-func (s *store) ListExecution(ctx context.Context, cond *AsyncTaskRunCond) ([]AsyncTaskRun, int64, error) {
-	return s.execDao.GetPageListByCond(ctx, cond)
+func (s *store) ListRun(ctx context.Context, cond *AsyncTaskRunCond) ([]AsyncTaskRun, int64, error) {
+	return s.runDao.GetPageListByCond(ctx, cond)
 }

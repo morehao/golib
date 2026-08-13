@@ -69,7 +69,7 @@ func NewServer(cfg *Config, db *gorm.DB, opts ...Option) (*Server, error) {
 
 	mux.Use(s.traceMiddleware)
 	mux.Use(s.logMiddleware)
-	mux.Use(s.executionRecordMiddleware)
+	mux.Use(s.runRecordMiddleware)
 
 	s.server = asynq.NewServer(cfg.asynqRedisOpt(), cfg.asynqServerConfig())
 

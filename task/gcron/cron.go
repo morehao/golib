@@ -115,7 +115,7 @@ func (s *Scheduler) Register(t Task) error {
 			ok, lerr := taskLock.Lock(ctx)
 			if lerr != nil || !ok {
 				s.logger.Infow(ctx, "cron task skipped, lock not acquired", glog.KeyTaskCode, t.TaskCode, glog.KeyRunCode, runCode)
-				_ = s.store.insertExecution(ctx, &CronTaskRun{
+				_ = s.store.insertRun(ctx, &CronTaskRun{
 					TaskCode: t.TaskCode, TaskType: t.TaskType, RunCode: runCode, StartAt: time.Now(), Status: TaskRunSkipped, RequestID: glog.GenRequestID(),
 				})
 				return
@@ -128,7 +128,7 @@ func (s *Scheduler) Register(t Task) error {
 		defer span.End()
 		start := time.Now()
 
-		exec := &CronTaskRun{
+		run := &CronTaskRun{
 			TaskCode:  t.TaskCode,
 			TaskType:  t.TaskType,
 			RunCode:   runCode,
@@ -137,8 +137,8 @@ func (s *Scheduler) Register(t Task) error {
 			TraceID:   traceID,
 			RequestID: requestID,
 		}
-		if serr := s.store.insertExecution(ctx, exec); serr != nil {
-			taskLogger.Errorw(ctx, "insert execution failed", "error", serr)
+		if serr := s.store.insertRun(ctx, run); serr != nil {
+			taskLogger.Errorw(ctx, "insert run failed", "error", serr)
 		}
 
 		var nextRun *time.Time
@@ -158,8 +158,8 @@ func (s *Scheduler) Register(t Task) error {
 			status = TaskRunFailed
 			errMsg = err.Error()
 		}
-		if ferr := s.store.finishExecution(ctx, exec.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
-			taskLogger.Errorw(ctx, "finish execution failed", "error", ferr)
+		if ferr := s.store.finishRun(ctx, run.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
+			taskLogger.Errorw(ctx, "finish run failed", "error", ferr)
 		}
 		taskLogger.Infow(ctx, "cron task done", glog.KeyTaskCode, t.TaskCode, glog.KeyRunCode, runCode, "status", status, "duration_ms", end.Sub(start).Milliseconds())
 	})

@@ -46,7 +46,7 @@ func TestRegisterAndExecute(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, CronTaskEnabled, got.Status)
 
-	execs, _, err := s.GetStore().ListExecution(context.Background(), &CronTaskRunCond{TaskCode: "tick"})
+	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskCode: "tick"})
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(execs), 1)
+	require.GreaterOrEqual(t, len(runs), 1)
 }

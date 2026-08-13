@@ -26,15 +26,15 @@ func TestStoreUpsertAndGetTask(t *testing.T) {
 	require.Equal(t, "*/5 * * * *", got.Spec)
 }
 
-func TestStoreExecutionLifecycle(t *testing.T) {
+func TestStoreRunLifecycle(t *testing.T) {
 	s := newStoreForTest(t)
 	e := &CronTaskRun{TaskCode: "foo", TaskType: "report", RunCode: "run-1", StartAt: time.Now(), Status: TaskRunRunning, RequestID: "req-1"}
-	require.NoError(t, s.insertExecution(context.Background(), e))
+	require.NoError(t, s.insertRun(context.Background(), e))
 	require.NotZero(t, e.ID)
 
-	require.NoError(t, s.finishExecution(context.Background(), e.ID, time.Now(), 120, TaskRunSuccess, ""))
+	require.NoError(t, s.finishRun(context.Background(), e.ID, time.Now(), 120, TaskRunSuccess, ""))
 
-	got, err := s.GetExecutionByID(context.Background(), e.ID)
+	got, err := s.GetRunByID(context.Background(), e.ID)
 	require.NoError(t, err)
 	require.Equal(t, TaskRunSuccess, got.Status)
 	require.Equal(t, int64(120), got.DurationMS)

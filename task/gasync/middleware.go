@@ -56,7 +56,7 @@ func (s *Server) traceMiddleware(next asynq.Handler) asynq.Handler {
 	})
 }
 
-func (s *Server) executionRecordMiddleware(next asynq.Handler) asynq.Handler {
+func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 		runCode, _ := asynq.GetTaskID(ctx)
 		queue, _ := asynq.GetQueueName(ctx)
@@ -67,7 +67,7 @@ func (s *Server) executionRecordMiddleware(next asynq.Handler) asynq.Handler {
 		requestID := glog.GetRequestID(ctx)
 
 		start := time.Now()
-		exec := &AsyncTaskRun{
+		run := &AsyncTaskRun{
 			RunCode:   runCode,
 			TaskType:  task.Type(),
 			Queue:     queue,
@@ -79,8 +79,8 @@ func (s *Server) executionRecordMiddleware(next asynq.Handler) asynq.Handler {
 			TraceID:   traceID,
 			RequestID: requestID,
 		}
-		if serr := s.store.insertExecution(ctx, exec); serr != nil {
-			s.logger.Errorw(ctx, "insert async execution failed", "run_code", runCode, "error", serr)
+		if serr := s.store.insertRun(ctx, run); serr != nil {
+			s.logger.Errorw(ctx, "insert async run failed", "run_code", runCode, "error", serr)
 		}
 
 		err := next.ProcessTask(ctx, task)
@@ -92,9 +92,9 @@ func (s *Server) executionRecordMiddleware(next asynq.Handler) asynq.Handler {
 			status = AsyncFailed
 			errMsg = err.Error()
 		}
-		if exec.ID != 0 {
-			if ferr := s.store.finishExecution(ctx, exec.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
-				s.logger.Errorw(ctx, "finish async execution failed", "run_code", runCode, "error", ferr)
+		if run.ID != 0 {
+			if ferr := s.store.finishRun(ctx, run.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
+				s.logger.Errorw(ctx, "finish async run failed", "run_code", runCode, "error", ferr)
 			}
 		}
 		return err

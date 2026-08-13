@@ -43,15 +43,15 @@ func TestEnqueueAndProcess(t *testing.T) {
 	server.Shutdown()
 
 	require.Eventually(t, func() bool {
-		exec, err := server.GetStore().GetExecutionByRunCode(context.Background(), info.ID)
-		return err == nil && exec != nil && exec.Status == AsyncCompleted
+		run, err := server.GetStore().GetRunByRunCode(context.Background(), info.ID)
+		return err == nil && run != nil && run.Status == AsyncCompleted
 	}, 3_000_000_000, 50_000_000)
 
-	exec, err := server.GetStore().GetExecutionByRunCode(context.Background(), info.ID)
+	run, err := server.GetStore().GetRunByRunCode(context.Background(), info.ID)
 	require.NoError(t, err)
-	require.Equal(t, AsyncCompleted, exec.Status)
-	require.Equal(t, "email:send", exec.TaskType)
-	require.NotEmpty(t, exec.RequestID)
-	require.NotEmpty(t, exec.TraceID)
-	require.NotEmpty(t, exec.RunCode)
+	require.Equal(t, AsyncCompleted, run.Status)
+	require.Equal(t, "email:send", run.TaskType)
+	require.NotEmpty(t, run.RequestID)
+	require.NotEmpty(t, run.TraceID)
+	require.NotEmpty(t, run.RunCode)
 }
