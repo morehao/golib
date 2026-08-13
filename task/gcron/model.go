@@ -37,9 +37,9 @@ type CronTask struct {
 func (CronTask) TableName() string { return "core_cron_task" }
 
 type CronTaskRun struct {
-	ID        uint              `gorm:"column:id;primaryKey;autoIncrement"`
-	CreatedAt time.Time         `gorm:"column:created_at"`
-	TaskCode  string            `gorm:"column:task_code;type:varchar(128);not null;index:idx_task_code;comment:任务唯一标识"`
+	ID         uint              `gorm:"column:id;primaryKey;autoIncrement"`
+	CreatedAt  time.Time         `gorm:"column:created_at"`
+	TaskCode   string            `gorm:"column:task_code;type:varchar(128);not null;index:idx_task_code;comment:任务唯一标识"`
 	TaskType   string            `gorm:"column:task_type;type:varchar(64);not null;comment:任务类型"`
 	RunCode    string            `gorm:"column:run_code;type:varchar(64);index:idx_run_code;comment:运行唯一标识"`
 	StartAt    time.Time         `gorm:"column:start_at;not null;comment:开始时间"`
