@@ -5,6 +5,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/morehao/golib/glog"
+	"go.opentelemetry.io/otel"
 	"gorm.io/gorm"
 )
 
@@ -68,6 +69,7 @@ func NewServer(cfg *Config, db *gorm.DB, opts ...Option) (*Server, error) {
 
 	mux.Use(s.traceMiddleware)
 	mux.Use(s.logMiddleware)
+	mux.Use(s.executionRecordMiddleware)
 
 	s.server = asynq.NewServer(cfg.asynqRedisOpt(), cfg.asynqServerConfig())
 
@@ -90,7 +92,10 @@ func (c *Client) Enqueue(ctx context.Context, t Task, opts ...asynq.Option) (*as
 	}
 	fullOpts = append(fullOpts, opts...)
 
-	task := asynq.NewTask(t.TypeName(), payload, fullOpts...)
+	headers := make(map[string]string)
+	otel.GetTextMapPropagator().Inject(ctx, headerCarrier(headers))
+
+	task := asynq.NewTaskWithHeaders(t.TypeName(), payload, headers, fullOpts...)
 	return c.client.EnqueueContext(ctx, task)
 }
 

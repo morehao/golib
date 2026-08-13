@@ -71,7 +71,9 @@ func (s *Scheduler) Register(t Task) error {
 	if t.Handler == nil {
 		return errNilHandler
 	}
-	if existing, err := s.store.GetTaskByName(context.Background(), t.Name); err == nil && existing.ID != 0 {
+	if existing, err := s.store.GetTaskByName(context.Background(), t.Name); err != nil {
+		return err
+	} else if existing.ID != 0 {
 		return errDuplicateName
 	}
 
@@ -91,7 +93,8 @@ func (s *Scheduler) Register(t Task) error {
 	}
 	autoRenewal := t.AutoRenewal || s.cfg.AutoRenewal
 
-	_, err := s.cron.AddFunc(t.Spec, func() {
+	var entryID cron.EntryID
+	entryID, err := s.cron.AddFunc(t.Spec, func() {
 		ctx := context.Background()
 
 		if enableLock {
@@ -127,7 +130,14 @@ func (s *Scheduler) Register(t Task) error {
 			taskLogger.Errorw(ctx, "insert execution failed", "error", serr)
 		}
 
-		_ = s.store.updateRunTimes(ctx, t.Name, &start, nil)
+		var nextRun *time.Time
+		if entry := s.cron.Entry(entryID); entry.ID != 0 && !entry.Next.IsZero() {
+			next := entry.Next
+			nextRun = &next
+		}
+		if rerr := s.store.updateRunTimes(ctx, t.Name, &start, nextRun); rerr != nil {
+			taskLogger.Errorw(ctx, "update run times failed", "error", rerr)
+		}
 
 		err := safeRun(ctx, t.Handler)
 		end := time.Now()
