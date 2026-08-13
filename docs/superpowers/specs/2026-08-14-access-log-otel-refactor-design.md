@@ -24,7 +24,8 @@
 
 ### P3：`InjectTraceFields` 在无效 span 时写入空字符串键（低效但不报错）
 - `gtrace/inject.go` 无条件写三个键，即使 `sc.IsValid()==false`。
-- `glog` 的 zap/slog driver 有条件过滤这些空键，所以不报错，但写了无意义键。
+- `glog` 的 zap/slog driver 有条件过滤这些空键，所以不报错。
+- **决定**：不改动。`task/gcron` 依赖该"写全零字符串"契约（见第 2 节）。此项仅作记录。
 
 ### P4：访问日志文件零测试
 - `access_log.go`、`gtrace/inject.go` 均无单测，重构后需防回归。
@@ -45,7 +46,7 @@ func InjectHTTPResponseTrace(ctx context.Context, h http.Header) bool
 ```
 
 实现要点：
-- 使用 `otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(h))`（全局传播器，与 `gtrace/init.go` 配置的 `TraceContext{}`、`protocol/otel.go` 策应一致），不再手拼字节。
+- 使用显式 W3C 传播器 `propagation.TraceContext{}`（与 `gtrace/init.go` 默认配置一致）注入，不依赖进程级全局传播器是否已设置，行为自包含、可确定；不再手拼字节。
 - 注入前用 `sc := trace.SpanContextFromContext(ctx)` 守卫：`!sc.IsValid() || !sc.IsSampled()` 时直接返回 false，**不写入任何响应头**（解决 P1）。
 - 顺带写入 `tracestate`（保留 `protocol/otel.go` 的既有行为，`gconstant.HeaderTraceState` 已存在）。
 
@@ -54,10 +55,10 @@ func InjectHTTPResponseTrace(ctx context.Context, h http.Header) bool
 - 在设置 `ctx.Request`（InjectedTraceFields 生效后）之后调用：
   `gtrace.InjectHTTPResponseTrace(ctx.Request.Context(), ctx.Writer.Header())`。
 
-### 第 2 节 — 去重二次读取 + 修正 `InjectTraceFields` 空值
+### 第 2 节 — 去重二次读取
 
 - 第 1 节使 `InjectHTTPResponseTrace` 在 `gtrace` 内部自行读取 span 上下文，中间件层只剩 `InjectTraceFields` 一处 otel 桥接，原 69 行的二次 `SpanContextFromContext` 被结构性消除。
-- `gtrace/inject.go`：仅当 `sc.IsValid()` 时写入三个键，否则跳过（解决 P3）。保持不返回 error，调用方语义不变。
+- ~~修正 `InjectTraceFields` 空值~~：**已评估后放弃。** `task/gcron/buildTraceContext` 依赖 `InjectTraceFields` 在无有效 span（noop tracer）时仍写入全零字符串 traceID 的既有契约（`trace_test.go:17` 对比返回值与上下文键）。改为跳过写入会破坏该调用方，故保留无条件写入（该键由于 glog 的 `hasOTELTraceFields` 过滤不会造成日志噪音）。
 
 ### 第 3 节 — 结构整理与测试
 
@@ -65,7 +66,7 @@ func InjectHTTPResponseTrace(ctx context.Context, h http.Header) bool
 - 保留 `getRequestId`/`truncateString`/`parseResponseBody` 小函数。
 - 新增测试：
   - `gtrace` 纯函数测试：
-    - `InjectTraceFields`：无效 span 时不写三个键。
+    - `InjectTraceFields`：保持无效 span 时写全零字符串键的既有契约。
     - `InjectHTTPResponseTrace`：sampled 时写 `traceparent`(+tracestate)；未采样/无效时不写、返回 false。用 `sdktrace.TracerProvider` + `WithSampler` 构造。
   - `access_log.go` 集成测试：`httptest` + `gin`，断言按 statusCode 分级（<400 Info、400-499 Warn、>=500 Error）、请求/响应体截断、响应含 `traceparent`。依赖 `glog` 全局 logger，单列一组。
 - 确认既有 `glog` 空键过滤测试（`zap_test.go`、`slog_test.go`）不回归。
@@ -73,10 +74,11 @@ func InjectHTTPResponseTrace(ctx context.Context, h http.Header) bool
 ## 不改动的部分
 
 - 请求上下文注入链路（InjectedTraceFields + `WithContext`）——经验证正确，保留。
+- `InjectTraceFields` 无条件写键的行为——`task/gcron` 依赖，保留。
 - 日志字段键、分级策略、截断上限、其他辅助函数语义。
 - `protocol/otel.go`（本次不在协议层做改动，仅复用其既有的传播策略）。
 
 ## 风险
 
 - 响应 `traceparent` 的写入时机依赖 `otelgin` 先行创建 span；若调用方绕过 `ginserver` 直接只用 `AccessLog`，span 可能无效——此时 `InjectHTTPResponseTrace` 返回 false 不写头，行为安全（不误报采样）。
-- `InjectTraceFields` 跳过无效 span 的改动，不影响 `glog` 空键过滤的既有行为。
+- `InjectHTTPResponseTrace` 使用显式 `propagation.TraceContext{}`，不依赖全局传播器；与 `gtrace.Init` 默认配置一致，保证生产与测试行为一致。

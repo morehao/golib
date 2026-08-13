@@ -3,7 +3,6 @@ package ginmiddleware
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/gtrace"
 	"github.com/morehao/golib/gutil"
-	"go.opentelemetry.io/otel/trace"
 )
 
 var defaultConfig = accessLogConfig{
@@ -66,9 +64,9 @@ func AccessLog(opts ...AccessLogOption) gin.HandlerFunc {
 		// touching otel directly.
 		injectedCtx := gtrace.InjectTraceFields(ctx.Request.Context())
 		ctx.Request = ctx.Request.WithContext(injectedCtx)
-		if sc := trace.SpanContextFromContext(injectedCtx); sc.IsValid() {
-			ctx.Writer.Header().Set(gconstant.HeaderTraceParent, formatTraceParent(sc))
-		}
+		// Reflect the current (sampled) span back to the caller via a traceparent
+		// response header. No-op when there is no valid, sampled span.
+		gtrace.InjectHTTPResponseTrace(injectedCtx, ctx.Writer.Header())
 
 		urlFull := ctx.Request.URL.String()
 		ctx.Set(gcontext.KeyUrlFull, urlFull)
@@ -111,35 +109,21 @@ func AccessLog(opts ...AccessLogOption) gin.HandlerFunc {
 			errorMsg = appErr.Msg
 		}
 
-		keysAndValues := []any{
-			gconstant.KeyEventName, gconstant.ValueEventHTTPServerRequest,
-			gconstant.KeyHttpRequestMethod, ctx.Request.Method,
-			gconstant.KeyHttpResponseStatusCode, statusCode,
-			gconstant.KeyHttpRoute, ctx.FullPath(),
-			gconstant.KeyUrlPath, ctx.Request.URL.Path,
-			gconstant.KeyUrlFull, gincontext.GetURLFull(ctx),
-			gconstant.KeyServerAddress, ctx.Request.Host,
-			gconstant.KeyClientAddress, gincontext.GetClientIP(ctx),
-			gconstant.KeyHttpRequestBodySize, reqBodySize,
-			gconstant.KeyHttpResponseBodySize, responseBodySize,
-			gconstant.KeyErrorType, errorType,
-			gconstant.KeyErrorMessage, errorMsg,
-			gconstant.KeyAppErrorCode, appErr.Code,
-			gconstant.KeyAppErrorMessage, appErr.Msg,
-			gconstant.KeyAppRequestID, gincontext.GetRequestID(ctx),
-			gconstant.KeyAppOrgID, gincontext.GetOrgID(ctx),
-			gconstant.KeyAppTenantID, gincontext.GetTenantID(ctx),
-			gconstant.KeyAppDeptID, gincontext.GetDeptID(ctx),
-			gconstant.KeyAppHandler, ctx.HandlerName(),
-			gconstant.KeyNetworkProtocolName, ctx.Request.Proto,
-			gconstant.KeyUrlQuery, reqQuery,
-			gconstant.KeyHttpRequestBody, reqBody,
-			gconstant.KeyHttpResponseBody, responseBody,
-			gconstant.KeyAppRequestStartTime, gutil.FormatRequestTime(start),
-			gconstant.KeyAppRequestEndTime, gutil.FormatRequestTime(end),
-			gconstant.KeyAppRequestDurationMs, gutil.GetRequestCost(start, end),
-			gconstant.KeyAppRequestError, requestErr,
-		}
+		keysAndValues := buildAccessLogKVs(ctx, accessLogFields{
+			Config:       config,
+			StatusCode:   statusCode,
+			ReqBodySize:  reqBodySize,
+			ReqBody:      reqBody,
+			ReqQuery:     reqQuery,
+			RespBodySize: responseBodySize,
+			RespBody:     responseBody,
+			ReqStartTime: start,
+			ReqEndTime:   end,
+			AppErr:       appErr,
+			ErrorType:    errorType,
+			ErrorMessage: errorMsg,
+			RequestErr:   requestErr,
+		})
 
 		if statusCode >= 500 {
 			glog.Errorw(ctx, gconstant.MsgEventNotice, keysAndValues...)
@@ -150,6 +134,54 @@ func AccessLog(opts ...AccessLogOption) gin.HandlerFunc {
 			return
 		}
 		glog.Infow(ctx, gconstant.MsgEventNotice, keysAndValues...)
+	}
+}
+
+type accessLogFields struct {
+	Config       accessLogConfig
+	StatusCode   int
+	ReqBodySize  int
+	ReqBody      string
+	ReqQuery     string
+	RespBodySize int
+	RespBody     string
+	ReqStartTime time.Time
+	ReqEndTime   time.Time
+	AppErr       gerror.Error
+	ErrorType    string
+	ErrorMessage string
+	RequestErr   string
+}
+
+func buildAccessLogKVs(ctx *gin.Context, f accessLogFields) []any {
+	return []any{
+		gconstant.KeyEventName, gconstant.ValueEventHTTPServerRequest,
+		gconstant.KeyHttpRequestMethod, ctx.Request.Method,
+		gconstant.KeyHttpResponseStatusCode, f.StatusCode,
+		gconstant.KeyHttpRoute, ctx.FullPath(),
+		gconstant.KeyUrlPath, ctx.Request.URL.Path,
+		gconstant.KeyUrlFull, gincontext.GetURLFull(ctx),
+		gconstant.KeyServerAddress, ctx.Request.Host,
+		gconstant.KeyClientAddress, gincontext.GetClientIP(ctx),
+		gconstant.KeyHttpRequestBodySize, f.ReqBodySize,
+		gconstant.KeyHttpResponseBodySize, f.RespBodySize,
+		gconstant.KeyErrorType, f.ErrorType,
+		gconstant.KeyErrorMessage, f.ErrorMessage,
+		gconstant.KeyAppErrorCode, f.AppErr.Code,
+		gconstant.KeyAppErrorMessage, f.AppErr.Msg,
+		gconstant.KeyAppRequestID, gincontext.GetRequestID(ctx),
+		gconstant.KeyAppOrgID, gincontext.GetOrgID(ctx),
+		gconstant.KeyAppTenantID, gincontext.GetTenantID(ctx),
+		gconstant.KeyAppDeptID, gincontext.GetDeptID(ctx),
+		gconstant.KeyAppHandler, ctx.HandlerName(),
+		gconstant.KeyNetworkProtocolName, ctx.Request.Proto,
+		gconstant.KeyUrlQuery, f.ReqQuery,
+		gconstant.KeyHttpRequestBody, f.ReqBody,
+		gconstant.KeyHttpResponseBody, f.RespBody,
+		gconstant.KeyAppRequestStartTime, gutil.FormatRequestTime(f.ReqStartTime),
+		gconstant.KeyAppRequestEndTime, gutil.FormatRequestTime(f.ReqEndTime),
+		gconstant.KeyAppRequestDurationMs, gutil.GetRequestCost(f.ReqStartTime, f.ReqEndTime),
+		gconstant.KeyAppRequestError, f.RequestErr,
 	}
 }
 
@@ -174,13 +206,6 @@ func parseResponseBody(body string, maxLen int) (string, int, gerror.Error) {
 	}
 
 	return body, bodySize, errInfo
-}
-
-func formatTraceParent(sc trace.SpanContext) string {
-	if !sc.IsValid() {
-		return ""
-	}
-	return fmt.Sprintf("00-%s-%s-%s", sc.TraceID().String(), sc.SpanID().String(), sc.TraceFlags().String())
 }
 
 func getRequestId(ctx *gin.Context) string {
