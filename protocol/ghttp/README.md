@@ -21,6 +21,7 @@
 - 重试间隔通过 `RetryInterval` 配置，呈指数退避（`base * 2^(n-1)`，封顶 1s）
 - 重试等待可被 context 取消，不会阻塞积压请求
 - 支持请求体重试（POST/PUT/PATCH）
+- `MaxRetry` 表示**总尝试次数（含首次）**：`MaxRetry=3` 即最多请求 3 次（1 次初始 + 2 次重试），`<=0` 视为 1 次
 
 ### 4. 丰富的响应处理
 - `IsSuccess()` - 检查响应是否成功
@@ -49,6 +50,7 @@ cfg := &protocol.HttpClientConfig{
     RetryInterval:   200 * time.Millisecond, // 基础重试间隔，默认 100ms，指数退避
     RetryOnStatus:   []int{429, 502, 503},   // 可选：按状态码重试
     Retryable:       &retryable,             // 可选：网络错误是否重试，默认 true
+    IdleConnTimeout: 90 * time.Second,       // 可选：空闲连接回收时间，默认 90s
 }
 client := NewClient(cfg)
 ```
@@ -152,8 +154,9 @@ result, err := client.Get(ctx, "/protected-resource", opt)
 > **查询参数约束**：GET/HEAD/DELETE 的 `RequestBody` 作为 URL 查询参数时仅支持
 > `map[string]string` 或 `map[string]interface{}`，传入其他类型（如 struct）会返回明确错误。
 >
-> **流式超时说明**：`Timeout` 同样作用于流式响应（`GetStream`/`PostStream`）的读取阶段，
-> 对于长期存活的 SSE 流请传入足够大的 `RequestOption.Timeout` 以覆盖整个读取周期。
+> **流式超时说明**：流式响应（`GetStream`/`PostStream`）的 `Timeout` 仅限制「连接 + 响应头」阶段，
+> 一旦响应头返回，响应体读取不再受超时约束（由 `ResponseHeaderTimeout` 实现），
+> 因此长期存活的 SSE 流不会被截断。如需取消读取，调用 `StreamResult.Close()`。
 
 ## 改进内容
 

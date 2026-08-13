@@ -526,6 +526,43 @@ func TestStreamErrorBodyNotEmpty(t *testing.T) {
 	assert.Equal(t, errorBody, result.String())
 }
 
+// TestStreamBodyNotTruncatedByTimeout 验证流式响应体读取不受超时截断：
+// 服务端在响应头返回后，等待超过 timeout 的时长再推送数据，客户端仍应能读到完整内容。
+func TestStreamBodyNotTruncatedByTimeout(t *testing.T) {
+	content := "late streaming data after timeout"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		flusher.Flush()
+		// 等待超过客户端 Timeout，模拟长存活 SSE
+		time.Sleep(300 * time.Millisecond)
+		w.Write([]byte(content))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	cfg := &protocol.HttpClientConfig{
+		Module:  "test",
+		Host:    srv.URL,
+		Timeout: 100 * time.Millisecond, // 超时应仅限制响应头阶段，不截断 body
+	}
+	client := NewClient(cfg)
+	ctx := context.Background()
+
+	stream, err := client.GetStream(ctx, "/", RequestOption{})
+	assert.Nil(t, err)
+	assert.NotNil(t, stream)
+	defer stream.Close()
+
+	// 响应头已返回，body 延迟推送，读取应成功拿到完整内容
+	buf := make([]byte, 1024)
+	n, err := io.ReadFull(stream, buf[:len(content)])
+	assert.Nil(t, err)
+	assert.Equal(t, len(content), n)
+	assert.Equal(t, content, string(buf[:n]))
+}
+
 func TestStreamErrorServerErrorBodyNotEmpty(t *testing.T) {
 	errorBody := `{"error":"internal server error","trace":"abc123"}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

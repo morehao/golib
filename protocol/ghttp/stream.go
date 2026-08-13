@@ -96,18 +96,20 @@ func (c *Client) streamDo(ctx context.Context, method, path string, opt RequestO
 		glog.KV(glog.KeyHttpRequestBody, reqData),
 	)
 
-	return c.doStream(ctx, request, &opt, requestBody)
+	return c.doStream(ctx, request, requestBody)
 }
 
-func (c *Client) doStream(ctx context.Context, request *http.Request, opt *RequestOption, requestBody []byte) (*StreamResult, error) {
+func (c *Client) doStream(ctx context.Context, request *http.Request, requestBody []byte) (*StreamResult, error) {
 	startTime := time.Now()
 
-	timeout := resolveTimeout(opt, c.Timeout)
-	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	// 流式请求不使用 context.WithTimeout 包装，避免超时截断长期存活的 body 读取。
+	// 连接/响应头阶段的超时由 ResponseHeaderTimeout 控制（见 streamClient）。
+	// readerCtx 仅用于读取阶段的外部取消（通过 StreamResult.Close 触发）。
+	readerCtx, cancel := context.WithCancel(ctx)
 
-	request = request.WithContext(reqCtx)
+	request = request.WithContext(readerCtx)
 
-	resp, err := c.executeCore(reqCtx, request, requestBody)
+	resp, err := c.executeCoreWithClient(c.getStreamClient(), readerCtx, request, requestBody)
 	if err != nil {
 		cancel()
 		costTime := time.Since(startTime).Milliseconds()
