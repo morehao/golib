@@ -107,8 +107,8 @@ func (s *Server) Register(taskType string, h Handler) error {
 	return nil
 }
 
-func (s *Server) Run(mux *asynq.ServeMux) error {
-	return s.server.Run(mux)
+func (s *Server) Run() error {
+	return s.server.Run(s.mux)
 }
 
 func (s *Server) Shutdown() {

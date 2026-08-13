@@ -109,7 +109,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/hibiken/asynq"
 	"github.com/morehao/golib/job/gasync"
 	"gorm.io/gorm"
 )
@@ -154,8 +153,7 @@ func main() {
 		panic(err)
 	}
 	go func() {
-		mux := asynq.NewServeMux()
-		_ = server.Run(mux) // nolint
+		_ = server.Run()
 	}()
 	defer server.Shutdown()
 

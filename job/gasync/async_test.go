@@ -34,9 +34,8 @@ func TestEnqueueAndProcess(t *testing.T) {
 	_, err = client.Enqueue(context.Background(), emailTask{To: "a@b.c"})
 	require.NoError(t, err)
 
-	mux := server.mux
 	go func() {
-		_ = server.server.Run(mux)
+		_ = server.Run()
 	}()
 
 	require.Eventually(t, func() bool { return processed }, 3_000_000_000, 50_000_000)
