@@ -7,6 +7,9 @@ func newTaskLogger(cfg *Config, name string) (glog.Logger, *glog.LogConfig) {
 	if logConfig == nil {
 		logConfig = glog.CloneLogConfig(glog.GetLoggerConfig())
 	}
+	if logConfig == nil {
+		logConfig = glog.GetDefaultLogConfig()
+	}
 	glog.AppendExtraKeys(logConfig, glog.KeyAppRequestID)
 	fields := []any{"job.type", "cron"}
 	if name != "" {
