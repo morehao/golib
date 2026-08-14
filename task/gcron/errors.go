@@ -13,8 +13,8 @@ var (
 	ErrNilHandler = errors.New("gcron: task handler is nil")
 	// ErrDuplicateTask 同一进程内重复注册同一任务。
 	ErrDuplicateTask = errors.New("gcron: duplicate task id")
-	// ErrLockNotSet 任务开启分布式锁但未配置锁存储。
-	ErrLockNotSet = errors.New("gcron: distlock store not configured")
+	// ErrLockNotSet 任务开启分布式锁但未配置锁工厂。
+	ErrLockNotSet = errors.New("gcron: distlock factory not configured")
 	// ErrNilDB 数据库连接为 nil。
 	ErrNilDB = errors.New("gcron: db is nil")
 )
