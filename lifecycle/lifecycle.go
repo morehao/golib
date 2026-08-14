@@ -1,11 +1,11 @@
 // Package lifecycle 提供应用生命周期管理与优雅退出能力。
 //
-// 基于标准库实现零依赖，支持：
+// 基于标准库实现，零第三方依赖（仅使用同仓 glog 记录日志），支持：
 //   - 监听系统信号（SIGTERM/SIGINT）触发退出
 //   - 代码主动触发退出与 actor 出错即关
 //   - 通过统一 context 广播退出信号
 //   - 按阶段顺序释放外部资源
-//   - 退出超时兜底防止卡死
+//   - 退出时等待 actor 收尾完成，超时兜底防止卡死
 package lifecycle
 
 import (
@@ -36,42 +36,42 @@ const (
 
 // 默认超时时间
 const (
-	defaultExitTimeout   = 15 * time.Second
-	defaultHTTPTimeout   = 10 * time.Second
-	defaultGracefulDelay = time.Second
+	defaultExitTimeout = 15 * time.Second
+	defaultHTTPTimeout = 10 * time.Second
 )
 
 var (
-	defaultLC     *LifeCycle
-	defaultLCOnce sync.Once
+	defaultLCMu sync.Mutex
+	defaultLC   *LifeCycle
 )
 
 // Default 返回全局默认生命周期实例。
 // 该实例为懒加载单例，可在任意程序入口直接调用。
 func Default() *LifeCycle {
-	defaultLCOnce.Do(func() {
+	defaultLCMu.Lock()
+	defer defaultLCMu.Unlock()
+	if defaultLC == nil {
 		defaultLC = New()
-	})
+	}
 	return defaultLC
 }
 
 // SetInstance 覆盖全局默认实例，主要用于测试时注入替代实现。
 // 传入 nil 会恢复为默认懒加载行为。
+// 与 Default() 并发安全，但一般仅应在单线程的初始化 / 测试阶段调用。
 func SetInstance(lc *LifeCycle) {
-	if lc != nil {
-		defaultLCOnce.Do(func() {})
-		defaultLC = lc
-		return
-	}
-	defaultLC = nil
-	defaultLCOnce = sync.Once{}
+	defaultLCMu.Lock()
+	defer defaultLCMu.Unlock()
+	defaultLC = lc
 }
 
 // LifeCycle 应用生命周期。
 type LifeCycle struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	chExit chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
+	childCtx    context.Context    // 对外暴露的派生 context，外部无法取消
+	childCancel context.CancelFunc // 保留引用，随父 ctx 取消自动级联释放
+	chExit      chan struct{}
 
 	mu      sync.Mutex
 	started bool
@@ -87,9 +87,12 @@ type LifeCycle struct {
 // New 创建一个生命周期实例。
 func New() *LifeCycle {
 	ctx, cancel := context.WithCancel(context.Background())
+	childCtx, childCancel := context.WithCancel(ctx)
 	return &LifeCycle{
 		ctx:         ctx,
 		cancel:      cancel,
+		childCtx:    childCtx,
+		childCancel: childCancel,
 		chExit:      make(chan struct{}),
 		exitTimeout: defaultExitTimeout,
 		httpTimeout: defaultHTTPTimeout,
@@ -137,8 +140,9 @@ func (l *LifeCycle) HTTPTimeout() time.Duration {
 }
 
 // Context 返回广播退出信号的 context，后台任务 / 消费者应监听其 Done()。
+// 返回的是内部 context 的派生副本：外部调用方无法取消它，只能监听退出信号。
 func (l *LifeCycle) Context() context.Context {
-	return l.ctx
+	return l.childCtx
 }
 
 // Done 返回退出通知 channel，触发退出后关闭。
@@ -167,33 +171,48 @@ func (l *LifeCycle) AddCloseFunc(stage int, f func() error) {
 // run 返回非 nil error 或 panic 时会触发整体退出（出错即关）；
 // run 内部应监听 l.Context().Done() 以在退出时正常返回。
 // cancel 可选，退出编排时并发调用。
+// 生命周期启动（Wait）之后注册会被忽略并记录警告。
 func (l *LifeCycle) AddActor(name string, run func(ctx context.Context) error, cancel func()) {
 	if run == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.actors = append(l.actors, &actor{name: name, run: run, cancel: cancel})
+	if l.started {
+		glog.Warnf(l.ctx, "lifecycle: add actor %q ignored: lifecycle already started", name)
+		return
+	}
+	l.actors = append(l.actors, &actor{name: name, run: run, cancel: cancel, done: make(chan struct{})})
 }
 
 // Exit 主动触发退出。重复调用安全。
+// 触发后立即关闭 Done() 并取消 Context()，后台任务 / 消费者可据此协作停止。
 func (l *LifeCycle) Exit() {
 	closeCh(l.chExit)
+	l.cancel()
 }
 
 // Wait 阻塞直至退出（收到信号、Exit() 或 actor 出错），随后执行收尾并退出进程。
 //
 // 正常情况下以 os.Exit(0) 结束；若超时未完成收尾则以 os.Exit(1) 强制退出。
+// 重复调用无效（仅首次生效）。
 func (l *LifeCycle) Wait() {
-	l.startActors()
+	if !l.startActors() {
+		return
+	}
 	l.waitTrigger()
 }
 
 // startActors 启动所有 actor 的 run，并监听错误。
 // 任一个 actor 返回 error 即触发整体退出。
-func (l *LifeCycle) startActors() {
+// 返回 false 表示生命周期已启动（重复调用），调用方应直接返回。
+func (l *LifeCycle) startActors() bool {
 	// 快照 actors，避免并发注册被正在执行的退出编排感知
 	l.mu.Lock()
+	if l.started {
+		l.mu.Unlock()
+		return false
+	}
 	actors := make([]*actor, len(l.actors))
 	copy(actors, l.actors)
 	l.started = true
@@ -214,6 +233,8 @@ func (l *LifeCycle) startActors() {
 			}
 		}
 	}()
+
+	return true
 }
 
 // waitTrigger 阻塞等待触发源，随后执行退出编排。
@@ -232,23 +253,33 @@ func (l *LifeCycle) waitTrigger() {
 	l.exit()
 }
 
-// exit 执行退出编排。
+// exit 执行退出编排并退出进程。
 func (l *LifeCycle) exit() {
+	// watchdog 最先启动，覆盖整个编排过程
 	l.startWatchdog()
 
+	l.shutdown()
+	os.Exit(0)
+}
+
+// shutdown 执行退出编排主体：广播取消 → 停并等待 actor → 按 stage 收尾 → flush 日志。
+// 不含 watchdog 与进程退出，便于测试复用。
+func (l *LifeCycle) shutdown() {
 	// 广播退出信号，后台任务 / 消费者协作停止
 	l.cancel()
 
-	// 并发取消所有 actor
+	// 并发调用所有 actor 的 cancel，并等待其 run 真正收尾完成
 	l.stopActors()
+	l.waitActors()
 
 	// 按 stage 顺序执行收尾
 	if done := l.closers.run(); done != nil {
 		<-done
 	}
 
-	glog.Close()
-	os.Exit(0)
+	if err := glog.Close(); err != nil {
+		glog.Warnf(context.Background(), "lifecycle: close glog: %v", err)
+	}
 }
 
 // signals 返回当前监听信号。
@@ -277,14 +308,32 @@ func (l *LifeCycle) stopActors() {
 	wg.Wait()
 }
 
+// waitActors 等待所有已启动 actor 的 run 真正退出，保证其退出清理逻辑执行完毕。
+// 若某 actor 既不监听 ctx 也未设置 cancel，则会一直阻塞，由 watchdog 超时兜底。
+// 未启动的 actor（如直接调用 shutdown 的测试场景）会被跳过。
+func (l *LifeCycle) waitActors() {
+	// 快照 actors，避免与并发注册竞态
+	l.mu.Lock()
+	actors := make([]*actor, len(l.actors))
+	copy(actors, l.actors)
+	l.mu.Unlock()
+
+	for _, a := range actors {
+		if a.started.Load() {
+			<-a.done
+		}
+	}
+}
+
 // startWatchdog 启动退出超时 watchdog：如果退出编排超过 timeout 仍未能正常结束
 // （进程未通过正常路径 os.Exit(0) 退出），则强制 os.Exit(1) 兜底。
+// timeout <= 0 表示不设超时（无限等待），不启动 watchdog。
 // 一旦过程已通过 os.Exit(0) 结束，整个进程退出，该 goroutine 不再影响结果。
 func (l *LifeCycle) startWatchdog() {
 	timeout := l.Timeout()
 	if timeout <= 0 {
-		glog.Warnf(l.ctx, "graceful shutdown timeout not set, force exit")
-		os.Exit(0)
+		// 未配置超时：不兜底，完全依赖各收尾步骤自行返回
+		return
 	}
 
 	go func() {
