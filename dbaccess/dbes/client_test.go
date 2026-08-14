@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
 )
@@ -30,7 +32,7 @@ func TestNewTypedES(t *testing.T) {
 		Service:   "app",
 		Level:     glog.DebugLevel,
 		Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
-		ExtraKeys: []string{glog.KeyAppRequestID},
+		ExtraKeys: []string{gconstant.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(2))
 	assert.Nil(t, initLogErr)
@@ -41,7 +43,7 @@ func TestNewTypedES(t *testing.T) {
 	_, typedClient, initErr := New(cfg)
 	assert.Nil(t, initErr)
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, glog.KeyAppRequestID, "12312312312312")
+	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, "12312312312312")
 
 	res, searchErr := typedClient.Search().
 		Index("accounts").
@@ -49,8 +51,8 @@ func TestNewTypedES(t *testing.T) {
 			MatchAll: types.NewMatchAllQuery(),
 		}).Do(ctx)
 	assert.Nil(t, searchErr)
-	glog.Infof(ctx, "search result: %s", glog.ToJsonString(res))
-	t.Log(glog.ToJsonString(res))
+	glog.Infof(ctx, "search result: %s", gutil.ToJsonString(res))
+	t.Log(gutil.ToJsonString(res))
 }
 
 func TestNewSimpleES(t *testing.T) {
@@ -64,7 +66,7 @@ func TestNewSimpleES(t *testing.T) {
 		Service:   "test",
 		Level:     glog.DebugLevel,
 		Writers:   []glog.WriterConfig{{Type: glog.WriterConsole}},
-		ExtraKeys: []string{glog.KeyAppRequestID},
+		ExtraKeys: []string{gconstant.KeyAppRequestID},
 	}
 	initLogErr := glog.InitLogger(logCfg, glog.WithCallerSkip(2))
 	assert.Nil(t, initLogErr)
@@ -75,13 +77,13 @@ func TestNewSimpleES(t *testing.T) {
 	simpleClient, _, initErr := New(cfg)
 	assert.Nil(t, initErr)
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, glog.KeyAppRequestID, "12312312312312")
+	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, "12312312312312")
 	res, searchErr := simpleClient.Search(
 		simpleClient.Search.WithContext(ctx),
 		simpleClient.Search.WithIndex("accounts"),
 		simpleClient.Search.WithBody(strings.NewReader(`{"query":{"match_all":{}}}`)),
 	)
 	assert.Nil(t, searchErr)
-	glog.Infof(ctx, "search result: %s", glog.ToJsonString(res))
-	t.Log(glog.ToJsonString(res))
+	glog.Infof(ctx, "search result: %s", gutil.ToJsonString(res))
+	t.Log(gutil.ToJsonString(res))
 }

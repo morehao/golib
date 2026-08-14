@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gtrace"
 	"github.com/morehao/golib/protocol"
 )
 
@@ -359,21 +361,21 @@ func (c *Client) httpDo(ctx context.Context, method, path string, opt RequestOpt
 	reqData, respData := c.formatLogMsg(requestBody, result.Response)
 	if err != nil {
 		glog.Errorw(ctx, err.Error(),
-			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrlFull, reqURL),
-			glog.KV(glog.KeyHttpRequestBody, reqData),
-			glog.KV(glog.KeyHttpResponseCode, result.HttpCode),
-			glog.KV(glog.KeyHttpResponseBody, string(respData)),
-			glog.KV(glog.KeyAppRequestDurationMs, costTime),
+			glog.KV(gconstant.KeyService, c.Service),
+			glog.KV(gconstant.KeyUrlFull, reqURL),
+			glog.KV(gconstant.KeyHttpRequestBody, reqData),
+			glog.KV(gconstant.KeyHttpResponseCode, result.HttpCode),
+			glog.KV(gconstant.KeyHttpResponseBody, string(respData)),
+			glog.KV(gconstant.KeyAppRequestDurationMs, costTime),
 		)
 	} else {
 		glog.Infow(ctx, "http request success",
-			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrlFull, reqURL),
-			glog.KV(glog.KeyHttpRequestBody, reqData),
-			glog.KV(glog.KeyHttpResponseCode, result.HttpCode),
-			glog.KV(glog.KeyHttpResponseBody, string(respData)),
-			glog.KV(glog.KeyAppRequestDurationMs, costTime),
+			glog.KV(gconstant.KeyService, c.Service),
+			glog.KV(gconstant.KeyUrlFull, reqURL),
+			glog.KV(gconstant.KeyHttpRequestBody, reqData),
+			glog.KV(gconstant.KeyHttpResponseCode, result.HttpCode),
+			glog.KV(gconstant.KeyHttpResponseBody, string(respData)),
+			glog.KV(gconstant.KeyAppRequestDurationMs, costTime),
 		)
 	}
 
@@ -431,7 +433,7 @@ func (c *Client) makeRequest(ctx context.Context, method, url string, data io.Re
 
 	request.Header.Set("Content-Type", opts.GetContentType())
 
-	request.Header = protocol.InjectTraceAndRequestID(ctx, request.Header)
+	request.Header = gtrace.InjectTraceAndRequestID(ctx, request.Header)
 
 	return request.WithContext(ctx), nil
 }

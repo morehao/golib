@@ -18,6 +18,7 @@ Components:
 - [gtrace](#gtrace) OpenTelemetry Trace initialization component
 - [gtree](#gtree) Tree structure construction tool
 - [gutil](#gutil) Common utility functions collection
+- [task](#task) Task scheduling components
 - [protocol](#protocol) Protocol components (includes ghttp, gresty)
 - [ratelimit](#ratelimit) Rate limiting component
 - [storage](#storage) Unified object storage component (supports S3, MinIO, OSS, COS, TOS)
@@ -283,6 +284,28 @@ For usage examples, refer to [gtrace usage](gtrace/README.md)
 - Type conversion
 - Slice/Map operations
 - File processing
+
+## task
+
+### Overview
+`task` is a task scheduling component package containing cron and async task sub-packages, both persisting execution records via GORM and integrating glog logging and gtrace distributed tracing.
+
+### Sub-components
+- **gcron**: Cron tasks, based on `robfig/cron/v3`, supporting second-level cron, multi-instance distributed lock mutual exclusion, and execution record persistence
+- **gasync**: Async tasks, based on `hibiken/asynq`, supporting retry, timeout, delay, priority queues, execution record persistence, and cross-process trace propagation
+
+### Features
+- Second-level cron expressions and custom timezone
+- Multi-instance distributed lock mutual exclusion (with optional auto-renewal)
+- Per-task execution timeout and in-process overlap prevention (gcron)
+- Retry, timeout, retention, and multi-queue priority
+- Automatic execution record persistence (idempotent re-registration on restart)
+- Automatic TraceID/RequestID/RunID injection and logging (unified task_type/run_code model)
+- Cross-process trace propagation
+- Graceful shutdown: `Client.Close`, `Server.ShutdownContext` (gasync), `Scheduler.Stop(ctx)` (gcron)
+
+### Usage
+For usage examples, refer to [task usage](task/README.md)
 
 ## protocol
 

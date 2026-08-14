@@ -3,8 +3,9 @@ package gresty
 import (
 	"context"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/protocol"
+	"github.com/morehao/golib/gtrace"
 	"resty.dev/v3"
 )
 
@@ -26,7 +27,7 @@ func WithLogConfig(cfg *glog.LogConfig) Option {
 		logger, err := glog.NewLogger(cfg)
 		if err != nil {
 			glog.GetDefaultLogger().Warnw(context.Background(),
-				"gresty: create logger failed, fallback to default", glog.KeyErrorMessage, err)
+				"gresty: create logger failed, fallback to default", gconstant.KeyErrorMessage, err)
 			c.logger = glog.GetDefaultLogger()
 			return
 		}
@@ -53,7 +54,7 @@ func NewClient(opts ...Option) *Client {
 	c.SetLogger(newGlogAdapter(c.logger))
 	c.SetDebug(false)
 	c.AddRequestMiddleware(func(client *resty.Client, req *resty.Request) error {
-		req.Header = protocol.InjectTraceAndRequestID(req.Context(), req.Header)
+		req.Header = gtrace.InjectTraceAndRequestID(req.Context(), req.Header)
 		return nil
 	})
 

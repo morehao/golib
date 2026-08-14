@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 	_ "github.com/morehao/golib/glog/driver/slog"
+	"github.com/morehao/golib/gtrace"
+	"github.com/morehao/golib/gutil"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
@@ -39,7 +42,7 @@ func TestSlogLoggerInit(t *testing.T) {
 
 		expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
 		expectedFile := filepath.Join(expectedDir, "slog-service_full.log")
-		if !glog.FileExists(expectedFile) {
+		if !gutil.FileExists(expectedFile) {
 			t.Errorf("Log file not created: %s", expectedFile)
 		}
 	})
@@ -185,7 +188,7 @@ func TestSlogLoggerExtraKeys(t *testing.T) {
 		Module:     "test",
 		Level:      glog.DebugLevel,
 		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
-		ExtraKeys:  []string{glog.KeyTraceID, "user_id", glog.KeyAppRequestID},
+		ExtraKeys:  []string{gconstant.KeyTraceID, "user_id", gconstant.KeyAppRequestID},
 		LoggerType: glog.LoggerTypeSlog,
 	}
 
@@ -193,9 +196,9 @@ func TestSlogLoggerExtraKeys(t *testing.T) {
 	assert.Nil(t, err)
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, glog.KeyTraceID, "123456")
+	ctx = context.WithValue(ctx, gconstant.KeyTraceID, "123456")
 	ctx = context.WithValue(ctx, "user_id", "user123")
-	ctx = context.WithValue(ctx, glog.KeyAppRequestID, "req789")
+	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, "req789")
 	ctx = context.WithValue(ctx, "other_field", "should_not_appear")
 
 	logger.Infow(ctx, "test message with extra fields", "key", "value")
@@ -225,6 +228,7 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 	}()
 
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace fields", "key", "value")
 	span.End()
 	logger.Close()
@@ -234,9 +238,9 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.Contains(t, content, glog.KeyTraceID)
-	assert.Contains(t, content, glog.KeySpanID)
-	assert.Contains(t, content, glog.KeyTraceFlags)
+	assert.Contains(t, content, gconstant.KeyTraceID)
+	assert.Contains(t, content, gconstant.KeySpanID)
+	assert.Contains(t, content, gconstant.KeyTraceFlags)
 }
 
 func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
@@ -261,6 +265,7 @@ func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 	}()
 
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace fields disabled", "key", "value")
 	span.End()
 	logger.Close()
@@ -270,9 +275,9 @@ func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceFlags+`"`)
 }
 
 func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
@@ -297,6 +302,7 @@ func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
 	}()
 
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace option override", "key", "value")
 	span.End()
 	logger.Close()
@@ -306,9 +312,9 @@ func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceFlags+`"`)
 }
 
 func TestSlogLoggerOTELTraceWithoutSpanContext(t *testing.T) {
@@ -335,9 +341,9 @@ func TestSlogLoggerOTELTraceWithoutSpanContext(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceFlags+`"`)
 }
 
 func TestSlogLoggerRotation(t *testing.T) {
@@ -366,7 +372,7 @@ func TestSlogLoggerRotation(t *testing.T) {
 	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
 	baseFile := filepath.Join(expectedDir, "slog-rotation-test_full.log")
 
-	assert.True(t, glog.FileExists(baseFile), "Current log file should exist")
+	assert.True(t, gutil.FileExists(baseFile), "Current log file should exist")
 
 	files, err := os.ReadDir(expectedDir)
 	assert.Nil(t, err)
@@ -403,7 +409,7 @@ func TestSlogMultiWritersFileAndConsole(t *testing.T) {
 	logger.Info(ctx, "multi writer test")
 	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
 	expectedFile := filepath.Join(expectedDir, "slog-multi_full.log")
-	assert.True(t, glog.FileExists(expectedFile), expectedFile)
+	assert.True(t, gutil.FileExists(expectedFile), expectedFile)
 }
 
 func TestSlogMultiWritersLevelSplit(t *testing.T) {
@@ -455,8 +461,8 @@ func TestSlogWfOnlyNoExtraFullFile(t *testing.T) {
 	logger.Error(context.Background(), "error msg")
 	logger.Close()
 	dateStr := time.Now().Format("20060102")
-	assert.True(t, glog.FileExists(filepath.Join(tempDir, dateStr, "slog-wfonly_wf.log")))
-	assert.False(t, glog.FileExists(filepath.Join(tempDir, dateStr, "slog-wfonly_full.log")))
+	assert.True(t, gutil.FileExists(filepath.Join(tempDir, dateStr, "slog-wfonly_wf.log")))
+	assert.False(t, gutil.FileExists(filepath.Join(tempDir, dateStr, "slog-wfonly_full.log")))
 	wf, _ := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-wfonly_wf.log"))
 	assert.NotContains(t, string(wf), "info msg")
 	assert.Contains(t, string(wf), "error msg")

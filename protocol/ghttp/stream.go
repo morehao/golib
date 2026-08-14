@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 )
 
@@ -91,9 +92,9 @@ func (c *Client) streamDo(ctx context.Context, method, path string, opt RequestO
 
 	reqData, _ := c.formatLogMsg(requestBody, nil)
 	glog.Debugw(ctx, "http stream "+method+" request started",
-		glog.KV(glog.KeyService, c.Service),
-		glog.KV(glog.KeyUrlFull, reqURL),
-		glog.KV(glog.KeyHttpRequestBody, reqData),
+		glog.KV(gconstant.KeyService, c.Service),
+		glog.KV(gconstant.KeyUrlFull, reqURL),
+		glog.KV(gconstant.KeyHttpRequestBody, reqData),
 	)
 
 	return c.doStream(ctx, request, requestBody)
@@ -114,10 +115,10 @@ func (c *Client) doStream(ctx context.Context, request *http.Request, requestBod
 		cancel()
 		costTime := time.Since(startTime).Milliseconds()
 		glog.Errorw(ctx, "http stream request failed",
-			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrlFull, request.URL.String()),
-			glog.KV(glog.KeyHttpResponseStatusCode, 0),
-			glog.KV(glog.KeyAppRequestDurationMs, costTime),
+			glog.KV(gconstant.KeyService, c.Service),
+			glog.KV(gconstant.KeyUrlFull, request.URL.String()),
+			glog.KV(gconstant.KeyHttpResponseStatusCode, 0),
+			glog.KV(gconstant.KeyAppRequestDurationMs, costTime),
 		)
 		return nil, fmt.Errorf("http stream request failed: %w", err)
 	}
@@ -143,21 +144,21 @@ func (c *Client) doStream(ctx context.Context, request *http.Request, requestBod
 		}
 
 		glog.Errorw(ctx, "http stream request failed",
-			glog.KV(glog.KeyService, c.Service),
-			glog.KV(glog.KeyUrlFull, request.URL.String()),
-			glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
-			glog.KV(glog.KeyHttpResponseBody, string(body)),
-			glog.KV(glog.KeyAppRequestDurationMs, costTime),
+			glog.KV(gconstant.KeyService, c.Service),
+			glog.KV(gconstant.KeyUrlFull, request.URL.String()),
+			glog.KV(gconstant.KeyHttpResponseStatusCode, resp.StatusCode),
+			glog.KV(gconstant.KeyHttpResponseBody, string(body)),
+			glog.KV(gconstant.KeyAppRequestDurationMs, costTime),
 		)
 
 		return result, newHTTPError(resp.StatusCode, body, resp.Header)
 	}
 
 	glog.Infow(ctx, "http stream request connected",
-		glog.KV(glog.KeyService, c.Service),
-		glog.KV(glog.KeyUrlFull, request.URL.String()),
-		glog.KV(glog.KeyHttpResponseStatusCode, resp.StatusCode),
-		glog.KV(glog.KeyAppRequestDurationMs, costTime),
+		glog.KV(gconstant.KeyService, c.Service),
+		glog.KV(gconstant.KeyUrlFull, request.URL.String()),
+		glog.KV(gconstant.KeyHttpResponseStatusCode, resp.StatusCode),
+		glog.KV(gconstant.KeyAppRequestDurationMs, costTime),
 	)
 
 	return result, nil

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gconstant"
 	_ "github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
@@ -370,7 +370,7 @@ func TestGetStreamInjectsOTelTraceAndRequestID(t *testing.T) {
 
 	ctx, span := tp.Tracer("ghttp-stream-test").Start(context.Background(), "stream-outbound")
 	defer span.End()
-	ctx = context.WithValue(ctx, glog.KeyAppRequestID, requestID)
+	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
 
 	stream, err := client.GetStream(ctx, "/", RequestOption{})
 	assert.Nil(t, err)

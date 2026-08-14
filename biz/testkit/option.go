@@ -6,7 +6,8 @@ import (
 	"net/url"
 
 	"github.com/gin-gonic/gin"
-	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gconstant"
+	"github.com/morehao/golib/gutil"
 )
 
 type Option func(ctx *gin.Context)
@@ -32,8 +33,8 @@ func NewContext(opts ...Option) *gin.Context {
 		opt(ctx)
 	}
 
-	if _, exists := ctx.Get(glog.KeyAppRequestID); !exists {
-		ctx.Set(glog.KeyAppRequestID, glog.GenRequestID())
+	if _, exists := ctx.Get(gconstant.KeyAppRequestID); !exists {
+		ctx.Set(gconstant.KeyAppRequestID, gutil.GenUUID())
 	}
 
 	return ctx

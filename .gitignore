@@ -29,3 +29,7 @@ codegen/tmp/*
 .worktrees/
 superpowers
 .env
+
+# Local Go build cache / temp (used when system temp is unavailable)
+.gocache/
+.gotmp/

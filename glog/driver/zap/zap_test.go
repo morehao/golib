@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gtrace"
+	"github.com/morehao/golib/gutil"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
@@ -38,7 +41,7 @@ func TestInit(t *testing.T) {
 
 		expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
 		expectedFile := filepath.Join(expectedDir, "test-service_full.log")
-		if !glog.FileExists(expectedFile) {
+		if !gutil.FileExists(expectedFile) {
 			t.Errorf("Log file not created: %s", expectedFile)
 		}
 	})
@@ -125,7 +128,7 @@ func TestExtraKeys(t *testing.T) {
 		Module:     "test",
 		Level:      glog.DebugLevel,
 		Writers:    []glog.WriterConfig{{Type: glog.WriterConsole}},
-		ExtraKeys:  []string{glog.KeyTraceID, "user_id", glog.KeyAppRequestID},
+		ExtraKeys:  []string{gconstant.KeyTraceID, "user_id", gconstant.KeyAppRequestID},
 		LoggerType: glog.LoggerTypeZap,
 	}
 
@@ -137,9 +140,9 @@ func TestExtraKeys(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ctx = context.WithValue(ctx, glog.KeyTraceID, "123456")
+	ctx = context.WithValue(ctx, gconstant.KeyTraceID, "123456")
 	ctx = context.WithValue(ctx, "user_id", "user123")
-	ctx = context.WithValue(ctx, glog.KeyAppRequestID, "req789")
+	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, "req789")
 	ctx = context.WithValue(ctx, "other_field", "should_not_appear")
 
 	t.Log("Logging message with extra fields")
@@ -174,7 +177,7 @@ func TestLogRotation(t *testing.T) {
 	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
 	baseFile := filepath.Join(expectedDir, "rotation-test_full.log")
 
-	assert.True(t, glog.FileExists(baseFile), "Current log file should exist")
+	assert.True(t, gutil.FileExists(baseFile), "Current log file should exist")
 
 	files, err := os.ReadDir(expectedDir)
 	assert.Nil(t, err)
@@ -214,6 +217,7 @@ func TestOTELTraceFieldsInjected(t *testing.T) {
 	}()
 
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace fields", "key", "value")
 	span.End()
 	logger.Close()
@@ -223,9 +227,9 @@ func TestOTELTraceFieldsInjected(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.Contains(t, content, glog.KeyTraceID)
-	assert.Contains(t, content, glog.KeySpanID)
-	assert.Contains(t, content, glog.KeyTraceFlags)
+	assert.Contains(t, content, gconstant.KeyTraceID)
+	assert.Contains(t, content, gconstant.KeySpanID)
+	assert.Contains(t, content, gconstant.KeyTraceFlags)
 }
 
 func TestOTELTraceFieldsDisabled(t *testing.T) {
@@ -250,6 +254,7 @@ func TestOTELTraceFieldsDisabled(t *testing.T) {
 	}()
 
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace fields disabled", "key", "value")
 	span.End()
 	logger.Close()
@@ -259,9 +264,9 @@ func TestOTELTraceFieldsDisabled(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceFlags+`"`)
 }
 
 func TestOTELTraceOptionOverridesConfig(t *testing.T) {
@@ -286,6 +291,7 @@ func TestOTELTraceOptionOverridesConfig(t *testing.T) {
 	}()
 
 	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace option override", "key", "value")
 	span.End()
 	logger.Close()
@@ -295,9 +301,9 @@ func TestOTELTraceOptionOverridesConfig(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceFlags+`"`)
 }
 
 func TestOTELTraceWithoutSpanContext(t *testing.T) {
@@ -324,9 +330,9 @@ func TestOTELTraceWithoutSpanContext(t *testing.T) {
 	assert.Nil(t, readErr)
 	content := string(b)
 
-	assert.NotContains(t, content, `"`+glog.KeyTraceID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeySpanID+`"`)
-	assert.NotContains(t, content, `"`+glog.KeyTraceFlags+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeySpanID+`"`)
+	assert.NotContains(t, content, `"`+gconstant.KeyTraceFlags+`"`)
 }
 
 func TestZapMultiWritersFileAndConsole(t *testing.T) {
@@ -348,7 +354,7 @@ func TestZapMultiWritersFileAndConsole(t *testing.T) {
 	logger.Close()
 	dateStr := time.Now().Format("20060102")
 	expectedFile := filepath.Join(tempDir, dateStr, "zap-multi_full.log")
-	assert.True(t, glog.FileExists(expectedFile), expectedFile)
+	assert.True(t, gutil.FileExists(expectedFile), expectedFile)
 }
 
 func TestZapMultiWritersLevelSplit(t *testing.T) {

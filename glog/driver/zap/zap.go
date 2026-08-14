@@ -6,8 +6,9 @@ import (
 	"math"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
-	oteltrace "go.opentelemetry.io/otel/trace"
+	"github.com/morehao/golib/gutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -231,7 +232,7 @@ func (l *zapLogger) allFields(ctx context.Context, kvs []any) []zap.Field {
 // 超过 Go 内联器预算而不会被内联，因此 "业务 → Infow(接口分派) → entry → zap.Logger"
 // 的帧数稳定，无需 //go:noinline。caller 深度由 zapBaseCallerSkip + callerSkip + extra 固定。
 func (l *zapLogger) entry(level glog.Level, ctx context.Context, extra int, msg string, kvs []any) {
-	if glog.NilCtx(ctx) || glog.SkipLog(ctx) {
+	if gutil.NilCtx(ctx) || gutil.SkipLog(ctx) {
 		return
 	}
 	if !l.logger.Core().Enabled(levelToZapLevel(level)) {
@@ -346,22 +347,16 @@ func (l *zapLogger) extraFields(ctx context.Context) []zap.Field {
 	hasOTELTraceFields := false
 
 	if l.enableOTELTrace {
-		span := oteltrace.SpanFromContext(ctx)
-		if span != nil {
-			sc := span.SpanContext()
-			if sc.IsValid() {
+		for _, key := range []string{gconstant.KeyTraceID, gconstant.KeySpanID, gconstant.KeyTraceFlags} {
+			if v := ctx.Value(key); v != nil {
 				hasOTELTraceFields = true
-				fields = append(fields,
-					zap.String(glog.KeyTraceID, sc.TraceID().String()),
-					zap.String(glog.KeySpanID, sc.SpanID().String()),
-					zap.String(glog.KeyTraceFlags, sc.TraceFlags().String()),
-				)
+				fields = append(fields, zap.Any(key, v))
 			}
 		}
 	}
 
 	for _, key := range l.cfg.ExtraKeys {
-		if hasOTELTraceFields && (key == glog.KeyTraceID || key == glog.KeySpanID || key == glog.KeyTraceFlags) {
+		if hasOTELTraceFields && (key == gconstant.KeyTraceID || key == gconstant.KeySpanID || key == gconstant.KeyTraceFlags) {
 			continue
 		}
 		if v := ctx.Value(key); v != nil {

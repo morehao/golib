@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 )
 
 func newEsLogger(cfg *ESConfig) (*esLog, error) {
@@ -43,20 +45,20 @@ func (l *esLog) LogRoundTrip(req *http.Request, res *http.Response, err error, s
 
 	var fields []any
 	fields = append(fields,
-		glog.KeyService, l.service,
-		glog.KeyNetworkProtocolName, glog.ValueNetworkProtoElasticsearch,
-		glog.KeyAppRequestStartTime, glog.FormatRequestTime(start),
-		glog.KeyAppRequestEndTime, glog.FormatRequestTime(end),
-		glog.KeyAppRequestDurationMs, cost,
-		glog.KeyAppResponseCode, ralCode,
-		glog.KeyDbOperationMethod, method,
-		glog.KeyDbOperationPath, path,
+		gconstant.KeyService, l.service,
+		gconstant.KeyNetworkProtocolName, gconstant.ValueNetworkProtoElasticsearch,
+		gconstant.KeyAppRequestStartTime, gutil.FormatRequestTime(start),
+		gconstant.KeyAppRequestEndTime, gutil.FormatRequestTime(end),
+		gconstant.KeyAppRequestDurationMs, cost,
+		gconstant.KeyAppResponseCode, ralCode,
+		gconstant.KeyDbOperationMethod, method,
+		gconstant.KeyDbOperationPath, path,
 	)
 	msg := "es execute success"
 	if err != nil {
 		ralCode = -1
 		msg = err.Error()
-		fields = append(fields, glog.KeyAppErrorMessage, msg)
+		fields = append(fields, gconstant.KeyAppErrorMessage, msg)
 		l.logger.Errorw(ctx, msg, fields...)
 	}
 
@@ -68,7 +70,7 @@ func (l *esLog) LogRoundTrip(req *http.Request, res *http.Response, err error, s
 		} else {
 			buf.ReadFrom(req.Body)
 		}
-		fields = append(fields, glog.KeyDbStatement, buf.String())
+		fields = append(fields, gconstant.KeyDbStatement, buf.String())
 	}
 	var affectedRows int
 	if res.Body != nil && res.Body != http.NoBody {
@@ -89,7 +91,7 @@ func (l *esLog) LogRoundTrip(req *http.Request, res *http.Response, err error, s
 			affectedRows = l.parseAffectedRows(method, resBody)
 		}
 		fields = append(fields,
-			glog.KeyDbAffectedRows, affectedRows,
+			gconstant.KeyDbAffectedRows, affectedRows,
 		)
 	}
 	if ralCode != 200 {
