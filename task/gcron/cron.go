@@ -31,17 +31,17 @@ type Task struct {
 }
 
 type Scheduler struct {
-	cron   *cron.Cron
-	logger glog.Logger
-	store  *store
-	lock   distlock.Lock
-	cfg    *Config
+	cron        *cron.Cron
+	logger      glog.Logger
+	store       *store
+	lockFactory distlock.LockFactory
+	cfg         *Config
 
 	mu    sync.Mutex
 	tasks map[string]cron.EntryID
 }
 
-func New(db *gorm.DB, cfg *Config, lock distlock.Lock, opts ...Option) (*Scheduler, error) {
+func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Option) (*Scheduler, error) {
 	if cfg == nil {
 		cfg = defaultConfig()
 	}
@@ -67,12 +67,12 @@ func New(db *gorm.DB, cfg *Config, lock distlock.Lock, opts ...Option) (*Schedul
 	logger := newTaskLogger("", "cron")
 
 	return &Scheduler{
-		cron:   c,
-		logger: logger,
-		store:  newStore(getDB),
-		lock:   lock,
-		cfg:    cfg,
-		tasks:  make(map[string]cron.EntryID),
+		cron:        c,
+		logger:      logger,
+		store:       newStore(getDB),
+		lockFactory: lockFactory,
+		cfg:         cfg,
+		tasks:       make(map[string]cron.EntryID),
 	}, nil
 }
 
@@ -94,7 +94,7 @@ func (s *Scheduler) Register(t Task) error {
 	}
 
 	enableLock := t.EnableLock || s.cfg.EnableLock
-	if enableLock && s.lock == nil {
+	if enableLock && s.lockFactory == nil {
 		return ErrLockNotSet
 	}
 
@@ -139,11 +139,17 @@ func (s *Scheduler) Register(t Task) error {
 		}
 
 		if enableLock {
-			taskLock := distlock.NewDistLock(s.lock, &distlock.Config{
+			taskLock, lerr := distlock.NewDistLock(s.lockFactory, &distlock.Config{
 				AutoRenewal: autoRenewal,
 				TTL:         lockTTL,
 				Key:         "cron:lock:" + t.TaskCode,
 			})
+			if lerr != nil {
+				// 锁配置/工厂错误：与"竞争未获取"区分，记录 skipped 并带上错误信息
+				s.logger.Errorw(ctx, "cron task lock create error", gconstant.KeyTaskCode, t.TaskCode, gconstant.KeyRunCode, runCode, "error", lerr)
+				skip("lock create error: " + lerr.Error())
+				return
+			}
 			ok, lerr := taskLock.Lock(ctx)
 			if lerr != nil {
 				// 锁存储故障：与"竞争未获取"区分，记录 skipped 并带上错误信息

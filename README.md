@@ -161,9 +161,37 @@ For usage examples, refer to [dbaccess usage](dbaccess/README.md)
 `distlock` is a distributed lock component based on Redis, using redsync algorithm, supporting automatic renewal.
 
 ### Features
-- Redis-based distributed lock
-- Automatic renewal (lock keepalive)
+- Redis-based distributed lock (single or multi-node quorum)
+- Automatic renewal (lock keepalive) with jitter, lock-loss notification via `Lost()`
 - Non-reentrant
+
+### Usage
+```go
+// 1. Create a lock factory (one per process; pass multiple clients for multi-node quorum)
+factory := distlock.NewRedisStorage(redisClient)
+
+// 2. Create a lock instance per key/TTL
+lock, err := distlock.NewDistLock(factory, &distlock.Config{
+	Key:         "order:pay:10086",
+	TTL:         30 * time.Second,
+	AutoRenewal: true,
+})
+if err != nil {
+	// invalid config: empty Key or TTL <= 0
+}
+
+// 3. Acquire (non-blocking) -> critical section -> release
+if ok, err := lock.Lock(ctx); err != nil {
+	// storage failure
+} else if !ok {
+	// lock not acquired (normal contention, retry later)
+} else {
+	defer lock.Unlock(context.Background())
+	// critical section...
+	// when auto-renewal fails (lock lost), Lost() is closed — abort ASAP:
+	// <-lock.Lost()
+}
+```
 
 ## excel
 

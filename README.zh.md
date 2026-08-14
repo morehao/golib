@@ -120,9 +120,37 @@ go get github.com/morehao/golib
 `distlock` 是分布式锁组件，基于 Redis 实现，使用 redsync 算法，支持自动续期。
 
 ### 特性
-- 基于 Redis 的分布式锁
-- 支持自动续期（锁续命）
+- 基于 Redis 的分布式锁（支持单节点或多节点 quorum）
+- 支持自动续期（锁续命，带随机抖动），通过 `Lost()` 提供锁丢失通知
 - 不支持可重入
+
+### 使用示例
+```go
+// 1. 创建锁工厂（进程内一个即可；传入多个 client 可组成多节点 quorum）
+factory := distlock.NewRedisStorage(redisClient)
+
+// 2. 按 key/TTL 创建锁实例
+lock, err := distlock.NewDistLock(factory, &distlock.Config{
+	Key:         "order:pay:10086",
+	TTL:         30 * time.Second,
+	AutoRenewal: true,
+})
+if err != nil {
+	// 配置错误：Key 为空 / TTL <= 0 等
+}
+
+// 3. 加锁（非阻塞）→ 临界区 → 解锁
+if ok, err := lock.Lock(ctx); err != nil {
+	// 存储故障
+} else if !ok {
+	// 未抢到锁（正常竞争，可稍后重试）
+} else {
+	defer lock.Unlock(context.Background())
+	// 临界区...
+	// 续期失败（锁丢失）时 Lost() 会关闭，应尽快终止临界区：
+	// <-lock.Lost()
+}
+```
 
 ## excel
 
