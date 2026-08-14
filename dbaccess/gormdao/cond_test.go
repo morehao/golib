@@ -87,3 +87,21 @@ func TestBaseCond_IncludeDeleted(t *testing.T) {
 	}
 	assert.True(t, (&customCond{BaseCond: BaseCond{IsDelete: true}}).IncludeDeleted())
 }
+
+func TestBaseCond_GetPageInfoNilSafe(t *testing.T) {
+	// 自定义 Cond 内嵌 *BaseCond 指针且未显式初始化时，BaseCond 为 nil。
+	// 提升方法 GetPageInfo 在 nil 嵌入指针上调用不得 panic，应视为不分页（返回全量）。
+	type customCond struct {
+		*BaseCond
+	}
+	cond := &customCond{}
+	page, pageSize := cond.GetPageInfo()
+	assert.Zero(t, page)
+	assert.Zero(t, pageSize)
+
+	// 显式初始化时正常返回分页参数
+	cond = &customCond{BaseCond: &BaseCond{Page: 2, PageSize: 20}}
+	page, pageSize = cond.GetPageInfo()
+	assert.Equal(t, 2, page)
+	assert.Equal(t, 20, pageSize)
+}

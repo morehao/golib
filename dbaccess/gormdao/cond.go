@@ -40,6 +40,11 @@ func (c *BaseCond) BuildCondition(db *gorm.DB, tableName string) {
 }
 
 func (c *BaseCond) GetPageInfo() (page int, pageSize int) {
+	// nil 安全：内嵌 *BaseCond 的 Cond 常以零值构造（未显式初始化 BaseCond），
+	// 此时 c 为 nil，直接访问 c.Page 会 panic（promoted method on nil embedded pointer）。
+	if c == nil {
+		return 0, 0
+	}
 	return c.Page, c.PageSize
 }
 
