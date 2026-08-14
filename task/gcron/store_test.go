@@ -35,7 +35,7 @@ func TestStoreDeleteTaskByCode(t *testing.T) {
 
 	got, err := s.GetTaskByCode(context.Background(), "foo")
 	require.NoError(t, err)
-	require.Equal(t, uint(0), got.ID)
+	require.Nil(t, got)
 
 	list, _, err := s.ListTask(context.Background(), &CronTaskCond{TaskCode: "foo"})
 	require.NoError(t, err)

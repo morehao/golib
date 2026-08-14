@@ -267,7 +267,7 @@ func TestRegisterInvalidSpecNotPersisted(t *testing.T) {
 
 	got, qerr := s.GetStore().GetTaskByCode(context.Background(), "bad-spec")
 	require.NoError(t, qerr)
-	require.Zero(t, got.ID)
+	require.Nil(t, got)
 }
 
 // TestTaskLifecycleDisableEnableRemove 验证 Disable/Enable/Remove 运行时管理语义。
@@ -315,7 +315,7 @@ func TestTaskLifecycleDisableEnableRemove(t *testing.T) {
 	require.NoError(t, s.Remove("lifecycle"))
 	got, err = s.GetStore().GetTaskByCode(context.Background(), "lifecycle")
 	require.NoError(t, err)
-	require.Zero(t, got.ID)
+	require.Nil(t, got)
 
 	// Remove 后可重新注册同一 TaskCode（软删除行原子恢复）
 	require.NoError(t, s.Register(task))

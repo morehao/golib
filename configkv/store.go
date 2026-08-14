@@ -130,6 +130,9 @@ func (s *store) GetByID(ctx context.Context, id uint) (*ConfigEntity, error) {
 	if err != nil {
 		return nil, err
 	}
+	if entity == nil {
+		return &ConfigEntity{}, nil
+	}
 	return s.decryptEntity(*entity), nil
 }
 

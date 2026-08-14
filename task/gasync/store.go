@@ -2,6 +2,7 @@ package gasync
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/morehao/golib/dbaccess/gormdao"
@@ -47,6 +48,9 @@ func (s *store) upsertRunStart(ctx context.Context, run *AsyncTaskRun) (uint, er
 	existing, qerr := s.GetRunByRunCode(ctx, run.RunCode)
 	if qerr != nil {
 		return 0, qerr
+	}
+	if existing == nil {
+		return 0, fmt.Errorf("gasync: run not found after upsert, run_code=%s", run.RunCode)
 	}
 	return existing.ID, nil
 }

@@ -187,5 +187,5 @@ func TestAsyncCleanupRuns(t *testing.T) {
 
 	gone, err := s.GetRunByRunCode(context.Background(), "c-old")
 	require.NoError(t, err)
-	require.Zero(t, gone.ID)
+	require.Nil(t, gone)
 }
