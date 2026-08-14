@@ -47,6 +47,9 @@ func WithListener(ln net.Listener) HTTPOption {
 // 而后关闭连接，避免部署更新时掐断正在处理的请求。可通过 WithListener 传入预绑定
 // 监听器；否则使用 srv.Addr 自行绑定。
 //
+// 注意：不要再把同一个 srv 注册为 lifecycle 的 OrderServer closer
+// （AddCloser/AddCloseFunc），否则会与内部的 Shutdown 编排重复关闭。
+//
 // 返回时机为 HTTP server 已确定关闭（Shutdown 完成）或监听退出出错；因此应放在
 // goroutine 中调用，配合主流程 lc.Wait() 阻塞，阻塞结束即代表 HTTP 已安全下线。
 func RunHTTPServer(srv *http.Server, opts ...HTTPOption) error {
@@ -72,21 +75,30 @@ func RunHTTPServer(srv *http.Server, opts ...HTTPOption) error {
 			errCh <- err
 			return
 		}
-		errCh <- nil
+		errCh <- nil // ErrServerClosed：由 Shutdown/Close 触发的正常关闭
 	}()
 
 	defer func() { _ = srv.Close() }() // 兜底，确保返回时监听已关闭
 
-	select {
-	case <-lc.Done():
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		return srv.Shutdown(ctx)
+	for {
+		select {
+		case <-lc.Done():
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			return srv.Shutdown(ctx)
 
-	case err := <-errCh:
-		if err == nil {
-			return fmt.Errorf("lifecycle: http server closed unexpectedly")
+		case err := <-errCh:
+			if err != nil {
+				return err
+			}
+			// serve 以 ErrServerClosed 返回：若生命周期恰在此刻退出，优先走优雅关闭，
+			// 避免与 Shutdown 竞争时误报"意外关闭"。
+			select {
+			case <-lc.Done():
+				continue
+			default:
+				return fmt.Errorf("lifecycle: http server closed unexpectedly")
+			}
 		}
-		return err
 	}
 }

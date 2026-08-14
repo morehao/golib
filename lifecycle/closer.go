@@ -15,10 +15,11 @@ type closerItem struct {
 }
 
 type closerSet struct {
-	mu    sync.Mutex
-	items []closerItem
-	once  sync.Once
-	done  chan struct{}
+	mu      sync.Mutex
+	items   []closerItem
+	once    sync.Once
+	started bool // 收尾是否已开始：开始后拒绝新注册，避免静默丢失
+	done    chan struct{}
 }
 
 func newCloserSet() *closerSet {
@@ -28,13 +29,20 @@ func newCloserSet() *closerSet {
 func (s *closerSet) add(stage int, c io.Closer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.started {
+		glog.Warnf(context.Background(), "lifecycle: add closer ignored: shutdown already started")
+		return
+	}
 	s.items = append(s.items, closerItem{stage: stage, c: c})
 }
 
 // run 按 stage 升序执行所有收尾动作；stage 相同则按注册顺序。
-// 返回的 done 在整个收尾完成时关闭，供外部等待。
+// 返回的 done 在整个收尾完成时关闭，供外部等待。重复调用不重复执行。
 func (s *closerSet) run() <-chan struct{} {
 	s.once.Do(func() {
+		s.mu.Lock()
+		s.started = true
+		s.mu.Unlock()
 		go s.execute()
 	})
 	return s.done

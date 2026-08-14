@@ -6,11 +6,12 @@
 
 ## 特性
 
-- **零依赖**：仅使用 Go 标准库
+- **零第三方依赖**：仅使用 Go 标准库（与本仓 glog 记录日志）
 - **多触发源**：系统信号（SIGTERM/SIGINT）、`Exit()` 主动触发、actor 出错即关
 - **context 广播**：统一退出信号，后台任务 / 消费者 / 定时任务协作停止
 - **HTTP 优雅收尾**：退出时用 `http.Server.Shutdown(ctx)` 等待在途请求完成
 - **有序资源释放**：按阶段（先 HTTP 再依赖资源）执行收尾，避免释放顺序错误
+- **等待 actor 收尾**：退出时等待所有 actor 的 `run` 真正结束后再释放资源
 - **退出超时兜底**：收尾超时强制退出，防止进程卡死
 
 ## 安装
@@ -66,11 +67,11 @@ func main() {
 | API | 说明 |
 |-----|------|
 | `Default()` | 返回全局单例生命周期实例 |
-| `lc.Context()` | 广播退出信号的 context，后台任务监听其 `Done()` |
+| `lc.Context()` | 广播退出信号的 context，后台任务监听其 `Done()`（外部不可取消） |
 | `lc.Done()` | 退出通知 channel（触发退出后关闭） |
 | `lc.AddCloser(stage, c)` / `lc.AddCloseFunc(stage, f)` | 注册有序收尾 |
 | `lc.AddActor(name, run, cancel)` | 注册 actor，run 出错即触发整体退出 |
-| `lc.Exit()` | 主动触发退出 |
+| `lc.Exit()` | 主动触发退出（同时关闭 `Done()` 并取消 `Context()`） |
 | `lc.Wait()` | 阻塞等待退出并编排收尾，进程最终退出 |
 | `RunHTTPServer(srv, opts...)` | 启动 HTTP 服务并在退出时优雅关闭 |
 
@@ -89,9 +90,11 @@ func main() {
 
 | 方法 | 默认 | 说明 |
 |------|------|------|
-| `lc.SetTimeout(d)` | 15s | 退出总超时，超时后 `os.Exit(1)` |
+| `lc.SetTimeout(d)` | 15s | 退出总超时，超时后 `os.Exit(1)`；设为 `<=0` 表示不限时（不启用兜底） |
 | `lc.SetHTTPTimeout(d)` | 10s | HTTP 等待在途请求的宽限时间 |
 | `lc.SetSignals(sigs...)` | SIGTERM, Interrupt | 监听的系统信号 |
+
+> 注意：`lc.Wait()` 启动后（即进入退出编排前）再 `AddActor` / `AddCloser` 会被忽略并记录警告，应在启动前完成注册。
 
 ## HTTP 优雅收尾
 
@@ -109,15 +112,19 @@ go lifecycle.RunHTTPServer(srv, lifecycle.WithListener(ln))
 
 `RunHTTPServer` 返回时 HTTP server 已确定关闭（Shutdown 完成或监听出错）。
 
+> 注意：不要再把同一个 `srv` 注册为 `OrderServer` 的 closer（`AddCloser`/`AddCloseFunc`），否则会与内部的 `Shutdown` 编排重复关闭。
+
 ## Actor 出错即关
 
-后台任务作为 actor 注册，任一个 `run` 返回 error 或 panic 都会触发整体退出，避免后台 goroutine 静默失败。
+后台任务作为 actor 注册，任一个 `run` 返回 error 或 panic 都会触发整体退出，避免后台 goroutine 静默失败。退出编排会并发调用所有 actor 的 `cancel`，并**等待每个 `run` 真正退出**（其 `ctx.Done()` 之后的清理逻辑会执行完毕），再由 watchdog 超时兜底。
 
 ```go
 lc.AddActor("job", lifecycle.RecoverFunc(func(ctx context.Context) error {
 	return job.Run(ctx) // panic 也会被捕获并转为 error 触发退出
 }), func() { job.Stop() })
 ```
+
+> 提示：`AddActor` 内部已自动捕获 `run` 的 panic 并转为 error，`RecoverFunc` 是可选的显式包装。
 
 ## 部署侧配合
 

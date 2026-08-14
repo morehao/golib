@@ -111,7 +111,9 @@ func TestStartActor_PropagatesError(t *testing.T) {
 	errCh := make(chan error, 1)
 	startActor(lc.actors[0], lc.ctx, errCh)
 	err := <-errCh
-	assert.Same(t, wantErr, err)
+	assert.ErrorIs(t, err, wantErr)
+	// 错误应携带 actor 名字，便于定位
+	assert.Contains(t, err.Error(), `"fail"`)
 }
 
 func TestStartActor_HonorsContextCancellation(t *testing.T) {
@@ -165,6 +167,82 @@ func TestSetInstance(t *testing.T) {
 	assert.Same(t, lc, Default())
 	SetInstance(nil)
 	assert.NotSame(t, lc, Default())
+}
+
+func TestExit_CancelsContext(t *testing.T) {
+	lc := New()
+	lc.Exit()
+	select {
+	case <-lc.Context().Done():
+	default:
+		t.Fatal("context should be cancelled after Exit()")
+	}
+}
+
+func TestAddActor_AfterStartIgnored(t *testing.T) {
+	lc := New()
+	lc.startActors()
+	lc.AddActor("late", func(ctx context.Context) error { return nil }, nil)
+	assert.Len(t, lc.actors, 0)
+}
+
+func TestCloser_AddAfterStartIgnored(t *testing.T) {
+	lc := New()
+	<-lc.closers.run()
+	var called int32
+	lc.AddCloseFunc(OrderServer, func() error {
+		atomic.AddInt32(&called, 1)
+		return nil
+	})
+	time.Sleep(10 * time.Millisecond)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&called))
+}
+
+// TestShutdown_EndToEnd 端到端验证退出编排：
+// shutdown 会等待 actor 的收尾逻辑执行完毕，且 closers 按 stage 顺序执行。
+func TestShutdown_EndToEnd(t *testing.T) {
+	lc := New()
+	var mu sync.Mutex
+	var order []string
+	record := func(s string) {
+		mu.Lock()
+		order = append(order, s)
+		mu.Unlock()
+	}
+
+	// actor：收到 ctx 取消后执行清理逻辑（模拟刷缓冲 / 关连接）
+	cleaned := make(chan struct{})
+	lc.AddActor("worker", func(ctx context.Context) error {
+		<-ctx.Done()
+		record("actor-cleanup")
+		close(cleaned)
+		return nil
+	}, nil)
+
+	lc.AddCloseFunc(OrderStorage, func() error { record("close-storage"); return nil })
+	lc.AddCloseFunc(OrderServer, func() error { record("close-server"); return nil })
+
+	lc.startActors()
+	lc.Exit()
+	lc.shutdown()
+
+	// shutdown 返回前 actor 的收尾必须已执行完毕
+	select {
+	case <-cleaned:
+	default:
+		t.Fatal("actor cleanup should have completed before shutdown returns")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"actor-cleanup", "close-server", "close-storage"}, order)
+}
+
+func TestWaitActors_IgnoresNotStarted(t *testing.T) {
+	lc := New()
+	lc.AddActor("w", func(ctx context.Context) error { return nil }, nil)
+	// 未调用 startActors 时不启动 actor；waitActors 对未启动的 actor 也不应卡死
+	lc.stopActors()
+	lc.waitActors()
 }
 
 // --- HTTP 优雅收尾 ---
@@ -221,6 +299,44 @@ func TestRunHTTPServer_UsesDefaultInstance(t *testing.T) {
 	lc := New()
 	WithLifeCycle(lc)(l)
 	assert.Same(t, lc, l.lc)
+}
+
+func TestRunHTTPServer_ServeError(t *testing.T) {
+	lc := New()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	requireNoErr(t, err)
+	srv := &http.Server{}
+
+	done := make(chan error, 1)
+	go func() { done <- RunHTTPServer(srv, WithLifeCycle(lc), WithListener(ln)) }()
+
+	// 外部关闭监听器 → Serve 返回错误，RunHTTPServer 应将其透传
+	ln.Close()
+	select {
+	case err := <-done:
+		assert.Error(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunHTTPServer did not return on serve error")
+	}
+}
+
+func TestRunHTTPServer_UnexpectedClose(t *testing.T) {
+	lc := New()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	requireNoErr(t, err)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})}
+
+	done := make(chan error, 1)
+	go func() { done <- RunHTTPServer(srv, WithLifeCycle(lc), WithListener(ln)) }()
+
+	// 生命周期未退出时服务被外部 Close → 应报"意外关闭"
+	srv.Close()
+	select {
+	case err := <-done:
+		assert.ErrorContains(t, err, "closed unexpectedly")
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunHTTPServer did not return on unexpected close")
+	}
 }
 
 func requireNoErr(t *testing.T, err error) {

@@ -45,14 +45,13 @@ lifecycle/
 
 ```go
 // 单例，程序入口调用 Wait() 阻塞直至退出
-func Wait()                              // 基于全局默认实例，等价 lc.Wait()
 func SetInstance(lc *LifeCycle)          // 覆盖全局实例（测试 / 替代注入点）
 func Default() *LifeCycle                // 返回全局默认实例
 
 func New() *LifeCycle
 
 // 生命周期信号
-func (l *LifeCycle) Context() context.Context       // 广播退出信号给所有消费者
+func (l *LifeCycle) Context() context.Context       // 广播退出信号给所有消费者（外部不可取消）
 func (l *LifeCycle) Done() <-chan struct{}          // 退出通知 channel（触发后关闭）
 func (l *LifeCycle) Timeout() time.Duration         // 退出超时时间
 
@@ -67,7 +66,7 @@ func (l *LifeCycle) AddCloseFunc(order int, f func() error)
 func (l *LifeCycle) AddActor(name string, run func(ctx context.Context) error, cancel func())
 
 // 退出
-func (l *LifeCycle) Exit()   // 主动触发退出
+func (l *LifeCycle) Exit()   // 主动触发退出（关闭 Done() 并取消 Context()）
 func (l *LifeCycle) Wait()   // 阻塞，收到信号或 Exit 后执行收尾并退出进程
 ```
 
@@ -96,13 +95,15 @@ Wait() 阻塞
 启动 watchdog：time.After(timeout) 到期 →
       ├─ 已经收尾完成 → os.Exit(0)（正常）
       └─ 超时卡死     → 日志 + os.Exit(1)（兜底）
+      （timeout <= 0 表示不限时，不启用 watchdog）
    │
    ▼
 1. cancel() 广播 context —— 后台任务 / 消费者协作停止
 2. 并发调用所有 actor.Cancel()
-3. 按 order 升序执行 Closer 集合（先 HTTP 再资源）
-4. glog 日志刷盘（若已初始化）
-5. 收尾完成 → os.Exit(0)
+3. 等待所有 actor 的 run 真正退出（收尾逻辑执行完毕，受 watchdog 兜底）
+4. 按 order 升序执行 Closer 集合（先 HTTP 再资源）
+5. glog 日志刷盘（若已初始化）
+6. 收尾完成 → os.Exit(0)
 ```
 
 ## HTTP 优雅收尾
@@ -124,7 +125,7 @@ lc.Wait()
 
 ```go
 // RunHTTPServer 返回时，HTTP server 已确定关闭（Shutdown 完成或超时）
-func RunHTTPServer(lc *LifeCycle, srv *http.Server, opts ...HTTPOption) (err error) {
+func RunHTTPServer(srv *http.Server, opts ...HTTPOption) (err error) {
     errCh := make(chan error, 1)
     go func() {
         if e := srv.ListenAndServe(); e != nil && !errors.Is(e, http.ErrServerClosed) {
@@ -135,13 +136,25 @@ func RunHTTPServer(lc *LifeCycle, srv *http.Server, opts ...HTTPOption) (err err
     }()
     defer func() { _ = srv.Close() }() // 兜底，确保返回时连接已关
 
-    select {
-    case <-lc.Done():
-        ctx, cancel := context.WithTimeout(context.Background(), lc.HTTPTimeout())
-        defer cancel()
-        return srv.Shutdown(ctx)
-    case err := <-errCh:
-        return err
+    // 生命周期退出时优先走优雅关闭；serve 以 ErrServerClosed 返回时，
+    // 若退出恰在此刻触发，同样回落到 Shutdown，避免误报"意外关闭"
+    for {
+        select {
+        case <-lc.Done():
+            ctx, cancel := context.WithTimeout(context.Background(), lc.HTTPTimeout())
+            defer cancel()
+            return srv.Shutdown(ctx)
+        case err := <-errCh:
+            if err != nil {
+                return err
+            }
+            select {
+            case <-lc.Done():
+                continue
+            default:
+                return fmt.Errorf("lifecycle: http server closed unexpectedly")
+            }
+        }
     }
 }
 ```
@@ -161,10 +174,10 @@ lc.AddActor("healthcheck",
 )
 ```
 
-配合 `recover.go` 帮助函数，把 goroutine 的 panic 收敛为 error 再上报：
+配合 `recover.go` 帮助函数，把 goroutine 的 panic 收敛为 error 再上报（`AddActor` 内部已自动兜底 panic，该包装为可选项）：
 
 ```go
-// RecoverParams 封装 actor run 逻辑，自动 defer recover，panic 转为 error 传给回调
+// RecoverFunc 包装 actor run 逻辑，自动 defer recover，panic 转为 error 传给回调
 lc.AddActor("job", lifecycle.RecoverFunc(func(ctx context.Context) error {
     // 业务逻辑，即使 panic 也会被捕获并触发整体退出
     return job.Run(ctx)
