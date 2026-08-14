@@ -7,9 +7,13 @@ import (
 )
 
 type Config struct {
-	RedisAddr       string
-	RedisPassword   string
-	RedisDB         int
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
+	// RedisConnOpt 直接注入 asynq 连接配置（支持 TLS / Cluster / 已有 client 等场景）；
+	// 设置后优先于 RedisAddr / RedisPassword / RedisDB。
+	RedisConnOpt asynq.RedisConnOpt
+
 	Concurrency     int
 	Queues          map[string]int
 	MaxRetry        int
@@ -28,7 +32,11 @@ func defaultConfig() *Config {
 	}
 }
 
-func (c *Config) asynqRedisOpt() asynq.RedisClientOpt {
+// redisConnOpt 返回 asynq 连接配置：优先使用注入的 RedisConnOpt，否则按 addr/password/db 构造。
+func (c *Config) redisConnOpt() asynq.RedisConnOpt {
+	if c.RedisConnOpt != nil {
+		return c.RedisConnOpt
+	}
 	return asynq.RedisClientOpt{
 		Addr:     c.RedisAddr,
 		Password: c.RedisPassword,
@@ -36,7 +44,7 @@ func (c *Config) asynqRedisOpt() asynq.RedisClientOpt {
 	}
 }
 
-func (c *Config) asynqServerConfig() asynq.Config {
+func (c *Config) asynqServerConfig(logger asynq.Logger) asynq.Config {
 	queues := c.Queues
 	if len(queues) == 0 {
 		queues = map[string]int{"default": 1}
@@ -44,6 +52,7 @@ func (c *Config) asynqServerConfig() asynq.Config {
 	cfg := asynq.Config{
 		Concurrency: c.Concurrency,
 		Queues:      queues,
+		Logger:      logger,
 	}
 	if c.ShutdownTimeout > 0 {
 		cfg.ShutdownTimeout = c.ShutdownTimeout

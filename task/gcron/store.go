@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/dbaccess/gormdao"
-	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type store struct {
@@ -22,36 +22,61 @@ func newStore(dbGetter gormdao.DBGetter) *store {
 	}
 }
 
-// upsertTask 按 task_code upsert 任务定义。
-// 若存在软删除的历史行，则恢复该行并更新（避免唯一索引冲突导致重新注册失败）。
+// upsertTask 按 task_code 原子 upsert 任务定义：不存在则插入；
+// 已存在（含软删除的历史行）则覆盖更新定义并恢复，避免唯一索引冲突导致重新注册失败。
 func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
-	existing, err := s.GetTaskByCode(ctx, t.TaskCode)
-	if err != nil {
-		return err
-	}
-	if existing.ID != 0 {
-		existing.TaskType = t.TaskType
-		existing.Spec = t.Spec
-		existing.Description = t.Description
-		existing.Status = t.Status
-		return s.taskDao.UpdateByID(ctx, existing.ID, existing)
-	}
+	err := s.dbGetter(ctx).Table(CronTaskTableName).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "task_code"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"task_type":   t.TaskType,
+				"spec":        t.Spec,
+				"description": t.Description,
+				"status":      t.Status,
+				// 恢复软删除行
+				"deleted_at": nil,
+				"updated_at": time.Now(),
+			}),
+		}).
+		Create(t).Error
+	return err
+}
 
-	var deleted CronTask
-	if err := s.dbGetter(ctx).Unscoped().Table(CronTaskTableName).
-		Where("task_code = ?", t.TaskCode).Find(&deleted).Error; err != nil {
-		return err
+func (s *store) updateTaskStatus(ctx context.Context, taskCode string, status CronTaskStatus) error {
+	return s.dbGetter(ctx).Model(&CronTask{}).Table(CronTaskTableName).
+		Where("task_code = ?", taskCode).Update("status", status).Error
+}
+
+// MarkStaleRunningAsFailed 将超过 cutoff 仍处于 running 的执行记录标记为 failed，
+// 作为进程崩溃/断电的兜底，避免执行状态永久停留在运行中。
+// taskCode 非空时仅清理指定任务。
+func (s *store) MarkStaleRunningAsFailed(ctx context.Context, cutoff time.Duration, taskCode string) (int64, error) {
+	if cutoff <= 0 {
+		return 0, nil
 	}
-	if deleted.ID != 0 {
-		deleted.TaskType = t.TaskType
-		deleted.Spec = t.Spec
-		deleted.Description = t.Description
-		deleted.Status = t.Status
-		deleted.DeletedAt = gorm.DeletedAt{}
-		return s.dbGetter(ctx).Unscoped().Table(CronTaskTableName).
-			Where("id = ?", deleted.ID).Save(&deleted).Error
+	db := s.dbGetter(ctx).Model(&CronTaskRun{}).Table(CronTaskRunTableName).
+		Where("status = ?", TaskRunRunning).
+		Where("start_at < ?", time.Now().Add(-cutoff))
+	if taskCode != "" {
+		db = db.Where("task_code = ?", taskCode)
 	}
-	return s.taskDao.Insert(ctx, t)
+	res := db.Updates(map[string]any{
+		"status":    TaskRunFailed,
+		"end_at":    time.Now(),
+		"error_msg": "stale running record marked as failed by reaper",
+	})
+	return res.RowsAffected, res.Error
+}
+
+// CleanupRuns 删除 before 之前创建的旧执行记录（保留策略清理）。
+// taskCode 非空时仅清理指定任务。
+func (s *store) CleanupRuns(ctx context.Context, before time.Time, taskCode string) (int64, error) {
+	db := s.dbGetter(ctx).Table(CronTaskRunTableName).Where("created_at < ?", before)
+	if taskCode != "" {
+		db = db.Where("task_code = ?", taskCode)
+	}
+	res := db.Delete(&CronTaskRun{})
+	return res.RowsAffected, res.Error
 }
 
 func (s *store) updateRunTimes(ctx context.Context, taskCode string, lastRun, nextRun *time.Time) error {

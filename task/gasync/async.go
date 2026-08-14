@@ -6,7 +6,9 @@ import (
 	"sync"
 
 	"github.com/hibiken/asynq"
+	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gutil"
 	"go.opentelemetry.io/otel"
 	"gorm.io/gorm"
 )
@@ -41,7 +43,7 @@ func NewClient(cfg *Config, opts ...Option) (*Client, error) {
 		return nil, ErrEmptyAddr
 	}
 
-	c := asynq.NewClient(cfg.asynqRedisOpt())
+	c := asynq.NewClient(cfg.redisConnOpt())
 	logger := newGasyncLogger()
 
 	return &Client{client: c, logger: logger, cfg: cfg}, nil
@@ -80,7 +82,7 @@ func NewServer(cfg *Config, db *gorm.DB, opts ...Option) (*Server, error) {
 	mux.Use(s.logMiddleware)
 	mux.Use(s.runRecordMiddleware)
 
-	s.server = asynq.NewServer(cfg.asynqRedisOpt(), cfg.asynqServerConfig())
+	s.server = asynq.NewServer(cfg.redisConnOpt(), cfg.asynqServerConfig(newAsynqLogger(logger)))
 
 	return s, nil
 }
@@ -103,6 +105,10 @@ func (c *Client) Enqueue(ctx context.Context, t Task, opts ...asynq.Option) (*as
 
 	headers := make(map[string]string)
 	otel.GetTextMapPropagator().Inject(ctx, headerCarrier(headers))
+	// 透传生产端 request id，消费端恢复后写入 ctx / 执行记录，便于跨进程关联
+	if reqID := gutil.GetRequestID(ctx); reqID != "" {
+		headers[gconstant.HeaderRequestID] = reqID
+	}
 
 	task := asynq.NewTaskWithHeaders(t.TypeName(), payload, headers, fullOpts...)
 	return c.client.EnqueueContext(ctx, task)

@@ -88,7 +88,7 @@ func (s *FileStore) fillFileDetail(ctx context.Context, upload *FileUploadEntity
 	if err != nil {
 		return nil, err
 	}
-	if fh.ID == 0 {
+	if fh == nil {
 		return nil, fmt.Errorf("%w: file_id=%d", ErrFileNotFound, upload.FileID)
 	}
 	detail.ContentHash = fh.ContentHash
@@ -102,7 +102,7 @@ func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, si
 	if err != nil {
 		return nil, fmt.Errorf("findOrCreateFile: get hash: %w", err)
 	}
-	if fh.ID > 0 {
+	if fh != nil {
 		return fh, nil
 	}
 
@@ -141,7 +141,7 @@ func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileDe
 	if err != nil {
 		return nil, false, fmt.Errorf("filestore.CheckExist: %w", err)
 	}
-	if fh.ID == 0 {
+	if fh == nil {
 		return nil, false, nil
 	}
 
@@ -184,7 +184,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 	}
 
 	fh, err := s.fileDao.GetByCond(ctx, &fileCond{ContentHash: req.ContentHash})
-	hit := err == nil && fh.ID > 0
+	hit := err == nil && fh != nil
 
 	if !hit {
 		if _, err := s.st.PutObject(ctx, s.bucket, req.StoragePath, req.Reader); err != nil {
@@ -199,7 +199,7 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 		createErr := s.fileDao.Insert(ctx, fh)
 		if createErr != nil {
 			found, lookupErr := s.fileDao.GetByCond(ctx, &fileCond{ContentHash: req.ContentHash})
-			if lookupErr == nil && found.ID > 0 {
+			if lookupErr == nil && found != nil {
 				_ = s.st.DeleteObject(ctx, s.bucket, req.StoragePath)
 				fh = found
 			} else {
@@ -228,7 +228,7 @@ func (s *FileStore) GetFile(ctx context.Context, id uint) (*FileDetail, error) {
 	if err != nil {
 		return nil, fmt.Errorf("filestore.GetFile: %w", err)
 	}
-	if upload.ID == 0 {
+	if upload == nil {
 		return nil, fmt.Errorf("%w: id=%d", ErrFileNotFound, id)
 	}
 	return s.fillFileDetail(ctx, upload)
@@ -265,7 +265,7 @@ func (s *FileStore) GetFileUploadIDByStorageURI(ctx context.Context, storageURI 
 	if err != nil {
 		return 0, fmt.Errorf("filestore.GetFileUploadIDByStorageURI: %w", err)
 	}
-	if fh.ID == 0 {
+	if fh == nil {
 		return 0, fmt.Errorf("%w: storage_uri=%s", ErrFileNotFound, storageURI)
 	}
 
@@ -276,7 +276,7 @@ func (s *FileStore) GetFileUploadIDByStorageURI(ctx context.Context, storageURI 
 	if err != nil {
 		return 0, fmt.Errorf("filestore.GetFileUploadIDByStorageURI: %w", err)
 	}
-	if rec.ID == 0 {
+	if rec == nil {
 		return 0, fmt.Errorf("%w: file_id=%d from storage_uri=%s", ErrFileNotFound, fh.ID, storageURI)
 	}
 	return rec.ID, nil

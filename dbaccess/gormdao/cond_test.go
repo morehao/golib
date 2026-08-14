@@ -60,3 +60,30 @@ func TestBuildOrClause_EmptyConditionsInGroup(t *testing.T) {
 	t.Logf("query: %v", query)
 	assert.Equal(t, []any{1}, args)
 }
+
+func TestBuildOrClause_AllEmptyGroups(t *testing.T) {
+	groups := []OrCond{
+		{CondGroups: []OrCondGroup{}},
+		{CondGroups: nil},
+	}
+	query, args := buildOrClause("company", groups)
+	assert.Equal(t, "", query)
+	assert.Nil(t, args)
+
+	// 空条件不应生成非法的 "()" SQL
+	groups = []OrCond{{}}
+	query, args = buildOrClause("company", groups)
+	assert.Equal(t, "", query)
+	assert.Nil(t, args)
+}
+
+func TestBaseCond_IncludeDeleted(t *testing.T) {
+	assert.False(t, (&BaseCond{}).IncludeDeleted())
+	assert.True(t, (&BaseCond{IsDelete: true}).IncludeDeleted())
+
+	// 自定义 Cond 内嵌 BaseCond 时自动继承
+	type customCond struct {
+		BaseCond
+	}
+	assert.True(t, (&customCond{BaseCond: BaseCond{IsDelete: true}}).IncludeDeleted())
+}

@@ -23,8 +23,9 @@ type Cond interface {
 }
 
 type BaseCond struct {
-	ID             uint
-	IDs            []uint
+	ID  uint
+	IDs []uint
+	// IsDelete 为 true 时查询包含已删除的记录（软删除场景下等价于 Unscoped）。
 	IsDelete       bool
 	Page           int
 	PageSize       int
@@ -40,6 +41,12 @@ func (c *BaseCond) BuildCondition(db *gorm.DB, tableName string) {
 
 func (c *BaseCond) GetPageInfo() (page int, pageSize int) {
 	return c.Page, c.PageSize
+}
+
+// IncludeDeleted 返回是否查询包含已删除的记录，供 Dao 层软删除过滤使用。
+// 自定义 Cond 若内嵌 BaseCond 则自动实现；也可自行实现该方法。
+func (c *BaseCond) IncludeDeleted() bool {
+	return c.IsDelete
 }
 
 func BuildBaseCondition(db *gorm.DB, tableName string, cond *BaseCond) {
@@ -67,7 +74,9 @@ func BuildBaseCondition(db *gorm.DB, tableName string, cond *BaseCond) {
 	}
 	if len(cond.OrConditions) > 0 {
 		query, args := buildOrClause(tableName, cond.OrConditions)
-		db.Where(query, args...)
+		if query != "" {
+			db.Where(query, args...)
+		}
 	}
 }
 
@@ -88,6 +97,10 @@ func buildOrClause(tableName string, orConditions []OrCond) (string, []any) {
 		} else {
 			parts = append(parts, "("+strings.Join(subParts, " AND ")+")")
 		}
+	}
+	// 所有分组均为空时返回空串，由调用方跳过 db.Where，避免生成非法的 "()" 条件
+	if len(parts) == 0 {
+		return "", nil
 	}
 	return "(" + strings.Join(parts, " OR ") + ")", args
 }

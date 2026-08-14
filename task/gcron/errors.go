@@ -17,4 +17,6 @@ var (
 	ErrLockNotSet = errors.New("gcron: distlock factory not configured")
 	// ErrNilDB 数据库连接为 nil。
 	ErrNilDB = errors.New("gcron: db is nil")
+	// ErrTaskNotFound 任务未注册（Remove/Enable/Disable 操作不存在的任务）。
+	ErrTaskNotFound = errors.New("gcron: task not registered")
 )

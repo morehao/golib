@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // SnakeToPascal 蛇形转大驼峰
@@ -88,4 +89,18 @@ func Trim(str string) string {
 	s := strings.Replace(str, " ", "", -1)
 	// 替换所有空白字符（包括空格、制表符、换行符等）
 	return regexp.MustCompile(`\s`).ReplaceAllString(s, "")
+}
+
+// TruncateString 将字符串截断到 maxBytes 字节以内（不切断多字节字符），
+// 超长时末尾追加 "..."。maxBytes <= 0 时原样返回。
+// 用途：控制落库字段（如 payload、error_msg）长度，避免撑大执行记录表。
+func TruncateString(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	truncated := s[:maxBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + "..."
 }

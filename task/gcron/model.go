@@ -31,7 +31,7 @@ const (
 type CronTask struct {
 	gorm.Model
 	TaskCode    string         `gorm:"column:task_code;type:varchar(128);not null;uniqueIndex:uk_task_code;comment:任务唯一标识"`
-	TaskType    string         `gorm:"column:task_type;type:varchar(64);not null;comment:任务类型"`
+	TaskType    string         `gorm:"column:task_type;type:varchar(128);not null;comment:任务类型"`
 	Spec        string         `gorm:"column:spec;type:varchar(64);not null;comment:cron 表达式"`
 	Description string         `gorm:"column:description;type:varchar(256);comment:任务描述"`
 	Status      CronTaskStatus `gorm:"column:status;type:varchar(16);not null;default:'enabled';comment:状态"`
@@ -45,7 +45,7 @@ type CronTaskRun struct {
 	ID         uint              `gorm:"column:id;primaryKey;autoIncrement"`
 	CreatedAt  time.Time         `gorm:"column:created_at"`
 	TaskCode   string            `gorm:"column:task_code;type:varchar(128);not null;index:idx_task_code;comment:任务唯一标识"`
-	TaskType   string            `gorm:"column:task_type;type:varchar(64);not null;comment:任务类型"`
+	TaskType   string            `gorm:"column:task_type;type:varchar(128);not null;comment:任务类型"`
 	RunCode    string            `gorm:"column:run_code;type:varchar(64);index:idx_run_code;comment:运行唯一标识"`
 	StartAt    time.Time         `gorm:"column:start_at;not null;comment:开始时间"`
 	EndAt      *time.Time        `gorm:"column:end_at;comment:结束时间"`
