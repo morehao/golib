@@ -383,9 +383,77 @@ func TestBuildContextCanceled(t *testing.T) {
 	if !errors.Is(err, ErrKindContextDone) {
 		t.Fatalf("error should match ErrKindContextDone")
 	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error should preserve the real context error")
+	}
 	if len(handled) != 1 {
 		t.Fatalf("error handler called %d times, want 1", len(handled))
 	}
+}
+
+// flakyCtx 前 failAfter 次 Err() 调用返回 nil，之后返回 context.Canceled，
+// 用于确定性测试构建中途取消。
+type flakyCtx struct {
+	context.Context
+	failAfter int
+	calls     int
+}
+
+func (c *flakyCtx) Err() error {
+	c.calls++
+	if c.calls > c.failAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
+// chainNodes 生成 1..n 的链：1 为根，i 的父节点为 i-1。
+func chainNodes(n int) []*testNode {
+	nodes := make([]*testNode, 0, n)
+	for i := 1; i <= n; i++ {
+		nodes = append(nodes, node(i, i-1, i == 1))
+	}
+	return nodes
+}
+
+func TestBuildContextCanceledMidBuild(t *testing.T) {
+	// 前两遍共 10+10 次检查，第 3 阶段前 1 次检查，取消发生在 removeCycles 阶段。
+	ctx := &flakyCtx{Context: context.Background(), failAfter: 22}
+	tree := NewTreeBuilder[int, *testNode](
+		WithContext[int, *testNode](ctx),
+		WithComparator[int, *testNode](OrderComparator[*testNode, int]{}),
+	).Build(chainNodes(10))
+
+	// 索引与父子关系已建完，removeCycles 被中断。
+	assert.Len(t, tree.NodeMap, 10)
+	assert.Len(t, tree.BuildErrors, 1)
+	err := tree.BuildErrors[0]
+	assert.Equal(t, ErrContextDone, err.Kind)
+	assert.True(t, errors.Is(err, ErrKindContextDone))
+	assert.True(t, errors.Is(err, context.Canceled))
+}
+
+func TestBuildContextCanceledDuringSort(t *testing.T) {
+	// 10+10+1(阶段3前)+20(removeCycles)+1(阶段4前)=42 次检查后，
+	// 取消发生在 sortByLevel 阶段。
+	ctx := &flakyCtx{Context: context.Background(), failAfter: 44}
+	tree := NewTreeBuilder[int, *testNode](
+		WithContext[int, *testNode](ctx),
+		WithComparator[int, *testNode](OrderComparator[*testNode, int]{}),
+	).Build(chainNodes(10))
+
+	assert.Len(t, tree.BuildErrors, 1)
+	assert.Equal(t, ErrContextDone, tree.BuildErrors[0].Kind)
+}
+
+func TestBuildNilOptionsDoNotPanic(t *testing.T) {
+	tree := NewTreeBuilder[int, *testNode](
+		WithContext[int, *testNode](nil),
+		WithErrorHandler[int, *testNode](nil),
+	).Build([]*testNode{node(1, 0, true)})
+
+	assert.Equal(t, []int{1}, keysOf(tree.Roots))
+	assert.Empty(t, tree.BuildErrors)
 }
 
 func TestBuildSortingWithComparator(t *testing.T) {

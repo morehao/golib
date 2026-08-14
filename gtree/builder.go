@@ -100,7 +100,9 @@ type BuildError[K comparable] struct {
 	Kind      ErrorKind
 	NodeKey   K
 	ParentKey K
-	Err       error // 始终为对应的哨兵错误，支持 errors.Is
+	// Err 错误链：普通错误为对应哨兵；
+	// context 取消时为「哨兵 ∘ 真实错误」的包装，errors.Is 可同时匹配两者。
+	Err error
 }
 
 func (e *BuildError[K]) Error() string {
@@ -293,6 +295,13 @@ func NewTreeBuilder[K comparable, N TreeNode[K]](opts ...Option[K, N]) *TreeBuil
 	for _, opt := range opts {
 		opt(b)
 	}
+	// 防御：显式传入 nil 时回退到默认值，避免构建时 panic
+	if b.ctx == nil {
+		b.ctx = context.Background()
+	}
+	if b.errorHandler == nil {
+		b.errorHandler = func(_ context.Context, _ *BuildError[K]) {}
+	}
 	return b
 }
 
@@ -368,7 +377,9 @@ func (b *TreeBuilder[K, N]) Build(nodes []N) *Tree[K, N] {
 		b.appendContextError(tree, err)
 		return tree
 	}
-	b.removeCycles(tree, orderedKeys)
+	if !b.removeCycles(tree, orderedKeys) {
+		return tree
+	}
 
 	// 4. 排序
 	if b.comparator != nil {
@@ -376,16 +387,21 @@ func (b *TreeBuilder[K, N]) Build(nodes []N) *Tree[K, N] {
 			b.appendContextError(tree, err)
 			return tree
 		}
-		b.sortByLevel(tree)
+		if !b.sortByLevel(tree) {
+			return tree
+		}
 	}
 
 	return tree
 }
 
 // appendContextError 将 context 取消错误追加到 BuildErrors 并调用 errorHandler。
-func (b *TreeBuilder[K, N]) appendContextError(tree *Tree[K, N], _ error) {
+// Err 字段为「哨兵 ∘ 真实错误」的多重包装：errors.Is 既能匹配哨兵，
+// 也能区分 context.Canceled / context.DeadlineExceeded。
+func (b *TreeBuilder[K, N]) appendContextError(tree *Tree[K, N], err error) {
 	var zeroK K
 	e := newBuildError[K](ErrContextDone, zeroK, zeroK)
+	e.Err = fmt.Errorf("%w: %w", sentinelFor(ErrContextDone), err)
 	tree.BuildErrors = append(tree.BuildErrors, e)
 	b.errorHandler(b.ctx, e)
 }
@@ -411,7 +427,9 @@ func (b *TreeBuilder[K, N]) handleOrphan(tree *Tree[K, N], node N, parentKey K) 
 //
 // 【修复：栈顶访问】所有对栈顶的读写均通过下标 stack[topIdx] 完成，
 // 不持有跨 append 的指针，彻底消除悬挂指针风险。
-func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) {
+//
+// 返回值：false 表示构建中途 context 被取消（已附加 ErrContextDone 错误）。
+func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) bool {
 	const (
 		stateUnvisited uint8 = 0
 		stateInStack   uint8 = 1
@@ -425,16 +443,22 @@ func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) {
 		childIdx int
 	}
 
-	var dfs func(startKey K)
-	dfs = func(startKey K) {
+	var dfs func(startKey K) bool
+	dfs = func(startKey K) bool {
 		if visited[startKey] != stateUnvisited {
-			return
+			return true
 		}
 
 		stack := []frame{{key: startKey, childIdx: 0}}
 		visited[startKey] = stateInStack
 
 		for len(stack) > 0 {
+			// 大输入下该阶段可能耗时较长，逐轮检查 context 及时响应取消。
+			if err := b.ctx.Err(); err != nil {
+				b.appendContextError(tree, err)
+				return false
+			}
+
 			// 【修复：栈顶访问】始终通过下标访问栈顶，不持有跨迭代的指针。
 			topIdx := len(stack) - 1
 			// 每次从 map 取最新 slice，避免同路径上多次删边后与缓存不一致。
@@ -481,22 +505,29 @@ func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) {
 				// cross/forward edge，正常保留
 			}
 		}
+		return true
 	}
 
 	// 先从所有显式根节点出发
 	for _, root := range tree.Roots {
-		dfs(root.GetKey())
+		if !dfs(root.GetKey()) {
+			return false
+		}
 	}
 
 	// 【修复1】按输入顺序补充遍历，处理未被根可达的孤立闭合环。
 	// 使用 orderedKeys（Build 传入）而非 NodeMap 迭代，保证确定性。
 	for _, key := range orderedKeys {
-		dfs(key)
+		if !dfs(key) {
+			return false
+		}
 	}
+	return true
 }
 
 // sortByLevel 使用 BFS 层序遍历对每层子节点排序，避免递归导致的栈溢出。
-func (b *TreeBuilder[K, N]) sortByLevel(tree *Tree[K, N]) {
+// 返回值：false 表示构建中途 context 被取消（已附加 ErrContextDone 错误）。
+func (b *TreeBuilder[K, N]) sortByLevel(tree *Tree[K, N]) bool {
 	sort.Slice(tree.Roots, func(i, j int) bool {
 		return b.comparator.Compare(tree.Roots[i], tree.Roots[j]) < 0
 	})
@@ -512,6 +543,10 @@ func (b *TreeBuilder[K, N]) sortByLevel(tree *Tree[K, N]) {
 	}
 
 	for len(queue) > 0 {
+		if err := b.ctx.Err(); err != nil {
+			b.appendContextError(tree, err)
+			return false
+		}
 		var next []K
 		for _, key := range queue {
 			children := tree.childrenMap[key]
@@ -531,6 +566,7 @@ func (b *TreeBuilder[K, N]) sortByLevel(tree *Tree[K, N]) {
 		}
 		queue = next
 	}
+	return true
 }
 
 // =============================================================================
