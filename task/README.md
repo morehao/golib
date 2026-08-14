@@ -23,6 +23,8 @@
 - 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`）
 - 同实例防重叠：上一轮未结束时本轮跳过（记录 skipped，与分布式锁互补）
 - 注册幂等：同一 `TaskCode` 已在 DB 中存在时自动 upsert 更新定义，进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
+- 运行时管理：`Disable` 暂停（定义保留）、`Enable` 恢复、`Remove` 移除（软删除定义并停止调度，可重新注册）
+- 执行记录兜底：`store.MarkStaleRunningAsFailed` 将崩溃残留的 running 记录标记为 failed；`store.CleanupRuns` 按保留策略清理旧记录
 - 任务需显式指定 `TaskCode` 与 `TaskType`（均不允许为空）
 
 ### 数据表
@@ -62,6 +64,9 @@ func main() {
 		panic(err)
 	}
 
+	// 也可通过选项统一配置锁工厂（推荐；New 的位置参数为兼容旧签名）：
+	// s, err := gcron.New(db, &gcron.Config{WithSeconds: true}, nil, gcron.WithLockFactory(lockFactory))
+
 	// 注册任务
 	if err := s.Register(gcron.Task{
 		TaskCode:  "demo-task",
@@ -84,6 +89,22 @@ func main() {
 }
 ```
 
+#### 运行时任务管理
+
+注册后可通过 `Disable` / `Enable` / `Remove` 管理任务（未注册的任务返回 `ErrTaskNotFound`）：
+
+```go
+s.Disable("demo-task") // 暂停：DB 标记 disabled，停止调度（定义保留）
+s.Enable("demo-task")  // 恢复：重新调度（沿用注册时的定义）
+s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后可重新注册同一 TaskCode
+```
+
+#### 注意事项
+
+- **超时依赖 handler 配合 ctx**：`Timeout` 通过 `context.WithTimeout` 取消 handler 的 ctx，但无法强杀忽略 ctx 的 handler（如泄漏的后台 goroutine）。若 handler 不响应 ctx 取消，超时后任务仍可能继续在后台执行，且防重叠标记已复位，下一轮会再次触发。handler 内应监听 `ctx.Done()`。
+- **锁自动续期**：默认 `AutoRenewal=false`、`LockTTL=60s`。handler 执行超过 TTL 且未开启自动续期时，锁会过期，其他实例可能并发执行同一任务。开启互斥且 handler 可能长时间运行时，建议设置 `AutoRenewal: true`（注册时会输出告警日志提示）。
+- **崩溃兜底**：进程被强杀时执行记录会停留在 `running`。可通过 `store.MarkStaleRunningAsFailed(ctx, cutoff, taskCode)` 将超过 cutoff 仍为 running 的记录标记为 failed（建议由独立定时任务调用）；`store.CleanupRuns(ctx, before, taskCode)` 可删除 `before` 之前的旧执行记录，控制表增长。
+
 ## gasync
 
 ### 简介
@@ -97,8 +118,12 @@ func main() {
 - 基于 Redis 的任务队列
 - 执行记录自动落库（processing/completed/failed；同一任务 ID 只保留一行，重试覆盖该行，最终状态反映最后一次尝试）
 - 跨进程 trace 传递与统一日志
+- 跨进程 request id 透传：生产端 ctx 携带的 `app.request.id` 会随任务 headers 传递，消费端写入执行记录
+- asynq 内部日志（调度/重试/归档）已桥接至 glog
 - 自动注入 RunID，可通过日志 `extra_keys` 配置 `task.run.code`
 - 支持自定义并发数与优雅停机超时（`ShutdownTimeout`，生产端 `Client.Close`、消费端 `Server.ShutdownContext`）
+- 执行记录兜底：`store.MarkStaleProcessingAsFailed` 将崩溃残留的 processing 记录标记为 failed；`store.CleanupRuns` 按保留策略清理旧记录
+- 支持注入 `asynq.RedisConnOpt`（TLS / Cluster / 已有 client 等场景）
 
 ### 数据表
 
@@ -151,6 +176,7 @@ func main() {
 	}
 
 	cfg := &gasync.Config{RedisAddr: "127.0.0.1:6379", Concurrency: 10}
+	// 复杂连接（TLS / Cluster / 已有 client）可通过 Config.RedisConnOpt 或 WithRedisConnOpt 注入 asynq.RedisConnOpt
 
 	// 消费端
 	server, err := gasync.NewServer(cfg, db)
@@ -175,6 +201,12 @@ func main() {
 	}
 }
 ```
+
+#### 注意事项
+
+- **超时依赖 handler 配合 ctx**：asynq 的 `Timeout` 通过取消 ctx 实现，handler 不响应 `ctx.Done()` 时任务仍可能在后台继续执行（asynq 会在超时后将任务重新入队）。handler 内应监听 `ctx.Done()`。
+- **执行记录为 at-least-once 语义下的快照**：同一任务可能被并发处理（lease 过期后重新入队），执行记录通过 `run_code` 原子 upsert，只保留一行；进程被强杀时记录会停留在 `processing`，可通过 `store.MarkStaleProcessingAsFailed(ctx, cutoff, taskType)` 兜底标记为 failed，`store.CleanupRuns(ctx, before, taskType)` 用于按保留策略清理旧记录。
+- **落库字段截断**：payload 超过 4KB、错误信息超过 1KB 时会截断存储，避免撑大执行记录表。
 
 ## 日志追踪
 

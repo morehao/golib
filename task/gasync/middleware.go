@@ -12,29 +12,44 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const gasyncTracerName = "github.com/morehao/golib/task/gasync"
+const tracerName = "github.com/morehao/golib/task/gasync"
+
+// 落库字段长度上限，避免大 payload / 超长错误信息撑大执行记录表。
+const (
+	maxPayloadLen  = 4096
+	maxErrorMsgLen = 1024
+)
 
 func (s *Server) logMiddleware(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
-		requestID := gutil.GenUUID()
+		// 优先复用生产端透传的 request id，未透传时生成新的
+		requestID := gutil.GetRequestID(ctx)
+		if requestID == "" {
+			requestID = gutil.GenUUID()
+		}
+		runCode, _ := asynq.GetTaskID(ctx)
 		queue, _ := asynq.GetQueueName(ctx)
 
 		ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
-		ctx = context.WithValue(ctx, gconstant.KeyRunCode, taskResultID(ctx))
+		ctx = context.WithValue(ctx, gconstant.KeyRunCode, runCode)
 		ctx = context.WithValue(ctx, gconstant.KeyTaskType, "async")
 
+		// run_code 通过 ctx 由 glog extra_keys 打印，不再重复写入 With 字段
 		logger := s.logger.With(
 			gconstant.KeyTaskType, "async",
 			"queue", queue,
 			gconstant.KeyAppRequestID, requestID,
-			gconstant.KeyRunCode, taskResultID(ctx),
 		)
 		start := time.Now()
-		logger.Infow(ctx, "async task start", "run_code", taskResultID(ctx))
+		logger.Infow(ctx, "async task start")
 
 		err := next.ProcessTask(ctx, task)
 
-		logger.Infow(ctx, "async task done", "run_code", taskResultID(ctx), "duration_ms", time.Since(start).Milliseconds(), "error", err)
+		doneFields := []any{"duration_ms", time.Since(start).Milliseconds()}
+		if err != nil {
+			doneFields = append(doneFields, "error", err)
+		}
+		logger.Infow(ctx, "async task done", doneFields...)
 		return err
 	})
 }
@@ -44,7 +59,12 @@ func (s *Server) traceMiddleware(next asynq.Handler) asynq.Handler {
 		carrier := headerCarrier(task.Headers())
 		ctx = otel.GetTextMapPropagator().Extract(ctx, carrier)
 
-		tracer := otel.Tracer(gasyncTracerName)
+		// 透传生产端 request id（与 Enqueue 侧注入对应）
+		if reqID := carrier.Get(gconstant.HeaderRequestID); reqID != "" {
+			ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, reqID)
+		}
+
+		tracer := otel.Tracer(tracerName)
 		ctx, span := tracer.Start(ctx, task.Type(), trace.WithSpanKind(trace.SpanKindConsumer))
 		defer span.End()
 
@@ -73,22 +93,18 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 			Retried:   retried,
 			MaxRetry:  maxRetry,
 			StartAt:   &start,
-			Payload:   string(task.Payload()),
+			Payload:   gutil.TruncateString(string(task.Payload()), maxPayloadLen),
 			TraceID:   traceID,
 			RequestID: requestID,
 		}
 
-		// asynq 重试复用同一任务 ID（run_code），因此同一任务只保留一行：
-		// 首次执行插入，后续重试尝试覆盖该行，最终状态反映最后一次尝试。
-		if existing, qerr := s.store.GetRunByRunCode(ctx, runCode); qerr != nil {
-			s.logger.Errorw(ctx, "query async run failed", "run_code", runCode, "error", qerr)
-		} else if existing.ID != 0 {
-			run.ID = existing.ID
-			if uerr := s.store.updateRunStart(ctx, run); uerr != nil {
-				s.logger.Errorw(ctx, "update async run start failed", "run_code", runCode, "error", uerr)
-			}
-		} else if serr := s.store.insertRun(ctx, run); serr != nil {
-			s.logger.Errorw(ctx, "insert async run failed", "run_code", runCode, "error", serr)
+		// asynq 重试复用同一任务 ID（run_code），同一任务只保留一行：
+		// 原子 upsert 覆盖开始信息，兼容 at-least-once 下同一任务被并发处理的场景，
+		// 避免"先查再写"竞态导致重复插入撞唯一索引而丢失执行记录。
+		if rid, uerr := s.store.upsertRunStart(ctx, run); uerr != nil {
+			s.logger.Errorw(ctx, "upsert async run failed", "run_code", runCode, "error", uerr)
+		} else {
+			run.ID = rid
 		}
 
 		err := next.ProcessTask(ctx, task)
@@ -98,7 +114,7 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 		errMsg := ""
 		if err != nil {
 			status = AsyncFailed
-			errMsg = err.Error()
+			errMsg = gutil.TruncateString(err.Error(), maxErrorMsgLen)
 		}
 		if run.ID != 0 {
 			// asynq 超时会取消 ctx，收尾落库需用未取消的 ctx，否则写库静默失败
@@ -108,9 +124,4 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 		}
 		return err
 	})
-}
-
-func taskResultID(ctx context.Context) string {
-	id, _ := asynq.GetTaskID(ctx)
-	return id
 }
