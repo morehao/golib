@@ -315,10 +315,10 @@ func (b *TreeBuilder[K, N]) Build(nodes []N) *Tree[K, N] {
 	}
 
 	// 1. 建立节点索引，检测重复 key。
-	// 重复的 key 仅记录错误，保留先出现的节点，后续步骤跳过重复节点。
-	// orderedKeys 记录去重后的输入顺序，传递给 removeCycles 使用，
-	// 避免将其挂在 Tree 结构体上造成语义混乱。
-	duplicates := make(map[K]bool)
+	// 重复的 key 仅记录错误，保留先出现的节点。
+	// orderedKeys 记录去重后的首次出现顺序：
+	// 既用于第二遍建立父子关系（保证重复 key 的首现节点不丢失），
+	// 也传递给 removeCycles 做确定性遍历。
 	orderedKeys := make([]K, 0, len(nodes))
 
 	for _, node := range nodes {
@@ -330,8 +330,7 @@ func (b *TreeBuilder[K, N]) Build(nodes []N) *Tree[K, N] {
 
 		key := node.GetKey()
 		if _, exists := tree.NodeMap[key]; exists {
-			duplicates[key] = true
-			// 【修复2】重复 key 时 parentKey 未知，传零值避免误导
+			// 重复 key 时 parentKey 未知，传零值避免误导
 			var zeroK K
 			e := newBuildError[K](ErrDuplicateKey, key, zeroK)
 			tree.BuildErrors = append(tree.BuildErrors, e)
@@ -342,17 +341,16 @@ func (b *TreeBuilder[K, N]) Build(nodes []N) *Tree[K, N] {
 		orderedKeys = append(orderedKeys, key)
 	}
 
-	// 2. 按原始切片顺序遍历，建立父子关系 & 收集根节点。
-	for _, node := range nodes {
+	// 2. 按首次出现顺序遍历，建立父子关系 & 收集根节点。
+	// 直接以 orderedKeys 驱动（而非原始切片），
+	// 避免重复 key 的首现节点在第二遍被误跳过导致"幽灵节点"。
+	for _, key := range orderedKeys {
 		if err := b.ctx.Err(); err != nil {
 			b.appendContextError(tree, err)
 			return tree
 		}
 
-		key := node.GetKey()
-		if duplicates[key] {
-			continue
-		}
+		node := tree.NodeMap[key]
 		if node.IsRoot() {
 			tree.Roots = append(tree.Roots, node)
 			continue

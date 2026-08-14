@@ -229,7 +229,53 @@ func TestBuildDuplicateKeyReportsErrorAndKeepsFirstNode(t *testing.T) {
 
 	children1, ok := tree.Children(1)
 	assert.True(t, ok)
-	assert.Equal(t, []int{3}, keysOf(children1))
+	assert.Equal(t, []int{2, 3}, keysOf(children1), "kept first occurrence must stay wired as child of 1")
+}
+
+func TestBuildDuplicateKeyKeepsFirstInStructure(t *testing.T) {
+	// 回归：重复 key 的首现节点必须仍然接在树结构里，
+	// 不能只存在于 NodeMap 而不可达（"幽灵节点"）。
+	nodes := []*testNode{
+		node(1, 0, true),
+		node(2, 1, false), // 首现，被保留
+		node(3, 1, false),
+		node(2, 1, false), // 重复
+	}
+
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	assert.Len(t, tree.BuildErrors, 1)
+
+	children1, ok := tree.Children(1)
+	assert.True(t, ok)
+	assert.Equal(t, []int{2, 3}, keysOf(children1))
+
+	var walked []int
+	tree.Walk(func(n *testNode, _ int) bool {
+		walked = append(walked, n.GetKey())
+		return true
+	})
+	assert.Equal(t, []int{1, 2, 3}, walked)
+}
+
+func TestBuildDuplicateRootKeepsFirstInStructure(t *testing.T) {
+	// 回归：首现节点是 root 时，它仍必须出现在 Roots 中，
+	// 且其他节点可以正常挂到它名下。
+	first := node(2, 0, true)
+	nodes := []*testNode{
+		node(1, 0, true),
+		first,
+		node(3, 2, false),
+		node(2, 0, true), // 重复的 root
+	}
+
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	assert.Len(t, tree.BuildErrors, 1)
+	assert.Equal(t, first, tree.NodeMap[2])
+	assert.Equal(t, []int{1, 2}, keysOf(tree.Roots))
+
+	children2, ok := tree.Children(2)
+	assert.True(t, ok)
+	assert.Equal(t, []int{3}, keysOf(children2))
 }
 
 func TestBuildOrphanStrategies(t *testing.T) {
