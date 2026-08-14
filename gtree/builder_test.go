@@ -353,6 +353,78 @@ func TestBuildRemoveCycles(t *testing.T) {
 	}
 }
 
+func TestBuildSelfLoopRemovesEdge(t *testing.T) {
+	// 节点 2 的父节点是它自己：自环应被检测并移除。
+	tree := NewTreeBuilder[int, *testNode]().Build([]*testNode{
+		node(1, 0, true),
+		node(2, 2, false),
+	})
+
+	assert.Len(t, tree.BuildErrors, 1)
+	assert.Equal(t, ErrCyclicGraph, tree.BuildErrors[0].Kind)
+	assert.Equal(t, 2, tree.BuildErrors[0].NodeKey)
+
+	children2, ok := tree.Children(2)
+	assert.True(t, ok)
+	assert.Nil(t, children2, "self edge should be removed")
+}
+
+func TestBuildMultipleDisjointCycles(t *testing.T) {
+	// 环 A: 1->2->3->1；环 B: 4->5->4
+	tree := NewTreeBuilder[int, *testNode]().Build([]*testNode{
+		node(1, 3, false),
+		node(2, 1, false),
+		node(3, 2, false),
+		node(4, 5, false),
+		node(5, 4, false),
+	})
+
+	assert.Len(t, tree.BuildErrors, 2)
+
+	c3, ok := tree.Children(3)
+	assert.True(t, ok)
+	assert.Nil(t, c3, "cycle A edge 3->1 removed")
+	c5, ok := tree.Children(5)
+	assert.True(t, ok)
+	assert.Nil(t, c5, "cycle B edge 5->4 removed")
+
+	// 环内其余边保留：1->2, 2->3, 4->5
+	c1, _ := tree.Children(1)
+	assert.Equal(t, []int{2}, keysOf(c1))
+	c2, _ := tree.Children(2)
+	assert.Equal(t, []int{3}, keysOf(c2))
+	c4, _ := tree.Children(4)
+	assert.Equal(t, []int{5}, keysOf(c4))
+}
+
+func TestBuildCycleAndRootComponentCoexist(t *testing.T) {
+	// 根可达分量 0->1->2->3 不受孤立环 4->5->4 影响。
+	tree := NewTreeBuilder[int, *testNode]().Build([]*testNode{
+		node(0, -1, true),
+		node(1, 0, false),
+		node(2, 1, false),
+		node(3, 2, false),
+		node(4, 5, false),
+		node(5, 4, false),
+	})
+
+	assert.Len(t, tree.BuildErrors, 1)
+	assert.Equal(t, []int{0}, keysOf(tree.Roots))
+
+	c0, _ := tree.Children(0)
+	assert.Equal(t, []int{1}, keysOf(c0))
+	c1, _ := tree.Children(1)
+	assert.Equal(t, []int{2}, keysOf(c1))
+	c2, _ := tree.Children(2)
+	assert.Equal(t, []int{3}, keysOf(c2))
+
+	c4, _ := tree.Children(4)
+	assert.Equal(t, []int{5}, keysOf(c4))
+	c5, ok := tree.Children(5)
+	assert.True(t, ok)
+	assert.Nil(t, c5, "cycle edge 5->4 removed")
+}
+
 func TestBuildContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

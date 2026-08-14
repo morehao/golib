@@ -78,6 +78,7 @@ var (
 	ErrKindOrphanNode   = errors.New("orphan node")
 	ErrKindCyclicGraph  = errors.New("cyclic graph")
 	ErrKindContextDone  = errors.New("context done")
+	errUnknownKind      = errors.New("unknown error kind")
 )
 
 func sentinelFor(k ErrorKind) error {
@@ -91,7 +92,7 @@ func sentinelFor(k ErrorKind) error {
 	case ErrContextDone:
 		return ErrKindContextDone
 	default:
-		return fmt.Errorf("unknown error kind %d", k)
+		return errUnknownKind
 	}
 }
 
@@ -420,10 +421,15 @@ func (b *TreeBuilder[K, N]) handleOrphan(tree *Tree[K, N], node N, parentKey K) 
 	}
 }
 
-// removeCycles 使用迭代 DFS 检测有向环，发现环时移除形成环的那条边（后向边）并报告错误。
+// removeCycles 使用迭代 DFS 检测有向环：发现后向边时记录待删除的边，
+// DFS 结束后统一移除，避免每条后向边都触发一次 O(E) 的 slice 重建。
 //
 // 【修复1】orderedKeys 由 Build 传入（输入顺序去重列表），不再挂在 Tree 上。
 // 补充遍历孤立闭合环时按此顺序迭代，保证对同一输入结果完全确定。
+//
+// 正确性说明：DFS 中每条边恰好被检查一次（childIdx 单调前进、每个 frame
+// 只入栈一次）。后向边被"跳过"（childIdx 继续前进）与即时删除在遍历顺序上
+// 完全等价，因此收集后统一移除与原实现的删边集合一致。
 //
 // 【修复：栈顶访问】所有对栈顶的读写均通过下标 stack[topIdx] 完成，
 // 不持有跨 append 的指针，彻底消除悬挂指针风险。
@@ -443,6 +449,15 @@ func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) bool
 		childIdx int
 	}
 
+	// 收集需要移除的后向边（父 key, 子 key）。
+	// 同一父节点的子 key 必然互不相同（每个节点只有一个父节点），
+	// 因此用 key 定位删除是确定性的。
+	type removedEdge struct {
+		parent K
+		child  K
+	}
+	removed := make([]removedEdge, 0)
+
 	var dfs func(startKey K) bool
 	dfs = func(startKey K) bool {
 		if visited[startKey] != stateUnvisited {
@@ -461,7 +476,6 @@ func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) bool
 
 			// 【修复：栈顶访问】始终通过下标访问栈顶，不持有跨迭代的指针。
 			topIdx := len(stack) - 1
-			// 每次从 map 取最新 slice，避免同路径上多次删边后与缓存不一致。
 			children := tree.childrenMap[stack[topIdx].key]
 
 			if stack[topIdx].childIdx >= len(children) {
@@ -482,24 +496,11 @@ func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) bool
 				stack = append(stack, frame{key: ck, childIdx: 0})
 
 			case stateInStack:
-				// 后向边：形成环，移除该边并报告错误。
+				// 后向边：形成环，记录待删除的边并报告错误。
 				e := newBuildError(ErrCyclicGraph, ck, stack[topIdx].key)
 				tree.BuildErrors = append(tree.BuildErrors, e)
 				b.errorHandler(b.ctx, e)
-
-				// edgeIdx 是刚才处理的子节点在当前 slice 中的下标（childIdx 已自增）。
-				edgeIdx := stack[topIdx].childIdx - 1
-
-				// 重新从 map 取最新 slice，构造移除后的新 slice。
-				cur := tree.childrenMap[stack[topIdx].key]
-				newChildren := make([]N, 0, len(cur)-1)
-				newChildren = append(newChildren, cur[:edgeIdx]...)
-				newChildren = append(newChildren, cur[edgeIdx+1:]...)
-				tree.childrenMap[stack[topIdx].key] = newChildren
-
-				// 移除后原 edgeIdx+1 的元素现在位于 edgeIdx，
-				// 而 childIdx 已指向 edgeIdx+1，回退一位使其重新指向 edgeIdx。
-				stack[topIdx].childIdx--
+				removed = append(removed, removedEdge{parent: stack[topIdx].key, child: ck})
 
 			case stateDone:
 				// cross/forward edge，正常保留
@@ -522,13 +523,29 @@ func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) bool
 			return false
 		}
 	}
+
+	// DFS 结束后统一移除后向边。
+	for _, e := range removed {
+		cur := tree.childrenMap[e.parent]
+		idx := -1
+		for i, c := range cur {
+			if c.GetKey() == e.child {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 {
+			tree.childrenMap[e.parent] = append(cur[:idx], cur[idx+1:]...)
+		}
+	}
 	return true
 }
 
 // sortByLevel 使用 BFS 层序遍历对每层子节点排序，避免递归导致的栈溢出。
+// 使用稳定排序，比较器相等时保持输入相对顺序。
 // 返回值：false 表示构建中途 context 被取消（已附加 ErrContextDone 错误）。
 func (b *TreeBuilder[K, N]) sortByLevel(tree *Tree[K, N]) bool {
-	sort.Slice(tree.Roots, func(i, j int) bool {
+	sort.SliceStable(tree.Roots, func(i, j int) bool {
 		return b.comparator.Compare(tree.Roots[i], tree.Roots[j]) < 0
 	})
 
@@ -553,7 +570,7 @@ func (b *TreeBuilder[K, N]) sortByLevel(tree *Tree[K, N]) bool {
 			if len(children) == 0 {
 				continue
 			}
-			sort.Slice(children, func(i, j int) bool {
+			sort.SliceStable(children, func(i, j int) bool {
 				return b.comparator.Compare(children[i], children[j]) < 0
 			})
 			for _, child := range children {
