@@ -222,14 +222,60 @@ func TestBuildDuplicateKeyReportsErrorAndKeepsFirstNode(t *testing.T) {
 	assert.Len(t, tree.BuildErrors, 1)
 
 	err := tree.BuildErrors[0]
-	assert.Equal(t, ErrDuplicateKey, err.Kind)
+	assert.Equal(t, KindDuplicateKey, err.Kind)
 	assert.Equal(t, 2, err.NodeKey)
-	assert.True(t, errors.Is(err, ErrKindDuplicateKey))
+	assert.True(t, errors.Is(err, ErrDuplicateKey))
 	assert.Len(t, handled, 1)
 
 	children1, ok := tree.Children(1)
 	assert.True(t, ok)
-	assert.Equal(t, []int{3}, keysOf(children1))
+	assert.Equal(t, []int{2, 3}, keysOf(children1), "kept first occurrence must stay wired as child of 1")
+}
+
+func TestBuildDuplicateKeyKeepsFirstInStructure(t *testing.T) {
+	// 回归：重复 key 的首现节点必须仍然接在树结构里，
+	// 不能只存在于 NodeMap 而不可达（"幽灵节点"）。
+	nodes := []*testNode{
+		node(1, 0, true),
+		node(2, 1, false), // 首现，被保留
+		node(3, 1, false),
+		node(2, 1, false), // 重复
+	}
+
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	assert.Len(t, tree.BuildErrors, 1)
+
+	children1, ok := tree.Children(1)
+	assert.True(t, ok)
+	assert.Equal(t, []int{2, 3}, keysOf(children1))
+
+	var walked []int
+	tree.Walk(func(n *testNode, _ int) bool {
+		walked = append(walked, n.GetKey())
+		return true
+	})
+	assert.Equal(t, []int{1, 2, 3}, walked)
+}
+
+func TestBuildDuplicateRootKeepsFirstInStructure(t *testing.T) {
+	// 回归：首现节点是 root 时，它仍必须出现在 Roots 中，
+	// 且其他节点可以正常挂到它名下。
+	first := node(2, 0, true)
+	nodes := []*testNode{
+		node(1, 0, true),
+		first,
+		node(3, 2, false),
+		node(2, 0, true), // 重复的 root
+	}
+
+	tree := NewTreeBuilder[int, *testNode]().Build(nodes)
+	assert.Len(t, tree.BuildErrors, 1)
+	assert.Equal(t, first, tree.NodeMap[2])
+	assert.Equal(t, []int{1, 2}, keysOf(tree.Roots))
+
+	children2, ok := tree.Children(2)
+	assert.True(t, ok)
+	assert.Equal(t, []int{3}, keysOf(children2))
 }
 
 func TestBuildOrphanStrategies(t *testing.T) {
@@ -241,7 +287,7 @@ func TestBuildOrphanStrategies(t *testing.T) {
 	}{
 		{name: "ignore", strategy: IgnoreOrphans, wantRoots: []int{1}},
 		{name: "collect", strategy: CollectOrphans, wantRoots: []int{1, 2}},
-		{name: "error", strategy: ErrorOnOrphans, wantRoots: []int{1}, wantErrKinds: []ErrorKind{ErrOrphanNode}},
+		{name: "error", strategy: ErrorOnOrphans, wantRoots: []int{1}, wantErrKinds: []ErrorKind{KindOrphanNode}},
 	}
 
 	for _, tt := range tests {
@@ -288,11 +334,11 @@ func TestBuildRemoveCycles(t *testing.T) {
 		t.Fatalf("BuildErrors len = %d, want 1", len(tree.BuildErrors))
 	}
 	err := tree.BuildErrors[0]
-	if err.Kind != ErrCyclicGraph {
-		t.Fatalf("error kind = %v, want %v", err.Kind, ErrCyclicGraph)
+	if err.Kind != KindCyclicGraph {
+		t.Fatalf("error kind = %v, want %v", err.Kind, KindCyclicGraph)
 	}
-	if !errors.Is(err, ErrKindCyclicGraph) {
-		t.Fatalf("error should match ErrKindCyclicGraph")
+	if !errors.Is(err, ErrCyclicGraph) {
+		t.Fatalf("error should match ErrCyclicGraph")
 	}
 	if len(handled) != 1 {
 		t.Fatalf("error handler called %d times, want 1", len(handled))
@@ -305,6 +351,78 @@ func TestBuildRemoveCycles(t *testing.T) {
 	if children3 != nil {
 		t.Fatalf("Children(3) = %v, want nil after cycle edge removed", children3)
 	}
+}
+
+func TestBuildSelfLoopRemovesEdge(t *testing.T) {
+	// 节点 2 的父节点是它自己：自环应被检测并移除。
+	tree := NewTreeBuilder[int, *testNode]().Build([]*testNode{
+		node(1, 0, true),
+		node(2, 2, false),
+	})
+
+	assert.Len(t, tree.BuildErrors, 1)
+	assert.Equal(t, KindCyclicGraph, tree.BuildErrors[0].Kind)
+	assert.Equal(t, 2, tree.BuildErrors[0].NodeKey)
+
+	children2, ok := tree.Children(2)
+	assert.True(t, ok)
+	assert.Nil(t, children2, "self edge should be removed")
+}
+
+func TestBuildMultipleDisjointCycles(t *testing.T) {
+	// 环 A: 1->2->3->1；环 B: 4->5->4
+	tree := NewTreeBuilder[int, *testNode]().Build([]*testNode{
+		node(1, 3, false),
+		node(2, 1, false),
+		node(3, 2, false),
+		node(4, 5, false),
+		node(5, 4, false),
+	})
+
+	assert.Len(t, tree.BuildErrors, 2)
+
+	c3, ok := tree.Children(3)
+	assert.True(t, ok)
+	assert.Nil(t, c3, "cycle A edge 3->1 removed")
+	c5, ok := tree.Children(5)
+	assert.True(t, ok)
+	assert.Nil(t, c5, "cycle B edge 5->4 removed")
+
+	// 环内其余边保留：1->2, 2->3, 4->5
+	c1, _ := tree.Children(1)
+	assert.Equal(t, []int{2}, keysOf(c1))
+	c2, _ := tree.Children(2)
+	assert.Equal(t, []int{3}, keysOf(c2))
+	c4, _ := tree.Children(4)
+	assert.Equal(t, []int{5}, keysOf(c4))
+}
+
+func TestBuildCycleAndRootComponentCoexist(t *testing.T) {
+	// 根可达分量 0->1->2->3 不受孤立环 4->5->4 影响。
+	tree := NewTreeBuilder[int, *testNode]().Build([]*testNode{
+		node(0, -1, true),
+		node(1, 0, false),
+		node(2, 1, false),
+		node(3, 2, false),
+		node(4, 5, false),
+		node(5, 4, false),
+	})
+
+	assert.Len(t, tree.BuildErrors, 1)
+	assert.Equal(t, []int{0}, keysOf(tree.Roots))
+
+	c0, _ := tree.Children(0)
+	assert.Equal(t, []int{1}, keysOf(c0))
+	c1, _ := tree.Children(1)
+	assert.Equal(t, []int{2}, keysOf(c1))
+	c2, _ := tree.Children(2)
+	assert.Equal(t, []int{3}, keysOf(c2))
+
+	c4, _ := tree.Children(4)
+	assert.Equal(t, []int{5}, keysOf(c4))
+	c5, ok := tree.Children(5)
+	assert.True(t, ok)
+	assert.Nil(t, c5, "cycle edge 5->4 removed")
 }
 
 func TestBuildContextCanceled(t *testing.T) {
@@ -331,15 +449,83 @@ func TestBuildContextCanceled(t *testing.T) {
 		t.Fatalf("BuildErrors len = %d, want 1", len(tree.BuildErrors))
 	}
 	err := tree.BuildErrors[0]
-	if err.Kind != ErrContextDone {
-		t.Fatalf("error kind = %v, want %v", err.Kind, ErrContextDone)
+	if err.Kind != KindContextDone {
+		t.Fatalf("error kind = %v, want %v", err.Kind, KindContextDone)
 	}
-	if !errors.Is(err, ErrKindContextDone) {
-		t.Fatalf("error should match ErrKindContextDone")
+	if !errors.Is(err, ErrContextDone) {
+		t.Fatalf("error should match ErrContextDone")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error should preserve the real context error")
 	}
 	if len(handled) != 1 {
 		t.Fatalf("error handler called %d times, want 1", len(handled))
 	}
+}
+
+// flakyCtx 前 failAfter 次 Err() 调用返回 nil，之后返回 context.Canceled，
+// 用于确定性测试构建中途取消。
+type flakyCtx struct {
+	context.Context
+	failAfter int
+	calls     int
+}
+
+func (c *flakyCtx) Err() error {
+	c.calls++
+	if c.calls > c.failAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
+// chainNodes 生成 1..n 的链：1 为根，i 的父节点为 i-1。
+func chainNodes(n int) []*testNode {
+	nodes := make([]*testNode, 0, n)
+	for i := 1; i <= n; i++ {
+		nodes = append(nodes, node(i, i-1, i == 1))
+	}
+	return nodes
+}
+
+func TestBuildContextCanceledMidBuild(t *testing.T) {
+	// 前两遍共 10+10 次检查，第 3 阶段前 1 次检查，取消发生在 removeCycles 阶段。
+	ctx := &flakyCtx{Context: context.Background(), failAfter: 22}
+	tree := NewTreeBuilder[int, *testNode](
+		WithContext[int, *testNode](ctx),
+		WithComparator[int, *testNode](OrderComparator[*testNode, int]{}),
+	).Build(chainNodes(10))
+
+	// 索引与父子关系已建完，removeCycles 被中断。
+	assert.Len(t, tree.NodeMap, 10)
+	assert.Len(t, tree.BuildErrors, 1)
+	err := tree.BuildErrors[0]
+	assert.Equal(t, KindContextDone, err.Kind)
+	assert.True(t, errors.Is(err, ErrContextDone))
+	assert.True(t, errors.Is(err, context.Canceled))
+}
+
+func TestBuildContextCanceledDuringSort(t *testing.T) {
+	// 10+10+1(阶段3前)+20(removeCycles)+1(阶段4前)=42 次检查后，
+	// 取消发生在 sortByLevel 阶段。
+	ctx := &flakyCtx{Context: context.Background(), failAfter: 44}
+	tree := NewTreeBuilder[int, *testNode](
+		WithContext[int, *testNode](ctx),
+		WithComparator[int, *testNode](OrderComparator[*testNode, int]{}),
+	).Build(chainNodes(10))
+
+	assert.Len(t, tree.BuildErrors, 1)
+	assert.Equal(t, KindContextDone, tree.BuildErrors[0].Kind)
+}
+
+func TestBuildNilOptionsDoNotPanic(t *testing.T) {
+	tree := NewTreeBuilder[int, *testNode](
+		WithContext[int, *testNode](nil),
+		WithErrorHandler[int, *testNode](nil),
+	).Build([]*testNode{node(1, 0, true)})
+
+	assert.Equal(t, []int{1}, keysOf(tree.Roots))
+	assert.Empty(t, tree.BuildErrors)
 }
 
 func TestBuildSortingWithComparator(t *testing.T) {
@@ -415,15 +601,47 @@ func TestComparators(t *testing.T) {
 }
 
 func TestBuildErrorAndErrorKind(t *testing.T) {
-	err := newBuildError[int](ErrOrphanNode, 10, 99)
+	err := newBuildError[int](KindOrphanNode, 10, 99)
 
 	if err.Kind.String() != "orphan node" {
-		t.Fatalf("ErrOrphanNode.String() = %q, want %q", err.Kind.String(), "orphan node")
+		t.Fatalf("KindOrphanNode.String() = %q, want %q", err.Kind.String(), "orphan node")
 	}
-	if !errors.Is(err, ErrKindOrphanNode) {
-		t.Fatalf("build error should unwrap to ErrKindOrphanNode")
+	if !errors.Is(err, ErrOrphanNode) {
+		t.Fatalf("build error should unwrap to ErrOrphanNode")
 	}
 	if got := err.Error(); got == "" {
 		t.Fatalf("BuildError.Error() should not be empty")
 	}
+}
+
+func TestTreeGetNode(t *testing.T) {
+	n := node(1, 0, true)
+	tree := NewTreeBuilder[int, *testNode]().Build([]*testNode{n})
+
+	got, ok := tree.GetNode(1)
+	assert.True(t, ok)
+	assert.Same(t, n, got)
+
+	_, ok = tree.GetNode(42)
+	assert.False(t, ok)
+}
+
+func TestTreeErr(t *testing.T) {
+	// 无错误时返回 nil
+	ok := NewTreeBuilder[int, *testNode]().Build([]*testNode{node(1, 0, true)})
+	assert.Nil(t, ok.Err())
+
+	// 孤儿（ErrorOnOrphans）+ 重复 key 时聚合所有错误
+	tree := NewTreeBuilder[int, *testNode](
+		WithOrphanStrategy[int, *testNode](ErrorOnOrphans),
+	).Build([]*testNode{
+		node(1, 0, true),
+		node(2, 99, false), // orphan
+		node(1, 0, true),   // duplicate
+	})
+
+	err := tree.Err()
+	assert.NotNil(t, err)
+	assert.True(t, errors.Is(err, ErrOrphanNode))
+	assert.True(t, errors.Is(err, ErrDuplicateKey))
 }
