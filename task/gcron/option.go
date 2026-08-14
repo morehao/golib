@@ -2,8 +2,6 @@ package gcron
 
 import (
 	"time"
-
-	"github.com/morehao/golib/glog"
 )
 
 type Option interface {
@@ -34,10 +32,6 @@ func WithAutoRenewal(v bool) Option {
 	return optionFunc(func(c *Config) { c.AutoRenewal = v })
 }
 
-func WithLogConfig(lc *glog.LogConfig) Option {
-	return optionFunc(func(c *Config) { c.LogConfig = lc })
-}
-
-func WithCallerSkip(n int) Option {
-	return optionFunc(func(c *Config) { c.CallerSkip = n })
+func WithTimeout(d time.Duration) Option {
+	return optionFunc(func(c *Config) { c.Timeout = d })
 }

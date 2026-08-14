@@ -30,13 +30,13 @@ const (
 
 type CronTask struct {
 	gorm.Model
-	TaskCode  string         `gorm:"column:task_code;type:varchar(128);not null;uniqueIndex:uk_task_code;comment:任务唯一标识"`
-	TaskType  string         `gorm:"column:task_type;type:varchar(64);not null;comment:任务类型"`
-	Spec      string         `gorm:"column:spec;type:varchar(64);not null;comment:cron 表达式"`
+	TaskCode    string         `gorm:"column:task_code;type:varchar(128);not null;uniqueIndex:uk_task_code;comment:任务唯一标识"`
+	TaskType    string         `gorm:"column:task_type;type:varchar(64);not null;comment:任务类型"`
+	Spec        string         `gorm:"column:spec;type:varchar(64);not null;comment:cron 表达式"`
 	Description string         `gorm:"column:description;type:varchar(256);comment:任务描述"`
-	Status    CronTaskStatus `gorm:"column:status;type:varchar(16);not null;default:'enabled';comment:状态"`
-	LastRunAt *time.Time     `gorm:"column:last_run_at;comment:上次执行时间"`
-	NextRunAt *time.Time     `gorm:"column:next_run_at;comment:下次执行时间"`
+	Status      CronTaskStatus `gorm:"column:status;type:varchar(16);not null;default:'enabled';comment:状态"`
+	LastRunAt   *time.Time     `gorm:"column:last_run_at;comment:上次执行时间"`
+	NextRunAt   *time.Time     `gorm:"column:next_run_at;comment:下次执行时间"`
 }
 
 func (CronTask) TableName() string { return CronTaskTableName }

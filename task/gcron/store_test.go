@@ -47,6 +47,25 @@ func TestStoreDeleteTaskByCode(t *testing.T) {
 	require.NotNil(t, raw.DeletedAt.Time)
 }
 
+// TestUpsertTaskRestoresSoftDeleted 验证删除后重新 upsert 同一 task_code 会恢复软删除行（避免唯一索引冲突）。
+func TestUpsertTaskRestoresSoftDeleted(t *testing.T) {
+	s := newStoreForTest(t)
+	require.NoError(t, s.upsertTask(context.Background(), &CronTask{TaskCode: "foo", TaskType: "report", Spec: "*/5 * * * *", Status: CronTaskEnabled}))
+	require.NoError(t, s.DeleteTaskByCode(context.Background(), "foo"))
+
+	require.NoError(t, s.upsertTask(context.Background(), &CronTask{TaskCode: "foo", TaskType: "report", Spec: "*/2 * * * *", Status: CronTaskEnabled}))
+
+	got, err := s.GetTaskByCode(context.Background(), "foo")
+	require.NoError(t, err)
+	require.NotZero(t, got.ID)
+	require.Equal(t, "*/2 * * * *", got.Spec)
+	require.False(t, got.DeletedAt.Valid)
+
+	list, _, err := s.ListTask(context.Background(), &CronTaskCond{TaskCode: "foo"})
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+}
+
 func TestStoreRunLifecycle(t *testing.T) {
 	s := newStoreForTest(t)
 	e := &CronTaskRun{TaskCode: "foo", TaskType: "report", RunCode: "run-1", StartAt: time.Now(), Status: TaskRunRunning, RequestID: "req-1"}

@@ -12,16 +12,15 @@ const AsyncTaskRunTableName = "core_async_task_run"
 type AsyncTaskRunStatus string
 
 const (
-	AsyncPending    AsyncTaskRunStatus = "pending"
 	AsyncProcessing AsyncTaskRunStatus = "processing"
 	AsyncCompleted  AsyncTaskRunStatus = "completed"
 	AsyncFailed     AsyncTaskRunStatus = "failed"
 )
 
 type AsyncTaskRun struct {
-	ID        uint               `gorm:"column:id;primaryKey;autoIncrement"`
-	CreatedAt time.Time          `gorm:"column:created_at"`
-	RunCode    string             `gorm:"column:run_code;type:varchar(64);not null;index:idx_run_code;comment:asynq 任务实例 ID（运行唯一标识）"`
+	ID         uint               `gorm:"column:id;primaryKey;autoIncrement"`
+	CreatedAt  time.Time          `gorm:"column:created_at"`
+	RunCode    string             `gorm:"column:run_code;type:varchar(64);not null;uniqueIndex:uk_run_code;comment:asynq 任务实例 ID（任务唯一标识，重试复用同一行）"`
 	TaskType   string             `gorm:"column:task_type;type:varchar(128);index:idx_task_type;comment:任务类型"`
 	Queue      string             `gorm:"column:queue;type:varchar(64);comment:队列"`
 	Status     AsyncTaskRunStatus `gorm:"column:status;type:varchar(16);not null;comment:状态"`

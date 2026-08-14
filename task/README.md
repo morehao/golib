@@ -20,7 +20,9 @@
 - 支持多实例分布式锁互斥（基于 distlock，可选自动续期）
 - 执行记录自动落库（running/success/failed/skipped）
 - 自动注入 TraceID、RequestID、RunID 与日志
-- 任务处理器 panic 安全（自动 recover）
+- 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`）
+- 同实例防重叠：上一轮未结束时本轮跳过（记录 skipped，与分布式锁互补）
+- 注册幂等：同一 `TaskCode` 已在 DB 中存在时自动 upsert 更新定义，进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
 - 任务需显式指定 `TaskCode` 与 `TaskType`（均不允许为空）
 
 ### 数据表
@@ -55,7 +57,10 @@ func main() {
 
 	// 创建调度器（锁为可选，仅当任务开启互斥时需要）
 	var lock distlock.Lock // 可通过 distlock.NewRedisStorage 获取
-	s := gcron.New(db, &gcron.Config{WithSeconds: true}, lock)
+	s, err := gcron.New(db, &gcron.Config{WithSeconds: true}, lock)
+	if err != nil {
+		panic(err)
+	}
 
 	// 注册任务
 	if err := s.Register(gcron.Task{
@@ -74,7 +79,7 @@ func main() {
 	// 启动调度器
 	s.Start()
 
-	// 退出前停止
+	// 退出前停止（等待在途任务完成，可传入带超时的 ctx）
 	defer s.Stop(context.Background())
 }
 ```
@@ -90,10 +95,10 @@ func main() {
 - 内置重试、超时、保留时长等默认策略，可在投递时覆盖
 - 支持多队列优先级配置
 - 基于 Redis 的任务队列
-- 执行记录自动落库（pending/processing/completed/failed）
+- 执行记录自动落库（processing/completed/failed；同一任务 ID 只保留一行，重试覆盖该行，最终状态反映最后一次尝试）
 - 跨进程 trace 传递与统一日志
-- 自动注入 RunID，可通过日志 `extra_keys` 配置 `task.run.id`
-- 支持自定义并发数
+- 自动注入 RunID，可通过日志 `extra_keys` 配置 `task.run.code`
+- 支持自定义并发数与优雅停机超时（`ShutdownTimeout`，生产端 `Client.Close`、消费端 `Server.ShutdownContext`）
 
 ### 数据表
 

@@ -5,15 +5,8 @@ import (
 	"github.com/morehao/golib/glog"
 )
 
-func newGasyncLogger(cfg *Config) (glog.Logger, *glog.LogConfig) {
-	logConfig := cfg.LogConfig
-	if logConfig == nil {
-		logConfig = glog.CloneLogConfig(glog.GetLoggerConfig())
-	}
-	if logConfig == nil {
-		logConfig = glog.GetDefaultLogConfig()
-	}
-	glog.AppendExtraKeys(logConfig, gconstant.KeyAppRequestID, gconstant.KeyRunCode)
-	logger := glog.GetDefaultLogger().With(gconstant.KeyTaskType, "async")
-	return logger, logConfig
+// newGasyncLogger 返回带 task.type=async 固定字段的基础 logger。
+// 注意：task.run.code 等 ctx extra_keys 需由应用在启动时统一配置到 glog。
+func newGasyncLogger() glog.Logger {
+	return glog.GetDefaultLogger().With(gconstant.KeyTaskType, "async")
 }

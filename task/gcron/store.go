@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/dbaccess/gormdao"
+	"gorm.io/gorm"
 )
 
 type store struct {
@@ -21,19 +22,36 @@ func newStore(dbGetter gormdao.DBGetter) *store {
 	}
 }
 
+// upsertTask 按 task_code upsert 任务定义。
+// 若存在软删除的历史行，则恢复该行并更新（避免唯一索引冲突导致重新注册失败）。
 func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
 	existing, err := s.GetTaskByCode(ctx, t.TaskCode)
 	if err != nil {
 		return err
 	}
-	if existing.ID == 0 {
-		return s.taskDao.Insert(ctx, t)
+	if existing.ID != 0 {
+		existing.TaskType = t.TaskType
+		existing.Spec = t.Spec
+		existing.Description = t.Description
+		existing.Status = t.Status
+		return s.taskDao.UpdateByID(ctx, existing.ID, existing)
 	}
-	existing.TaskType = t.TaskType
-	existing.Spec = t.Spec
-	existing.Description = t.Description
-	existing.Status = t.Status
-	return s.taskDao.UpdateByID(ctx, existing.ID, existing)
+
+	var deleted CronTask
+	if err := s.dbGetter(ctx).Unscoped().Table(CronTaskTableName).
+		Where("task_code = ?", t.TaskCode).Find(&deleted).Error; err != nil {
+		return err
+	}
+	if deleted.ID != 0 {
+		deleted.TaskType = t.TaskType
+		deleted.Spec = t.Spec
+		deleted.Description = t.Description
+		deleted.Status = t.Status
+		deleted.DeletedAt = gorm.DeletedAt{}
+		return s.dbGetter(ctx).Unscoped().Table(CronTaskTableName).
+			Where("id = ?", deleted.ID).Save(&deleted).Error
+	}
+	return s.taskDao.Insert(ctx, t)
 }
 
 func (s *store) updateRunTimes(ctx context.Context, taskCode string, lastRun, nextRun *time.Time) error {

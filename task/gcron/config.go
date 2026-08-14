@@ -2,8 +2,6 @@ package gcron
 
 import (
 	"time"
-
-	"github.com/morehao/golib/glog"
 )
 
 type Config struct {
@@ -12,8 +10,8 @@ type Config struct {
 	EnableLock  bool
 	LockTTL     time.Duration
 	AutoRenewal bool
-	LogConfig   *glog.LogConfig
-	CallerSkip  int
+	// Timeout 默认单次执行超时（可被 Task.Timeout 覆盖），<=0 表示不限制。
+	Timeout time.Duration
 }
 
 func defaultConfig() *Config {

@@ -9,7 +9,7 @@ import (
 
 type store struct {
 	dbGetter gormdao.DBGetter
-	runDao  *gormdao.Dao[AsyncTaskRun, []AsyncTaskRun]
+	runDao   *gormdao.Dao[AsyncTaskRun, []AsyncTaskRun]
 }
 
 func newStore(dbGetter gormdao.DBGetter) *store {
@@ -21,6 +21,21 @@ func newStore(dbGetter gormdao.DBGetter) *store {
 
 func (s *store) insertRun(ctx context.Context, e *AsyncTaskRun) error {
 	return s.runDao.Insert(ctx, e)
+}
+
+// updateRunStart 更新一次重试尝试的开始信息（按 run_code 唯一行覆盖）。
+func (s *store) updateRunStart(ctx context.Context, run *AsyncTaskRun) error {
+	updates := map[string]any{
+		"status":     run.Status,
+		"start_at":   run.StartAt,
+		"retried":    run.Retried,
+		"max_retry":  run.MaxRetry,
+		"payload":    run.Payload,
+		"trace_id":   run.TraceID,
+		"request_id": run.RequestID,
+	}
+	return s.dbGetter(ctx).Model(&AsyncTaskRun{}).Table(AsyncTaskRunTableName).
+		Where("id = ?", run.ID).Updates(updates).Error
 }
 
 func (s *store) finishRun(ctx context.Context, id uint, endAt time.Time, durationMS int64, status AsyncTaskRunStatus, errMsg string) error {

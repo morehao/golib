@@ -4,19 +4,18 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
-	"github.com/morehao/golib/glog"
 )
 
 type Config struct {
-	RedisAddr     string
-	RedisPassword string
-	RedisDB       int
-	Concurrency   int
-	Queues        map[string]int
-	MaxRetry      int
-	Timeout       time.Duration
-	Retention     time.Duration
-	LogConfig     *glog.LogConfig
+	RedisAddr       string
+	RedisPassword   string
+	RedisDB         int
+	Concurrency     int
+	Queues          map[string]int
+	MaxRetry        int
+	Timeout         time.Duration
+	Retention       time.Duration
+	ShutdownTimeout time.Duration
 }
 
 func defaultConfig() *Config {
@@ -42,8 +41,12 @@ func (c *Config) asynqServerConfig() asynq.Config {
 	if len(queues) == 0 {
 		queues = map[string]int{"default": 1}
 	}
-	return asynq.Config{
+	cfg := asynq.Config{
 		Concurrency: c.Concurrency,
 		Queues:      queues,
 	}
+	if c.ShutdownTimeout > 0 {
+		cfg.ShutdownTimeout = c.ShutdownTimeout
+	}
+	return cfg
 }

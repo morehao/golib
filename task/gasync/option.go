@@ -2,8 +2,6 @@ package gasync
 
 import (
 	"time"
-
-	"github.com/morehao/golib/glog"
 )
 
 type Option interface {
@@ -46,6 +44,6 @@ func WithRetention(d time.Duration) Option {
 	return optionFunc(func(c *Config) { c.Retention = d })
 }
 
-func WithLogConfig(lc *glog.LogConfig) Option {
-	return optionFunc(func(c *Config) { c.LogConfig = lc })
+func WithShutdownTimeout(d time.Duration) Option {
+	return optionFunc(func(c *Config) { c.ShutdownTimeout = d })
 }

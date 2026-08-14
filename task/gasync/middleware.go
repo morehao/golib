@@ -9,7 +9,6 @@ import (
 	"github.com/morehao/golib/gtrace"
 	"github.com/morehao/golib/gutil"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -42,9 +41,8 @@ func (s *Server) logMiddleware(next asynq.Handler) asynq.Handler {
 
 func (s *Server) traceMiddleware(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
-		prop := propagation.TraceContext{}
 		carrier := headerCarrier(task.Headers())
-		ctx = prop.Extract(ctx, carrier)
+		ctx = otel.GetTextMapPropagator().Extract(ctx, carrier)
 
 		tracer := otel.Tracer(gasyncTracerName)
 		ctx, span := tracer.Start(ctx, task.Type(), trace.WithSpanKind(trace.SpanKindConsumer))
@@ -79,7 +77,17 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 			TraceID:   traceID,
 			RequestID: requestID,
 		}
-		if serr := s.store.insertRun(ctx, run); serr != nil {
+
+		// asynq 重试复用同一任务 ID（run_code），因此同一任务只保留一行：
+		// 首次执行插入，后续重试尝试覆盖该行，最终状态反映最后一次尝试。
+		if existing, qerr := s.store.GetRunByRunCode(ctx, runCode); qerr != nil {
+			s.logger.Errorw(ctx, "query async run failed", "run_code", runCode, "error", qerr)
+		} else if existing.ID != 0 {
+			run.ID = existing.ID
+			if uerr := s.store.updateRunStart(ctx, run); uerr != nil {
+				s.logger.Errorw(ctx, "update async run start failed", "run_code", runCode, "error", uerr)
+			}
+		} else if serr := s.store.insertRun(ctx, run); serr != nil {
 			s.logger.Errorw(ctx, "insert async run failed", "run_code", runCode, "error", serr)
 		}
 
@@ -93,7 +101,8 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 			errMsg = err.Error()
 		}
 		if run.ID != 0 {
-			if ferr := s.store.finishRun(ctx, run.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
+			// asynq 超时会取消 ctx，收尾落库需用未取消的 ctx，否则写库静默失败
+			if ferr := s.store.finishRun(context.WithoutCancel(ctx), run.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
 				s.logger.Errorw(ctx, "finish async run failed", "run_code", runCode, "error", ferr)
 			}
 		}

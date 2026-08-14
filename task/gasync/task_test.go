@@ -1,6 +1,7 @@
 package gasync
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -12,11 +13,11 @@ type emailTask struct {
 
 func (e emailTask) TypeName() string { return "email:send" }
 func (e emailTask) Payload() ([]byte, error) {
-	return jsonPayload(e)
+	return json.Marshal(e)
 }
 
-func TestJSONPayload(t *testing.T) {
-	p, err := jsonPayload(emailTask{To: "a@b.c"})
+func TestTaskPayload(t *testing.T) {
+	p, err := emailTask{To: "a@b.c"}.Payload()
 	require.NoError(t, err)
 	require.JSONEq(t, `{"to":"a@b.c"}`, string(p))
 }

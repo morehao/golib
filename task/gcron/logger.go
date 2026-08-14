@@ -5,19 +5,12 @@ import (
 	"github.com/morehao/golib/glog"
 )
 
-func newTaskLogger(cfg *Config, taskCode, taskType string) (glog.Logger, *glog.LogConfig) {
-	logConfig := cfg.LogConfig
-	if logConfig == nil {
-		logConfig = glog.CloneLogConfig(glog.GetLoggerConfig())
-	}
-	if logConfig == nil {
-		logConfig = glog.GetDefaultLogConfig()
-	}
-	glog.AppendExtraKeys(logConfig, gconstant.KeyAppRequestID, gconstant.KeyRunCode)
+// newTaskLogger 返回带 task.type / task.code 固定字段的基础 logger。
+// 注意：task.run.code 等 ctx extra_keys 需由应用在启动时统一配置到 glog。
+func newTaskLogger(taskCode, taskType string) glog.Logger {
 	fields := []any{gconstant.KeyTaskType, taskType}
 	if taskCode != "" {
 		fields = append(fields, gconstant.KeyTaskCode, taskCode)
 	}
-	logger := glog.GetDefaultLogger().With(fields...)
-	return logger, logConfig
+	return glog.GetDefaultLogger().With(fields...)
 }

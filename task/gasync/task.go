@@ -2,7 +2,6 @@ package gasync
 
 import (
 	"context"
-	"encoding/json"
 )
 
 type Task interface {
@@ -11,7 +10,3 @@ type Task interface {
 }
 
 type Handler func(ctx context.Context, payload []byte) error
-
-func jsonPayload(v any) ([]byte, error) {
-	return json.Marshal(v)
-}
