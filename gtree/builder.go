@@ -47,50 +47,52 @@ const (
 // BuildError：构建过程中的错误信息
 // =============================================================================
 
-// ErrorKind 错误类型
+// ErrorKind 错误类型。
+// 与哨兵错误一一对应：KindDuplicateKey ↔ ErrDuplicateKey 等。
 type ErrorKind int
 
 const (
-	ErrDuplicateKey ErrorKind = iota // 重复的 key
-	ErrOrphanNode                    // 孤儿节点
-	ErrCyclicGraph                   // 存在循环引用
-	ErrContextDone                   // context 已取消
+	KindDuplicateKey ErrorKind = iota // 重复的 key
+	KindOrphanNode                    // 孤儿节点
+	KindCyclicGraph                   // 存在循环引用
+	KindContextDone                   // context 已取消
 )
 
 func (e ErrorKind) String() string {
 	switch e {
-	case ErrDuplicateKey:
+	case KindDuplicateKey:
 		return "duplicate key"
-	case ErrOrphanNode:
+	case KindOrphanNode:
 		return "orphan node"
-	case ErrCyclicGraph:
+	case KindCyclicGraph:
 		return "cyclic graph"
-	case ErrContextDone:
+	case KindContextDone:
 		return "context done"
 	default:
 		return "unknown"
 	}
 }
 
-// 哨兵错误，支持 errors.Is / errors.As 判断
+// 哨兵错误，支持 errors.Is / errors.As 判断。
+// 与 ErrorKind 一一对应：ErrDuplicateKey ↔ KindDuplicateKey 等。
 var (
-	ErrKindDuplicateKey = errors.New("duplicate key")
-	ErrKindOrphanNode   = errors.New("orphan node")
-	ErrKindCyclicGraph  = errors.New("cyclic graph")
-	ErrKindContextDone  = errors.New("context done")
-	errUnknownKind      = errors.New("unknown error kind")
+	ErrDuplicateKey = errors.New("duplicate key")
+	ErrOrphanNode   = errors.New("orphan node")
+	ErrCyclicGraph  = errors.New("cyclic graph")
+	ErrContextDone  = errors.New("context done")
+	errUnknownKind  = errors.New("unknown error kind")
 )
 
 func sentinelFor(k ErrorKind) error {
 	switch k {
-	case ErrDuplicateKey:
-		return ErrKindDuplicateKey
-	case ErrOrphanNode:
-		return ErrKindOrphanNode
-	case ErrCyclicGraph:
-		return ErrKindCyclicGraph
-	case ErrContextDone:
-		return ErrKindContextDone
+	case KindDuplicateKey:
+		return ErrDuplicateKey
+	case KindOrphanNode:
+		return ErrOrphanNode
+	case KindCyclicGraph:
+		return ErrCyclicGraph
+	case KindContextDone:
+		return ErrContextDone
 	default:
 		return errUnknownKind
 	}
@@ -125,11 +127,14 @@ func newBuildError[K comparable](kind ErrorKind, nodeKey, parentKey K) *BuildErr
 // Tree：构建结果，持有树结构和所有查询方法
 // =============================================================================
 
-// Tree 持有构建完成的树：根节点列表 + 父子关系表
+// Tree 持有构建完成的树：根节点列表 + 父子关系表。
+// 注意：当输入存在环（相关边被移除）或孤儿被丢弃时，NodeMap 中可能包含
+// 不在 Roots 之下、不可达的节点；查询类方法（Walk/Filter/GetNodesByLevel）
+// 不会返回它们，但 Children 对该 key 仍返回 ok=true。
 type Tree[K comparable, N TreeNode[K]] struct {
 	// Roots 根节点（含被提升的孤儿节点，取决于策略）
 	Roots []N
-	// NodeMap 全量节点索引，key → node
+	// NodeMap 全量节点索引，key → node（可能包含不可达节点，见类型注释）
 	NodeMap map[K]N
 	// childrenMap 父子关系：parentKey → []childNode（内部持有，通过方法访问）
 	childrenMap map[K][]N
@@ -150,6 +155,27 @@ func (t *Tree[K, N]) Children(key K) ([]N, bool) {
 	result := make([]N, len(children))
 	copy(result, children)
 	return result, true
+}
+
+// GetNode 按 key 返回节点；ok 为 false 表示该 key 不存在。
+func (t *Tree[K, N]) GetNode(key K) (N, bool) {
+	n, ok := t.NodeMap[key]
+	return n, ok
+}
+
+// Err 汇总构建过程中收集到的所有错误（无错误时返回 nil）。
+// 可通过 errors.Is / errors.As 检查具体错误类型，例如：
+//
+//	if err := tree.Err(); errors.Is(err, ErrCyclicGraph) { ... }
+func (t *Tree[K, N]) Err() error {
+	if len(t.BuildErrors) == 0 {
+		return nil
+	}
+	errs := make([]error, len(t.BuildErrors))
+	for i, e := range t.BuildErrors {
+		errs[i] = e
+	}
+	return errors.Join(errs...)
 }
 
 // bfsByLevel 内部通用 BFS，按层序对每层节点执行 fn(level, nodes)。
@@ -309,12 +335,16 @@ func NewTreeBuilder[K comparable, N TreeNode[K]](opts ...Option[K, N]) *TreeBuil
 // Build 构建树，返回 *Tree 持有全部结果。
 //
 // 处理顺序：
-//  1. 建立节点索引（检测重复 key），同时记录有序 key 列表
-//  2. 按原始切片顺序建立父子关系 & 收集根节点（处理孤儿策略）
+//  1. 建立节点索引（检测重复 key），同时记录首次出现的 key 列表
+//  2. 按首次出现顺序建立父子关系 & 收集根节点（处理孤儿策略）
 //  3. 检测循环引用（有环时报告错误并移除对应边）
 //  4. 按 comparator 排序
 //
-// 每个阶段开始前检查 context 是否已取消，取消时附带错误提前返回。
+// 每个阶段检查 context 是否已取消，取消时附带错误提前返回。
+//
+// 注意：环被移除或孤儿被丢弃时，相关节点仍保留在 NodeMap 中，
+// 但可能不在 Roots 之下（不可达）。所有问题均记录在 BuildErrors，
+// 可通过 Tree.Err() 快速判断构建是否完全成功。
 func (b *TreeBuilder[K, N]) Build(nodes []N) *Tree[K, N] {
 	tree := &Tree[K, N]{
 		NodeMap:     make(map[K]N, len(nodes)),
@@ -342,7 +372,7 @@ func (b *TreeBuilder[K, N]) Build(nodes []N) *Tree[K, N] {
 		if _, exists := tree.NodeMap[key]; exists {
 			// 重复 key 时 parentKey 未知，传零值避免误导
 			var zeroK K
-			e := newBuildError[K](ErrDuplicateKey, key, zeroK)
+			e := newBuildError[K](KindDuplicateKey, key, zeroK)
 			tree.BuildErrors = append(tree.BuildErrors, e)
 			b.errorHandler(b.ctx, e)
 			continue
@@ -401,8 +431,8 @@ func (b *TreeBuilder[K, N]) Build(nodes []N) *Tree[K, N] {
 // 也能区分 context.Canceled / context.DeadlineExceeded。
 func (b *TreeBuilder[K, N]) appendContextError(tree *Tree[K, N], err error) {
 	var zeroK K
-	e := newBuildError[K](ErrContextDone, zeroK, zeroK)
-	e.Err = fmt.Errorf("%w: %w", sentinelFor(ErrContextDone), err)
+	e := newBuildError[K](KindContextDone, zeroK, zeroK)
+	e.Err = fmt.Errorf("%w: %w", sentinelFor(KindContextDone), err)
 	tree.BuildErrors = append(tree.BuildErrors, e)
 	b.errorHandler(b.ctx, e)
 }
@@ -412,7 +442,7 @@ func (b *TreeBuilder[K, N]) handleOrphan(tree *Tree[K, N], node N, parentKey K) 
 	case CollectOrphans:
 		tree.Roots = append(tree.Roots, node)
 	case ErrorOnOrphans:
-		e := newBuildError(ErrOrphanNode, node.GetKey(), parentKey)
+		e := newBuildError(KindOrphanNode, node.GetKey(), parentKey)
 		tree.BuildErrors = append(tree.BuildErrors, e)
 		b.errorHandler(b.ctx, e)
 		// 丢弃：不加入 Roots，也不加入 childrenMap
@@ -434,7 +464,7 @@ func (b *TreeBuilder[K, N]) handleOrphan(tree *Tree[K, N], node N, parentKey K) 
 // 【修复：栈顶访问】所有对栈顶的读写均通过下标 stack[topIdx] 完成，
 // 不持有跨 append 的指针，彻底消除悬挂指针风险。
 //
-// 返回值：false 表示构建中途 context 被取消（已附加 ErrContextDone 错误）。
+// 返回值：false 表示构建中途 context 被取消（已附加 KindContextDone 错误）。
 func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) bool {
 	const (
 		stateUnvisited uint8 = 0
@@ -497,7 +527,7 @@ func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) bool
 
 			case stateInStack:
 				// 后向边：形成环，记录待删除的边并报告错误。
-				e := newBuildError(ErrCyclicGraph, ck, stack[topIdx].key)
+				e := newBuildError(KindCyclicGraph, ck, stack[topIdx].key)
 				tree.BuildErrors = append(tree.BuildErrors, e)
 				b.errorHandler(b.ctx, e)
 				removed = append(removed, removedEdge{parent: stack[topIdx].key, child: ck})
@@ -543,7 +573,7 @@ func (b *TreeBuilder[K, N]) removeCycles(tree *Tree[K, N], orderedKeys []K) bool
 
 // sortByLevel 使用 BFS 层序遍历对每层子节点排序，避免递归导致的栈溢出。
 // 使用稳定排序，比较器相等时保持输入相对顺序。
-// 返回值：false 表示构建中途 context 被取消（已附加 ErrContextDone 错误）。
+// 返回值：false 表示构建中途 context 被取消（已附加 KindContextDone 错误）。
 func (b *TreeBuilder[K, N]) sortByLevel(tree *Tree[K, N]) bool {
 	sort.SliceStable(tree.Roots, func(i, j int) bool {
 		return b.comparator.Compare(tree.Roots[i], tree.Roots[j]) < 0

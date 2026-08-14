@@ -222,9 +222,9 @@ func TestBuildDuplicateKeyReportsErrorAndKeepsFirstNode(t *testing.T) {
 	assert.Len(t, tree.BuildErrors, 1)
 
 	err := tree.BuildErrors[0]
-	assert.Equal(t, ErrDuplicateKey, err.Kind)
+	assert.Equal(t, KindDuplicateKey, err.Kind)
 	assert.Equal(t, 2, err.NodeKey)
-	assert.True(t, errors.Is(err, ErrKindDuplicateKey))
+	assert.True(t, errors.Is(err, ErrDuplicateKey))
 	assert.Len(t, handled, 1)
 
 	children1, ok := tree.Children(1)
@@ -287,7 +287,7 @@ func TestBuildOrphanStrategies(t *testing.T) {
 	}{
 		{name: "ignore", strategy: IgnoreOrphans, wantRoots: []int{1}},
 		{name: "collect", strategy: CollectOrphans, wantRoots: []int{1, 2}},
-		{name: "error", strategy: ErrorOnOrphans, wantRoots: []int{1}, wantErrKinds: []ErrorKind{ErrOrphanNode}},
+		{name: "error", strategy: ErrorOnOrphans, wantRoots: []int{1}, wantErrKinds: []ErrorKind{KindOrphanNode}},
 	}
 
 	for _, tt := range tests {
@@ -334,11 +334,11 @@ func TestBuildRemoveCycles(t *testing.T) {
 		t.Fatalf("BuildErrors len = %d, want 1", len(tree.BuildErrors))
 	}
 	err := tree.BuildErrors[0]
-	if err.Kind != ErrCyclicGraph {
-		t.Fatalf("error kind = %v, want %v", err.Kind, ErrCyclicGraph)
+	if err.Kind != KindCyclicGraph {
+		t.Fatalf("error kind = %v, want %v", err.Kind, KindCyclicGraph)
 	}
-	if !errors.Is(err, ErrKindCyclicGraph) {
-		t.Fatalf("error should match ErrKindCyclicGraph")
+	if !errors.Is(err, ErrCyclicGraph) {
+		t.Fatalf("error should match ErrCyclicGraph")
 	}
 	if len(handled) != 1 {
 		t.Fatalf("error handler called %d times, want 1", len(handled))
@@ -361,7 +361,7 @@ func TestBuildSelfLoopRemovesEdge(t *testing.T) {
 	})
 
 	assert.Len(t, tree.BuildErrors, 1)
-	assert.Equal(t, ErrCyclicGraph, tree.BuildErrors[0].Kind)
+	assert.Equal(t, KindCyclicGraph, tree.BuildErrors[0].Kind)
 	assert.Equal(t, 2, tree.BuildErrors[0].NodeKey)
 
 	children2, ok := tree.Children(2)
@@ -449,11 +449,11 @@ func TestBuildContextCanceled(t *testing.T) {
 		t.Fatalf("BuildErrors len = %d, want 1", len(tree.BuildErrors))
 	}
 	err := tree.BuildErrors[0]
-	if err.Kind != ErrContextDone {
-		t.Fatalf("error kind = %v, want %v", err.Kind, ErrContextDone)
+	if err.Kind != KindContextDone {
+		t.Fatalf("error kind = %v, want %v", err.Kind, KindContextDone)
 	}
-	if !errors.Is(err, ErrKindContextDone) {
-		t.Fatalf("error should match ErrKindContextDone")
+	if !errors.Is(err, ErrContextDone) {
+		t.Fatalf("error should match ErrContextDone")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error should preserve the real context error")
@@ -500,8 +500,8 @@ func TestBuildContextCanceledMidBuild(t *testing.T) {
 	assert.Len(t, tree.NodeMap, 10)
 	assert.Len(t, tree.BuildErrors, 1)
 	err := tree.BuildErrors[0]
-	assert.Equal(t, ErrContextDone, err.Kind)
-	assert.True(t, errors.Is(err, ErrKindContextDone))
+	assert.Equal(t, KindContextDone, err.Kind)
+	assert.True(t, errors.Is(err, ErrContextDone))
 	assert.True(t, errors.Is(err, context.Canceled))
 }
 
@@ -515,7 +515,7 @@ func TestBuildContextCanceledDuringSort(t *testing.T) {
 	).Build(chainNodes(10))
 
 	assert.Len(t, tree.BuildErrors, 1)
-	assert.Equal(t, ErrContextDone, tree.BuildErrors[0].Kind)
+	assert.Equal(t, KindContextDone, tree.BuildErrors[0].Kind)
 }
 
 func TestBuildNilOptionsDoNotPanic(t *testing.T) {
@@ -601,15 +601,47 @@ func TestComparators(t *testing.T) {
 }
 
 func TestBuildErrorAndErrorKind(t *testing.T) {
-	err := newBuildError[int](ErrOrphanNode, 10, 99)
+	err := newBuildError[int](KindOrphanNode, 10, 99)
 
 	if err.Kind.String() != "orphan node" {
-		t.Fatalf("ErrOrphanNode.String() = %q, want %q", err.Kind.String(), "orphan node")
+		t.Fatalf("KindOrphanNode.String() = %q, want %q", err.Kind.String(), "orphan node")
 	}
-	if !errors.Is(err, ErrKindOrphanNode) {
-		t.Fatalf("build error should unwrap to ErrKindOrphanNode")
+	if !errors.Is(err, ErrOrphanNode) {
+		t.Fatalf("build error should unwrap to ErrOrphanNode")
 	}
 	if got := err.Error(); got == "" {
 		t.Fatalf("BuildError.Error() should not be empty")
 	}
+}
+
+func TestTreeGetNode(t *testing.T) {
+	n := node(1, 0, true)
+	tree := NewTreeBuilder[int, *testNode]().Build([]*testNode{n})
+
+	got, ok := tree.GetNode(1)
+	assert.True(t, ok)
+	assert.Same(t, n, got)
+
+	_, ok = tree.GetNode(42)
+	assert.False(t, ok)
+}
+
+func TestTreeErr(t *testing.T) {
+	// 无错误时返回 nil
+	ok := NewTreeBuilder[int, *testNode]().Build([]*testNode{node(1, 0, true)})
+	assert.Nil(t, ok.Err())
+
+	// 孤儿（ErrorOnOrphans）+ 重复 key 时聚合所有错误
+	tree := NewTreeBuilder[int, *testNode](
+		WithOrphanStrategy[int, *testNode](ErrorOnOrphans),
+	).Build([]*testNode{
+		node(1, 0, true),
+		node(2, 99, false), // orphan
+		node(1, 0, true),   // duplicate
+	})
+
+	err := tree.Err()
+	assert.NotNil(t, err)
+	assert.True(t, errors.Is(err, ErrOrphanNode))
+	assert.True(t, errors.Is(err, ErrDuplicateKey))
 }
