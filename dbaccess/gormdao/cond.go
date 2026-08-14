@@ -46,7 +46,9 @@ func (c *BaseCond) GetPageInfo() (page int, pageSize int) {
 // IncludeDeleted 返回是否查询包含已删除的记录，供 Dao 层软删除过滤使用。
 // 自定义 Cond 若内嵌 BaseCond 则自动实现；也可自行实现该方法。
 func (c *BaseCond) IncludeDeleted() bool {
-	return c.IsDelete
+	// nil 安全：内嵌 *BaseCond 的 Cond 常以零值构造（未显式初始化 BaseCond），
+	// 此时 c 为 nil，直接访问 IsDelete 会 panic（promoted method on nil embedded pointer）。
+	return c != nil && c.IsDelete
 }
 
 func BuildBaseCondition(db *gorm.DB, tableName string, cond *BaseCond) {

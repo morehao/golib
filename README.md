@@ -381,9 +381,14 @@ For usage examples, refer to [storage usage](storage/README.md)
 ## ratelimit
 
 ### Overview
-`ratelimit` is a rate limiting component supporting Redis-based and local time window/token bucket rate limiting.
+`ratelimit` is a rate limiting component: distributed rate limiting on Redis (redis_rate GCRA token bucket), with automatic degradation to a local token bucket when Redis is unavailable.
 
 ### Features
-- Redis rate limiting (go-redis-rate)
-- Local rate limiting (timeRateLimiter)
-- Degradation handling support
+- Redis rate limiting (go-redis-rate, GCRA token bucket)
+- Automatic fail-over to in-process rate limiting (fail-open) when Redis is down, with exponential-backoff probing and automatic switch-back on recovery
+- Degradation/recovery events can be logged via `WithLogger`
+- `Close()` releases background goroutines
+
+### Notes
+- During fail-over, each process uses its own local limiter; in multi-instance deployments the aggregate limit is roughly `instances × configured rate`, and quotas are not shared across instances
+- `Rate`/`Burst`/`Period`/`CleanupInterval` must be positive, otherwise `NewLimiter` returns an error

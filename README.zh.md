@@ -314,9 +314,14 @@ if ok, err := lock.Lock(ctx); err != nil {
 ## ratelimit
 
 ### 简介
-`ratelimit` 是限流组件，支持基于 Redis 和本地的时间窗口/令牌桶限流。
+`ratelimit` 是限流组件，基于 Redis（redis_rate GCRA 算法）做分布式限流，Redis 故障时自动降级为本地令牌桶限流。
 
 ### 特性
-- 支持 Redis 限流（go-redis-rate）
-- 支持本地限流（timeRateLimiter）
-- 支持降级处理
+- 支持 Redis 限流（go-redis-rate，GCRA 令牌桶）
+- Redis 不可用时自动降级为进程内限流（fail-open），后台以指数退避探测，恢复后自动切回
+- 降级/恢复事件可通过 `WithLogger` 输出日志
+- `Close()` 释放后台 goroutine
+
+### 注意
+- 降级（fail-open）期间每个进程使用独立的本地限流器，多实例部署时聚合上限约为「实例数 × 配置值」，且各实例配额不共享
+- `Rate`/`Burst`/`Period`/`CleanupInterval` 必须大于 0，否则 `NewLimiter` 返回错误
