@@ -4,10 +4,16 @@ import (
 	"context"
 	"testing"
 
+	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func init() {
+	testutil.Load()
+}
 
 type testModel struct {
 	ID       uint
@@ -156,4 +162,94 @@ func TestScopePlugin_ExtractFuncFalse(t *testing.T) {
 	var out []testModel
 	require.NoError(t, db.WithContext(ctx).Find(&out).Error)
 	require.Len(t, out, 2)
+}
+
+// pgScopeTestModel 专用表名，避免与 SQLite 用例的表冲突。
+type pgScopeTestModel struct {
+	ID       uint `gorm:"primaryKey"`
+	TenantID uint
+	Name     string
+}
+
+func (pgScopeTestModel) TableName() string { return "gormplugin_pg_scope_test" }
+
+// openPostgresForTest 连接本地 PG，不可用时跳过。
+// 回归场景：旧实现硬编码反引号标识符，PG 上每次查询都报
+// "syntax error at or near"（SQLite 恰好接受反引号，单测无法暴露该问题）。
+func openPostgresForTest(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := testutil.GetEnv(testutil.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Skipf("skip postgres-dependent test: %v", err)
+	}
+	return db
+}
+
+func TestScopePlugin_Postgres(t *testing.T) {
+	db := openPostgresForTest(t)
+	require.NoError(t, db.Exec(`DROP TABLE IF EXISTS gormplugin_pg_scope_test`).Error)
+	t.Cleanup(func() {
+		_ = db.Exec(`DROP TABLE IF EXISTS gormplugin_pg_scope_test`).Error
+	})
+	require.NoError(t, db.AutoMigrate(&pgScopeTestModel{}))
+
+	plugin, err := New(&ScopeConfig{
+		FieldName: "tenant_id",
+		ExtractFunc: func(ctx context.Context) (any, bool) {
+			return ctx.Value("test_tenant"), true
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Use(plugin))
+
+	require.NoError(t, db.Create(&pgScopeTestModel{TenantID: 1, Name: "a"}).Error)
+	require.NoError(t, db.Create(&pgScopeTestModel{TenantID: 2, Name: "b"}).Error)
+
+	// 注入条件生效：只查到当前租户的数据
+	ctx := context.WithValue(context.Background(), "test_tenant", uint(1))
+	var out []pgScopeTestModel
+	require.NoError(t, db.WithContext(ctx).Find(&out).Error)
+	require.Len(t, out, 1)
+	require.Equal(t, "a", out[0].Name)
+
+	// Skip 豁免时返回全部
+	var all []pgScopeTestModel
+	require.NoError(t, Skip(db.WithContext(ctx)).Find(&all).Error)
+	require.Len(t, all, 2)
+}
+
+func TestScopePlugin_PostgresNoTenantContext(t *testing.T) {
+	db := openPostgresForTest(t)
+	require.NoError(t, db.Exec(`DROP TABLE IF EXISTS gormplugin_pg_scope_test`).Error)
+	t.Cleanup(func() {
+		_ = db.Exec(`DROP TABLE IF EXISTS gormplugin_pg_scope_test`).Error
+	})
+	require.NoError(t, db.AutoMigrate(&pgScopeTestModel{}))
+
+	// ExtractFunc 按 context 中是否存在租户返回 ok 标志
+	plugin, err := New(&ScopeConfig{
+		FieldName: "tenant_id",
+		ExtractFunc: func(ctx context.Context) (any, bool) {
+			v, ok := ctx.Value("test_tenant").(uint)
+			return v, ok
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Use(plugin))
+
+	require.NoError(t, db.Create(&pgScopeTestModel{TenantID: 1, Name: "a"}).Error)
+	require.NoError(t, db.Create(&pgScopeTestModel{TenantID: 2, Name: "b"}).Error)
+
+	// 未携带租户上下文时不注入条件，返回全部
+	var noCtx []pgScopeTestModel
+	require.NoError(t, db.Find(&noCtx).Error)
+	require.Len(t, noCtx, 2)
+
+	// 携带租户时正常过滤
+	ctx := context.WithValue(context.Background(), "test_tenant", uint(2))
+	var out []pgScopeTestModel
+	require.NoError(t, db.WithContext(ctx).Find(&out).Error)
+	require.Len(t, out, 1)
+	require.Equal(t, "b", out[0].Name)
 }

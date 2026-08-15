@@ -3,8 +3,10 @@ package configkv
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/morehao/golib/dbaccess/gormdao"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -76,7 +78,23 @@ func (s *store) Set(ctx context.Context, entity *ConfigEntity) error {
 		return errGroupAndKeyRequired
 	}
 
-	return s.dbGetter(ctx).Table(tableName).Save(entity).Error
+	// 按 (group_name, key) 原子 upsert：不存在则插入，已存在则覆盖更新。
+	// 不能用 Save：传入的实体 ID 为空时 Save 退化为纯 INSERT，同一 (group,key)
+	// 重复 Set 会撞 uk_group_key 唯一索引（MySQL 报 Duplicate entry，PG 报
+	// duplicate key value violates unique constraint），Set 幂等性无法保证。
+	return s.dbGetter(ctx).Table(tableName).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "group_name"}, {Name: "key"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"value_type":      entity.ValueType,
+				"value":           entity.Value,
+				"encryption_mode": entity.EncryptionMode,
+				"description":     entity.Description,
+				"status":          entity.Status,
+				"updated_at":      time.Now(),
+			}),
+		}).
+		Create(entity).Error
 }
 
 func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType ValueType, val any) error {
