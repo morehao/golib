@@ -133,9 +133,9 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 // @Router /files/multipart/{fileID}/parts [post]
 func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, err := parseIDParam(c, "fileID")
-		if err != nil {
-			gincontext.Fail(c, err)
+		var uri multipartFileIDURI
+		if err := c.ShouldBindUri(&uri); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
 
@@ -144,7 +144,7 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		url, err := fs.PresignUploadPartURL(c.Request.Context(), id, req.PartNumber)
+		url, err := fs.PresignUploadPartURL(c.Request.Context(), uri.FileID, req.PartNumber)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -167,9 +167,9 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 // @Router /files/multipart/{fileID}/complete [post]
 func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, err := parseIDParam(c, "fileID")
-		if err != nil {
-			gincontext.Fail(c, err)
+		var uri multipartFileIDURI
+		if err := c.ShouldBindUri(&uri); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
 
@@ -184,7 +184,7 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		detail, err := fs.CompleteMultipartUpload(c.Request.Context(), filestore.CompleteMultipartUploadRequest{
-			ID:    id,
+			ID:    uri.FileID,
 			Parts: parts,
 		})
 		if err != nil {
@@ -205,13 +205,13 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 // @Router /files/multipart/{fileID} [delete]
 func handleAbortMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, err := parseIDParam(c, "fileID")
-		if err != nil {
-			gincontext.Fail(c, err)
+		var uri multipartFileIDURI
+		if err := c.ShouldBindUri(&uri); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
 
-		if err := fs.AbortMultipartUpload(c.Request.Context(), id); err != nil {
+		if err := fs.AbortMultipartUpload(c.Request.Context(), uri.FileID); err != nil {
 			gincontext.Fail(c, err)
 			return
 		}

@@ -105,7 +105,7 @@
 ### 3.4 handler 写法
 
 - 一律工厂函数注入依赖：`func handleXxx(dep) gin.HandlerFunc`；
-- 入参绑定：JSON 用 `c.ShouldBindJSON`，表单/文件用 `c.ShouldBind`；
+- 入参绑定：JSON 用 `c.ShouldBindJSON`，表单/文件用 `c.ShouldBind`，路径参数用 gin 原生 `c.ShouldBindUri`（`uri` tag + validator，如 `binding:"required,gt=0"`），不手写参数解析；
 - 出参：成功 `gincontext.Success(c, data)`，失败 `gincontext.Fail(c, err)`，认证失败用 `gincontext.Abort`；
 - 每个 handler 顶部带 swagger 注解块（`@Tags/@Summary/@accept/@Produce/@Param/@Success/@Router`）。
 

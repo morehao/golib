@@ -1,5 +1,17 @@
 package ginupload
 
+// --- uri ---
+
+// fileIDURI 绑定文件资源路径参数 :id（gin 原生 ShouldBindUri）
+type fileIDURI struct {
+	ID uint `uri:"id" binding:"required,gt=0"` // 文件ID
+}
+
+// multipartFileIDURI 绑定 multipart 子资源路径参数 :fileID（gin 原生 ShouldBindUri）
+type multipartFileIDURI struct {
+	FileID uint `uri:"fileID" binding:"required,gt=0"` // 文件ID
+}
+
 // --- common ---
 
 type presignURLResponse struct {

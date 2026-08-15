@@ -818,14 +818,16 @@ func TestHandleIDValidation(t *testing.T) {
 		body    any
 		wantMsg string
 	}{
-		{"getFileDetail id=0", http.MethodGet, testAPIPrefix + "/files/0", nil, "invalid file id"},
-		{"presign-url id=0", http.MethodPost, testAPIPrefix + "/files/0/presign-url", nil, "invalid file id"},
-		{"deleteFile id=0", http.MethodDelete, testAPIPrefix + "/files/0", nil, "invalid file id"},
-		{"presignUploadPartURL id=0", http.MethodPost, testAPIPrefix + "/files/multipart/0/parts", presignPartRequest{PartNumber: 1}, "invalid file id"},
+		// 路径参数由 gin 原生 ShouldBindUri 绑定（uri tag + validator）
+		{"getFileDetail id=0", http.MethodGet, testAPIPrefix + "/files/0", nil, "failed on the 'required' tag"},
+		{"getFileDetail id=abc", http.MethodGet, testAPIPrefix + "/files/abc", nil, "invalid syntax"},
+		{"presign-url id=0", http.MethodPost, testAPIPrefix + "/files/0/presign-url", nil, "failed on the 'required' tag"},
+		{"deleteFile id=0", http.MethodDelete, testAPIPrefix + "/files/0", nil, "failed on the 'required' tag"},
+		{"presignUploadPartURL id=0", http.MethodPost, testAPIPrefix + "/files/multipart/0/parts", presignPartRequest{PartNumber: 1}, "failed on the 'required' tag"},
 		{"presignUploadPartURL part=0", http.MethodPost, testAPIPrefix + "/files/multipart/1/parts", presignPartRequest{PartNumber: 0}, "failed on the 'required' tag"},
 		{"presignUploadPartURL part=-1", http.MethodPost, testAPIPrefix + "/files/multipart/1/parts", presignPartRequest{PartNumber: -1}, "failed on the 'gt' tag"},
-		{"completeMultipartUpload id=0", http.MethodPost, testAPIPrefix + "/files/multipart/0/complete", completeMultipartRequest{}, "invalid file id"},
-		{"abortMultipartUpload id=0", http.MethodDelete, testAPIPrefix + "/files/multipart/0", nil, "invalid file id"},
+		{"completeMultipartUpload id=0", http.MethodPost, testAPIPrefix + "/files/multipart/0/complete", completeMultipartRequest{}, "failed on the 'required' tag"},
+		{"abortMultipartUpload id=0", http.MethodDelete, testAPIPrefix + "/files/multipart/0", nil, "failed on the 'required' tag"},
 	}
 
 	for _, tt := range tests {
