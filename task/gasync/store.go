@@ -10,14 +10,71 @@ import (
 
 type store struct {
 	dbGetter gormdao.DBGetter
+	taskDao  *gormdao.Dao[AsyncTask, []AsyncTask, string]
 	runDao   *gormdao.Dao[AsyncTaskRun, []AsyncTaskRun, string]
 }
 
 func newStore(dbGetter gormdao.DBGetter) *store {
 	return &store{
 		dbGetter: dbGetter,
+		taskDao:  gormdao.NewDao[AsyncTask, []AsyncTask, string](AsyncTaskTableName, "gasync_task", dbGetter),
 		runDao:   gormdao.NewDao[AsyncTaskRun, []AsyncTaskRun, string](AsyncTaskRunTableName, "gasync_run", dbGetter, gormdao.WithoutSoftDelete()),
 	}
+}
+
+// upsertTaskOnRegister 按任务类型主键原子 upsert 任务定义：不存在时以 enabled 插入；
+// 已存在（含软删除的历史行）则刷新展示字段并恢复，但保留既有 status——
+// 重启重新注册不会覆盖运营侧的下线状态（Disable/Enable 之外的直接删行同理）。
+func (s *store) upsertTaskOnRegister(ctx context.Context, t *AsyncTask) error {
+	return s.dbGetter(ctx).Table(AsyncTaskTableName).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+				// 恢复软删除行
+				"deleted_at": nil,
+				"updated_at": time.Now(),
+			}),
+		}).
+		Create(t).Error
+}
+
+// updateTaskStatus 更新任务定义启停状态；定义不存在（含已软删除）返回 ErrTaskNotFound。
+// 已是目标状态时幂等返回 nil，避免 MySQL 对无变化 UPDATE 报 0 行受影响带来的误判。
+func (s *store) updateTaskStatus(ctx context.Context, taskType string, status AsyncTaskStatus) error {
+	def, err := s.GetTaskByType(ctx, taskType)
+	if err != nil {
+		return err
+	}
+	if def == nil {
+		return ErrTaskNotFound
+	}
+	if def.Status == status {
+		return nil
+	}
+	return s.dbGetter(ctx).Model(&AsyncTask{}).Table(AsyncTaskTableName).
+		Where("id = ?", taskType).Update("status", status).Error
+}
+
+// GetTaskByType 查询任务定义（不含已软删除记录）；不存在时返回 (nil, nil)。
+func (s *store) GetTaskByType(ctx context.Context, taskType string) (*AsyncTask, error) {
+	return s.taskDao.GetByID(ctx, taskType)
+}
+
+// IsTaskEnabled 判断任务类型是否处于启用状态。定义不存在或查询失败时视为启用（fail-open）：
+// 兼容未建定义表的存量部署，也避免状态查询故障（如 DB 抖动）导致任务被误丢弃。
+func (s *store) IsTaskEnabled(ctx context.Context, taskType string) bool {
+	def, err := s.GetTaskByType(ctx, taskType)
+	if err != nil || def == nil {
+		return true
+	}
+	return def.Status == AsyncTaskEnabled
+}
+
+// ListTask 分页查询任务定义。
+func (s *store) ListTask(ctx context.Context, cond *AsyncTaskCond) ([]AsyncTask, int64, error) {
+	return s.taskDao.GetPageListByCond(ctx, cond)
 }
 
 func (s *store) insertRun(ctx context.Context, e *AsyncTaskRun) error {

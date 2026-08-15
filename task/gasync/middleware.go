@@ -74,6 +74,26 @@ func (s *Server) traceMiddleware(next asynq.Handler) asynq.Handler {
 	})
 }
 
+// disableCheckMiddleware 运行时启停开关：任务类型被 Disable 时直接丢弃该任务——
+// 返回 nil 让 asynq 视为已消费（不落执行记录、不触发重试/死信堆积），
+// 已投递未消费的任务因此不再被处理；Enable 后新投递的任务恢复消费。
+// 启停状态经 Config.StatusCacheTTL 缓存，跨实例的 DB 变更最迟在 TTL 后生效。
+// 注意：生产端 Enqueue 不做检查（Client 无 DB），禁用期间投递的任务会被消费端丢弃。
+func (s *Server) disableCheckMiddleware(next asynq.Handler) asynq.Handler {
+	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
+		if s.isTaskEnabled(ctx, task.Type()) {
+			return next.ProcessTask(ctx, task)
+		}
+		runID, _ := asynq.GetTaskID(ctx)
+		queue, _ := asynq.GetQueueName(ctx)
+		s.logger.Warnw(ctx, "async task dropped, task type disabled",
+			"task_type", task.Type(),
+			gconstant.KeyRunID, runID,
+			"queue", queue)
+		return nil
+	})
+}
+
 func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 		runID, _ := asynq.GetTaskID(ctx)

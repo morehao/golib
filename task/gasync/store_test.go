@@ -36,7 +36,77 @@ func TestAsyncAutoMigrate(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 	var tables []string
 	require.NoError(t, db.Raw("SELECT name FROM sqlite_master WHERE type='table'").Scan(&tables).Error)
+	require.Contains(t, tables, "core_async_task")
 	require.Contains(t, tables, "core_async_task_run")
+}
+
+// TestAsyncTaskDefinitionUpsertPreservesStatus 验证 Register 路径的定义 upsert：
+// 新类型以 enabled 创建；已存在（含被 Disable 或软删除的历史行）保留既有 status，仅刷新展示字段。
+func TestAsyncTaskDefinitionUpsertPreservesStatus(t *testing.T) {
+	db := newGasyncTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
+	s := newStore(getDB)
+
+	// 新类型注册：以 enabled 创建
+	require.NoError(t, s.upsertTaskOnRegister(context.Background(), &AsyncTask{ID: "email:send", Name: "email:send"}))
+	def, err := s.GetTaskByType(context.Background(), "email:send")
+	require.NoError(t, err)
+	require.NotNil(t, def)
+	require.Equal(t, AsyncTaskEnabled, def.Status)
+
+	// 下线后重新注册：status 保持 disabled，不被覆盖
+	require.NoError(t, s.updateTaskStatus(context.Background(), "email:send", AsyncTaskDisabled))
+	require.NoError(t, s.upsertTaskOnRegister(context.Background(), &AsyncTask{ID: "email:send", Name: "email:send"}))
+	def, err = s.GetTaskByType(context.Background(), "email:send")
+	require.NoError(t, err)
+	require.Equal(t, AsyncTaskDisabled, def.Status)
+
+	// 软删除后重新注册：行被恢复，status 同样保留
+	require.NoError(t, s.taskDao.Delete(context.Background(), "email:send", "tester"))
+	def, err = s.GetTaskByType(context.Background(), "email:send")
+	require.NoError(t, err)
+	require.Nil(t, def)
+	require.NoError(t, s.upsertTaskOnRegister(context.Background(), &AsyncTask{ID: "email:send", Name: "email:send"}))
+	def, err = s.GetTaskByType(context.Background(), "email:send")
+	require.NoError(t, err)
+	require.NotNil(t, def)
+	require.Equal(t, AsyncTaskDisabled, def.Status)
+}
+
+// TestAsyncTaskStatusFlow 验证启停状态流转与幂等、ErrTaskNotFound 语义。
+func TestAsyncTaskStatusFlow(t *testing.T) {
+	db := newGasyncTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
+	s := newStore(getDB)
+
+	// 未注册的类型：查询返回 nil、视为启用
+	def, err := s.GetTaskByType(context.Background(), "no-such")
+	require.NoError(t, err)
+	require.Nil(t, def)
+	require.True(t, s.IsTaskEnabled(context.Background(), "no-such"))
+
+	// 不存在的类型启停返回 ErrTaskNotFound
+	require.ErrorIs(t, s.updateTaskStatus(context.Background(), "no-such", AsyncTaskDisabled), ErrTaskNotFound)
+
+	// 创建后启用状态为真，下线后为假
+	require.NoError(t, s.upsertTaskOnRegister(context.Background(), &AsyncTask{ID: "order:create", Name: "order:create"}))
+	require.True(t, s.IsTaskEnabled(context.Background(), "order:create"))
+	require.NoError(t, s.updateTaskStatus(context.Background(), "order:create", AsyncTaskDisabled))
+	require.False(t, s.IsTaskEnabled(context.Background(), "order:create"))
+
+	// 幂等：重复下线/上线不报错（MySQL 对无变化 UPDATE 返回 0 行受影响，不应误判为不存在）
+	require.NoError(t, s.updateTaskStatus(context.Background(), "order:create", AsyncTaskDisabled))
+	require.NoError(t, s.updateTaskStatus(context.Background(), "order:create", AsyncTaskEnabled))
+	require.True(t, s.IsTaskEnabled(context.Background(), "order:create"))
+
+	// ListTask 按状态过滤
+	list, total, err := s.ListTask(context.Background(), &AsyncTaskCond{Status: string(AsyncTaskEnabled)})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, list, 1)
+	require.Equal(t, "order:create", list[0].ID)
 }
 
 func TestAsyncRunLifecycle(t *testing.T) {

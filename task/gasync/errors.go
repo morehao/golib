@@ -13,4 +13,6 @@ var (
 	ErrNilDB = errors.New("gasync: db is nil")
 	// ErrDuplicateTaskType 同一任务类型重复注册（asynq ServeMux 会 panic，这里提前拦截）。
 	ErrDuplicateTaskType = errors.New("gasync: duplicate task type")
+	// ErrTaskNotFound 任务定义不存在（Disable/Enable 目标类型未注册过，或定义已被删除）。
+	ErrTaskNotFound = errors.New("gasync: task not found")
 )

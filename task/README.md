@@ -117,6 +117,7 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 - 支持多队列优先级配置
 - 基于 Redis 的任务队列
 - 执行记录自动落库（processing/completed/failed；同一任务 ID 只保留一行，重试覆盖该行，最终状态反映最后一次尝试）
+- 运行时启停：`Disable` / `Enable` 通过任务定义表（core_async_task）实时上下线任务类型，被下线类型已投递的任务会被消费端丢弃，无需重启
 - 跨进程 trace 传递与统一日志
 - 跨进程 request id 透传：生产端 ctx 携带的 `app.request.id` 会随任务 headers 传递，消费端写入执行记录
 - asynq 内部日志（调度/重试/归档）已桥接至 glog
@@ -127,10 +128,11 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 ### 数据表
 
-`gasync.AutoMigrate` 会创建如下表：
+`gasync.AutoMigrate` 会创建以下两张表：
 
 | 表名 | 说明 |
 |---|---|
+| `core_async_task` | 异步任务定义（id=任务类型、名称、描述、启停状态；由 `Register` 自动维护，新类型以 enabled 创建，已存在时保留既有状态） |
 | `core_async_task_run` | 异步任务执行记录（id=任务实例 ID、task_type、队列、状态、重试、request id 等） |
 
 ### 使用示例
@@ -202,9 +204,21 @@ func main() {
 }
 ```
 
+#### 运行时启停
+
+注册后可通过 `Disable` / `Enable` 管理任务类型的上线/下线（定义保留，可反复切换）：
+
+```go
+server.Disable("email:send") // 下线：DB 标记 disabled，已投递未消费的任务被消费端丢弃，定义保留
+server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务立即恢复处理，无需重启
+```
+
+`Register` 时会自动维护定义表：新任务类型以 `enabled` 创建，已存在（含被 `Disable` 或软删除的历史行）时保留既有状态——重启重新注册不会覆盖运营侧的下线操作；被下线类型仍会注册 handler 并输出告警日志，由消费中间件在运行时丢弃其任务，便于 `Enable` 后即时恢复。
+
 #### 注意事项
 
 - **超时依赖 handler 配合 ctx**：asynq 的 `Timeout` 通过取消 ctx 实现，handler 不响应 `ctx.Done()` 时任务仍可能在后台继续执行（asynq 会在超时后将任务重新入队）。handler 内应监听 `ctx.Done()`。
+- **启停语义**：生产端 `Enqueue` 不做启停检查（Client 不依赖 DB），下线期间投递的任务会被消费端丢弃（不落执行记录、不触发重试/死信堆积）；任务定义不存在时视为启用（fail-open），兼容未建定义表的存量部署，也避免状态查询故障导致任务被误丢弃。启停状态在消费端按 `Config.StatusCacheTTL`（默认 30s，<=0 时每个任务查库）缓存，跨实例的 DB 变更最迟一个 TTL 后生效。
 - **执行记录为 at-least-once 语义下的快照**：同一任务可能被并发处理（lease 过期后重新入队），执行记录通过主键 `id`（任务实例 ID）原子 upsert，只保留一行；进程被强杀时记录会停留在 `processing`，可通过 `store.MarkStaleProcessingAsFailed(ctx, cutoff, taskType)` 兜底标记为 failed，`store.CleanupRuns(ctx, before, taskType)` 用于按保留策略清理旧记录。
 - **落库字段截断**：payload 超过 4KB、错误信息超过 1KB 时会截断存储，避免撑大执行记录表。
 
