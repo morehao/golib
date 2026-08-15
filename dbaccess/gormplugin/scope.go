@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const SkipKey = "gorm:condition:skip"
@@ -114,7 +115,16 @@ func (p *ScopePlugin) addScope(db *gorm.DB) {
 		return
 	}
 
-	db.Statement.Where(fmt.Sprintf("`%s`.%s = ?", tableName, p.fieldName), value)
+	// 使用 clause.Column 让 GORM 按方言引用标识符：
+	// MySQL/SQLite 生成 `table`.`field`，PostgreSQL 生成 "table"."field"，
+	// 避免硬编码反引号导致 PG 上每次查询都报语法错误。
+	db.Statement.Where(
+		gorm.Expr("?.? = ?",
+			clause.Column{Name: tableName},
+			clause.Column{Name: p.fieldName},
+			value,
+		),
+	)
 }
 
 func (p *ScopePlugin) isSkipped(tableName string) bool {
@@ -132,7 +142,8 @@ func Skip(db *gorm.DB) *gorm.DB {
 
 func normalizeTableName(tableName string) string {
 	tableName = strings.TrimSpace(tableName)
-	tableName = strings.Trim(tableName, "`")
+	// 兼容 MySQL/SQLite 反引号与 PostgreSQL 双引号两种标识符引用
+	tableName = strings.Trim(tableName, "`\"")
 	if tableName == "" {
 		return ""
 	}
@@ -142,7 +153,7 @@ func normalizeTableName(tableName string) string {
 		return ""
 	}
 
-	base := strings.Trim(fields[0], "`")
+	base := strings.Trim(fields[0], "`\"")
 	if idx := strings.LastIndex(base, "."); idx >= 0 {
 		base = base[idx+1:]
 	}

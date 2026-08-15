@@ -42,7 +42,10 @@ type ConfigEntity struct {
 	GroupName      string         `gorm:"column:group_name;type:varchar(64);not null;default:'default';uniqueIndex:uk_group_key;comment:配置分组，用于业务隔离，如 payment、notification，默认 default"`
 	Key            string         `gorm:"column:key;type:varchar(128);not null;uniqueIndex:uk_group_key;comment:配置键名，同一分组内唯一"`
 	ValueType      ValueType      `gorm:"column:value_type;type:varchar(32);not null;default:'string';comment:值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string"`
-	Value          string         `gorm:"column:value;type:mediumtext;not null;comment:配置值，明文或密文，最大 16MB"`
+	// Value 不指定 type，由 GORM 按方言选择列类型：
+	// MySQL 映射为 longtext（约 4GB），PostgreSQL/SQLite 映射为 text（无长度上限），
+	// 兼容两种数据库（原先的 mediumtext 为 MySQL 专属，在 PG 上无法建表）。
+	Value          string         `gorm:"column:value;not null;comment:配置值，明文或密文"`
 	EncryptionMode EncryptionMode `gorm:"column:encryption_mode;type:varchar(32);not null;default:'plain';comment:加密模式，可选 plain/encrypted，默认 plain"`
 	Description    string         `gorm:"column:description;type:varchar(256);comment:配置项描述，说明用途及可选值等"`
 	Status         Status         `gorm:"column:status;type:varchar(32);not null;default:'enabled';comment:状态，可选 enabled/disabled，默认 enabled"`
