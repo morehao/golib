@@ -38,7 +38,7 @@ type AsyncTaskRun struct {
 func (AsyncTaskRun) TableName() string { return AsyncTaskRunTableName }
 
 type AsyncTaskRunCond struct {
-	gormdao.BaseCond[string]
+	gormdao.BaseCond
 	RunCode  string
 	TaskType string
 	Queue    string

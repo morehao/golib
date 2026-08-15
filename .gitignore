@@ -21,15 +21,38 @@
 go.work
 go.work.sum
 
-.idea/
+# OS / IDE
 .DS_Store
-codegen/tmp/*
-**/log/**
+.idea/
 .history
+
+# codegen 生成的临时产物
+codegen/tmp/*
+
+# 日志
+**/log/**
+
+# Git worktree 目录（本地 check out 的其他分支）
 .worktrees/
-superpowers
+
+# 本地环境配置文件（.env.example 作为配置模板需要提交）
 .env
+.env.*
+!.env.example
+
+# 本地 AI 编程工具数据（opencode / superpowers 等工具目录，
+# 含 docs/superpowers 下生成的 spec/plan 等本地产物，不入库）
+.opencode/
+.superpowers/
+docs/superpowers/
+.claude/
+.codex/
+.cursor/
+.continue/
+.aider/
+.windsurf/
 
 # Local Go build cache / temp (used when system temp is unavailable)
 .gocache/
+.go-cache/**
 .gotmp/

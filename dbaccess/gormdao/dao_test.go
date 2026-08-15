@@ -41,7 +41,7 @@ func (stringIDEntity) TableName() string { return "test_string_id_entities" }
 
 // customCond 内嵌 BaseCond 的自定义条件，验证软删除过滤对自定义 Cond 生效。
 type customCond struct {
-	BaseCond[uint]
+	BaseCond
 	Name string
 }
 
@@ -88,15 +88,15 @@ func TestDao_SoftDelete_FiltersDeletedRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got)
 
-	list, err := dao.GetListByCond(ctx, &BaseCond[uint]{})
+	list, err := dao.GetListByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.Empty(t, list)
 
-	count, err := dao.CountByCond(ctx, &BaseCond[uint]{})
+	count, err := dao.CountByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.Zero(t, count)
 
-	pageList, total, err := dao.GetPageListByCond(ctx, &BaseCond[uint]{Page: 1, PageSize: 10})
+	pageList, total, err := dao.GetPageListByCond(ctx, &BaseCond{Page: 1, PageSize: 10})
 	require.NoError(t, err)
 	require.Zero(t, total)
 	require.Empty(t, pageList)
@@ -113,18 +113,18 @@ func TestDao_SoftDelete_IncludeDeleted(t *testing.T) {
 	require.NoError(t, dao.Delete(ctx, deleted.ID, 1))
 
 	// 默认排除已删除
-	list, err := dao.GetListByCond(ctx, &BaseCond[uint]{})
+	list, err := dao.GetListByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, "keep", list[0].Name)
 
 	// IsDelete=true 时包含已删除
-	list, err = dao.GetListByCond(ctx, &BaseCond[uint]{IsDelete: true})
+	list, err = dao.GetListByCond(ctx, &BaseCond{IsDelete: true})
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 
 	// 自定义 Cond 内嵌 BaseCond，自动继承 IncludeDeleted
-	list, err = dao.GetListByCond(ctx, &customCond{BaseCond: BaseCond[uint]{IsDelete: true}, Name: "gone"})
+	list, err = dao.GetListByCond(ctx, &customCond{BaseCond: BaseCond{IsDelete: true}, Name: "gone"})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, "gone", list[0].Name)
@@ -144,7 +144,7 @@ func TestDao_SoftDelete_GormModelEntity(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got)
 
-	list, err := dao.GetListByCond(ctx, &BaseCond[uint]{})
+	list, err := dao.GetListByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.Empty(t, list)
 
@@ -154,7 +154,7 @@ func TestDao_SoftDelete_GormModelEntity(t *testing.T) {
 	require.NotNil(t, raw.DeletedAt)
 
 	// 包含已删除时可查询
-	list, err = dao.GetListByCond(ctx, &BaseCond[uint]{IsDelete: true})
+	list, err = dao.GetListByCond(ctx, &BaseCond{IsDelete: true})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 }
@@ -187,7 +187,7 @@ func TestDao_BatchInsert_EmptyListIsNoop(t *testing.T) {
 	require.NoError(t, dao.BatchInsert(ctx, nil))
 	require.NoError(t, dao.BatchInsert(ctx, []softEntity{}))
 
-	list, err := dao.GetListByCond(ctx, &BaseCond[uint]{})
+	list, err := dao.GetListByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.Empty(t, list)
 }
@@ -205,7 +205,7 @@ func TestDao_GetByCond_NotFound(t *testing.T) {
 	db := newTestDB(t)
 	dao := NewDao[softEntity, []softEntity, uint]("test_soft_entities", "test", func(ctx context.Context) *gorm.DB { return db })
 
-	got, err := dao.GetByCond(context.Background(), &BaseCond[uint]{IDs: []uint{999}})
+	got, err := dao.GetByCond(context.Background(), &BaseCond{IDs: []any{999}})
 	require.NoError(t, err)
 	require.Nil(t, got)
 }
@@ -219,23 +219,23 @@ func TestDao_GetPageListByCond_Pagination(t *testing.T) {
 		require.NoError(t, dao.Insert(ctx, &softEntity{Name: "n"}))
 	}
 	// 删除一条，验证 count 与列表都排除
-	list, err := dao.GetListByCond(ctx, &BaseCond[uint]{})
+	list, err := dao.GetListByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.NoError(t, dao.Delete(ctx, list[0].ID, 0))
 
-	pageList, total, err := dao.GetPageListByCond(ctx, &BaseCond[uint]{Page: 2, PageSize: 2})
+	pageList, total, err := dao.GetPageListByCond(ctx, &BaseCond{Page: 2, PageSize: 2})
 	require.NoError(t, err)
 	require.Equal(t, int64(4), total)
 	require.Len(t, pageList, 2)
 
 	// pageSize 超上限时截断
-	pageList, total, err = dao.GetPageListByCond(ctx, &BaseCond[uint]{Page: 1, PageSize: MaxPageSize + 100})
+	pageList, total, err = dao.GetPageListByCond(ctx, &BaseCond{Page: 1, PageSize: MaxPageSize + 100})
 	require.NoError(t, err)
 	require.Equal(t, int64(4), total)
 	require.Len(t, pageList, 4)
 
 	// page/pageSize 非正数时返回全部（历史兼容行为）
-	pageList, total, err = dao.GetPageListByCond(ctx, &BaseCond[uint]{})
+	pageList, total, err = dao.GetPageListByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.Equal(t, int64(4), total)
 	require.Len(t, pageList, 4)
@@ -251,7 +251,7 @@ func TestDao_WithTx_Rollback(t *testing.T) {
 	require.NoError(t, txDao.Insert(ctx, &softEntity{Name: "in-tx"}))
 	require.NoError(t, tx.Rollback().Error)
 
-	got, err := dao.GetByCond(ctx, &BaseCond[uint]{})
+	got, err := dao.GetByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.Nil(t, got)
 
@@ -261,14 +261,14 @@ func TestDao_WithTx_Rollback(t *testing.T) {
 	require.NoError(t, txDao.Insert(ctx, &softEntity{Name: "committed"}))
 	require.NoError(t, tx.Commit().Error)
 
-	got, err = dao.GetByCond(ctx, &BaseCond[uint]{})
+	got, err = dao.GetByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, "committed", got.Name)
 }
 
 // TestDao_StringIDEntity 验证 string 主键全链路：BeforeCreate 自动生成 ID、
-// GetByID/UpdateByID/UpdateMap/Delete 及 BaseCond[string] 按 ID/IDs 过滤。
+// GetByID/UpdateByID/UpdateMap/Delete 及 BaseCond 按 ID/IDs 过滤。
 func TestDao_StringIDEntity(t *testing.T) {
 	db := newTestDB(t)
 	dao := NewDao[stringIDEntity, []stringIDEntity, string]("test_string_id_entities", "test", func(ctx context.Context) *gorm.DB { return db })
@@ -304,18 +304,18 @@ func TestDao_StringIDEntity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "map-name", got.Name)
 
-	// BaseCond[string] 按 ID / IDs 过滤
-	list, err := dao.GetListByCond(ctx, &BaseCond[string]{ID: "fixed-id"})
+	// BaseCond 按 ID / IDs 过滤
+	list, err := dao.GetListByCond(ctx, &BaseCond{ID: "fixed-id"})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, "map-name", list[0].Name)
 
-	list, err = dao.GetListByCond(ctx, &BaseCond[string]{IDs: []string{"fixed-id"}})
+	list, err = dao.GetListByCond(ctx, &BaseCond{IDs: []any{"fixed-id"}})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 
 	// 空字符串 ID 视为未设置，不生成条件
-	list, err = dao.GetListByCond(ctx, &BaseCond[string]{})
+	list, err = dao.GetListByCond(ctx, &BaseCond{})
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 
@@ -325,7 +325,7 @@ func TestDao_StringIDEntity(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got)
 
-	list, err = dao.GetListByCond(ctx, &BaseCond[string]{IsDelete: true})
+	list, err = dao.GetListByCond(ctx, &BaseCond{IsDelete: true})
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 }

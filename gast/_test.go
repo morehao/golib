@@ -41,29 +41,9 @@ func platformRouter(privateRouter *gin.RouterGroup) {
 		routerGroup.POST("test2") // 2
 	}
 	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
-	routerGroup.POST("test3") // 3
 	routerGroup.POST("test")
 }
+
 func NewFunction() {
 	fmt.Println("Hello, World!")
 }
