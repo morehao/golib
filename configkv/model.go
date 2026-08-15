@@ -53,7 +53,7 @@ func (ConfigEntity) TableName() string {
 }
 
 type ConfigCond struct {
-	gormdao.BaseCond[string]
+	gormdao.BaseCond
 	Group     string
 	Key       string
 	ValueType string

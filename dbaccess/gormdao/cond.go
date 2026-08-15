@@ -22,10 +22,12 @@ type Cond interface {
 	GetPageInfo() (page int, pageSize int)
 }
 
-// BaseCond 通用查询条件，ID/IDs 类型由 ID 类型参数决定（uint / string 等，见 IDType）。
-type BaseCond[ID IDType] struct {
-	ID  ID
-	IDs []ID
+// BaseCond 通用查询条件。
+// ID/IDs 为 any，支持 uint / int64 / string 等任意主键类型；
+// 主键类型的编译期约束由 Dao 的 IDType 承担，Cond 作为纯数据容器保持非泛型。
+type BaseCond struct {
+	ID  any
+	IDs []any
 	// IsDelete 为 true 时查询包含已删除的记录（软删除场景下等价于 Unscoped）。
 	IsDelete       bool
 	Page           int
@@ -36,11 +38,11 @@ type BaseCond[ID IDType] struct {
 	OrConditions   []OrCond
 }
 
-func (c *BaseCond[ID]) BuildCondition(db *gorm.DB, tableName string) {
+func (c *BaseCond) BuildCondition(db *gorm.DB, tableName string) {
 	BuildBaseCondition(db, tableName, c)
 }
 
-func (c *BaseCond[ID]) GetPageInfo() (page int, pageSize int) {
+func (c *BaseCond) GetPageInfo() (page int, pageSize int) {
 	// nil 安全：内嵌 *BaseCond 的 Cond 常以零值构造（未显式初始化 BaseCond），
 	// 此时 c 为 nil，直接访问 c.Page 会 panic（promoted method on nil embedded pointer）。
 	if c == nil {
@@ -51,14 +53,14 @@ func (c *BaseCond[ID]) GetPageInfo() (page int, pageSize int) {
 
 // IncludeDeleted 返回是否查询包含已删除的记录，供 Dao 层软删除过滤使用。
 // 自定义 Cond 若内嵌 BaseCond 则自动实现；也可自行实现该方法。
-func (c *BaseCond[ID]) IncludeDeleted() bool {
+func (c *BaseCond) IncludeDeleted() bool {
 	// nil 安全：内嵌 *BaseCond 的 Cond 常以零值构造（未显式初始化 BaseCond），
 	// 此时 c 为 nil，直接访问 IsDelete 会 panic（promoted method on nil embedded pointer）。
 	return c != nil && c.IsDelete
 }
 
-func BuildBaseCondition[ID IDType](db *gorm.DB, tableName string, cond *BaseCond[ID]) {
-	if !isZeroID(cond.ID) {
+func BuildBaseCondition(db *gorm.DB, tableName string, cond *BaseCond) {
+	if !isZeroAny(cond.ID) {
 		query := fmt.Sprintf("%s.id = ?", tableName)
 		db.Where(query, cond.ID)
 	}

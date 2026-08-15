@@ -47,7 +47,7 @@ type FileUploadEntity struct {
 func (FileUploadEntity) TableName() string { return "core_file_upload" }
 
 type fileCond struct {
-	gormdao.BaseCond[string]
+	gormdao.BaseCond
 	ContentHash string
 	StorageURI  string
 }
@@ -63,7 +63,7 @@ func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 }
 
 type fileUploadCond struct {
-	gormdao.BaseCond[string]
+	gormdao.BaseCond
 	FileID   string
 	UploadID string
 	Status   FileStatus
