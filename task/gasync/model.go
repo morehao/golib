@@ -32,7 +32,6 @@ type AsyncTaskRun struct {
 	DurationMS int64              `gorm:"column:duration_ms;not null;default:0;comment:耗时毫秒"`
 	ErrorMsg   string             `gorm:"column:error_msg;type:text;comment:错误信息"`
 	Payload    string             `gorm:"column:payload;type:text;comment:原始 payload 快照"`
-	TraceID    string             `gorm:"column:trace_id;type:varchar(64);comment:链路追踪 ID"`
 	RequestID  string             `gorm:"column:request_id;type:varchar(64);index:idx_request_id;comment:请求 ID"`
 }
 

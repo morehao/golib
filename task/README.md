@@ -5,7 +5,7 @@
 - **gcron**: 定时任务，基于 `robfig/cron/v3`，支持秒级 cron、多实例分布式锁互斥、执行记录落库。
 - **gasync**: 异步任务，基于 `hibiken/asynq`，支持重试、超时、延迟、优先级队列、执行记录落库、跨进程 trace 传递。
 
-两个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID），配合 `task_type`（任务类型）、`trace_id`、`request_id`，运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。
+两个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
 
 ## gcron
 
@@ -18,9 +18,9 @@
 - 支持秒级 cron 表达式（`WithSeconds`）
 - 支持自定义时区（`Location`）
 - 支持多实例分布式锁互斥（基于 distlock，可选自动续期）
-- 执行记录自动落库（running/success/failed/skipped）
+- 执行记录自动落库（running/success/failed/skipped/timed_out）
 - 自动注入 TraceID、RequestID、RunID 与日志
-- 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`）
+- 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`，超时记录为 timed_out）
 - 同实例防重叠：上一轮未结束时本轮跳过（记录 skipped，与分布式锁互补）
 - 注册幂等：同一任务 `ID` 已在 DB 中存在时自动 upsert 更新定义，进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
 - 运行时管理：`Disable` 暂停（定义保留）、`Enable` 恢复、`Remove` 移除（软删除定义并停止调度，可重新注册）
@@ -33,8 +33,8 @@
 
 | 表名 | 说明 |
 |---|---|
-| `core_cron_task` | 定时任务定义（id=任务 ID、task_type、cron 表达式、描述、状态等） |
-| `core_cron_task_run` | 定时任务执行记录（id=运行 ID、task_id=所属任务、task_type、起止时间、耗时、状态、trace/request id 等） |
+| `core_cron_task` | 定时任务定义（id=任务 ID、biz_id/biz_type=业务维度、name=任务名称、task_type、cron 表达式、描述、状态等） |
+| `core_cron_task_run` | 定时任务执行记录（id=运行 ID、task_id=所属任务、起止时间、耗时、状态（running/success/failed/skipped/timed_out）、request id 等） |
 
 ### 使用示例
 
@@ -101,7 +101,7 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 #### 注意事项
 
-- **超时依赖 handler 配合 ctx**：`Timeout` 通过 `context.WithTimeout` 取消 handler 的 ctx，但无法强杀忽略 ctx 的 handler（如泄漏的后台 goroutine）。若 handler 不响应 ctx 取消，超时后任务仍可能继续在后台执行，且防重叠标记已复位，下一轮会再次触发。handler 内应监听 `ctx.Done()`。
+- **超时依赖 handler 配合 ctx**：`Timeout` 通过 `context.WithTimeout` 取消 handler 的 ctx，但无法强杀忽略 ctx 的 handler（如泄漏的后台 goroutine）。若 handler 不响应 ctx 取消，超时后任务仍可能继续在后台执行，且防重叠标记已复位，下一轮会再次触发。handler 内应监听 `ctx.Done()`。执行记录中，超时（ctx 到期后 handler 返回错误）记为 `timed_out`，与普通失败 `failed` 区分。
 - **锁自动续期**：默认 `AutoRenewal=false`、`LockTTL=60s`。handler 执行超过 TTL 且未开启自动续期时，锁会过期，其他实例可能并发执行同一任务。开启互斥且 handler 可能长时间运行时，建议设置 `AutoRenewal: true`（注册时会输出告警日志提示）。
 - **崩溃兜底**：进程被强杀时执行记录会停留在 `running`。可通过 `store.MarkStaleRunningAsFailed(ctx, cutoff, taskCode)` 将超过 cutoff 仍为 running 的记录标记为 failed（建议由独立定时任务调用）；`store.CleanupRuns(ctx, before, taskCode)` 可删除 `before` 之前的旧执行记录，控制表增长。
 
@@ -131,7 +131,7 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 | 表名 | 说明 |
 |---|---|
-| `core_async_task_run` | 异步任务执行记录（id=任务实例 ID、task_type、队列、状态、重试、trace/request id 等） |
+| `core_async_task_run` | 异步任务执行记录（id=任务实例 ID、task_type、队列、状态、重试、request id 等） |
 
 ### 使用示例
 

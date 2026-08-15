@@ -32,7 +32,7 @@ func (s *store) upsertRunStart(ctx context.Context, run *AsyncTaskRun) error {
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
-				"status", "start_at", "retried", "max_retry", "payload", "trace_id", "request_id",
+				"status", "start_at", "retried", "max_retry", "payload", "request_id",
 			}),
 		}).
 		Create(run).Error

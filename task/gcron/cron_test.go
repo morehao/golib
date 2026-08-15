@@ -241,13 +241,13 @@ func TestTaskTimeout(t *testing.T) {
 
 	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskID: "slow-timeout"})
 	require.NoError(t, err)
-	var failed bool
+	var timedOut bool
 	for _, r := range runs {
-		if r.Status == TaskRunFailed && r.ErrorMsg != "" {
-			failed = true
+		if r.Status == TaskRunTimedOut && r.ErrorMsg != "" {
+			timedOut = true
 		}
 	}
-	require.True(t, failed)
+	require.True(t, timedOut)
 }
 
 // TestRegisterInvalidSpecNotPersisted 验证非法 cron 表达式注册失败时不会落库（避免脏任务定义）。

@@ -29,6 +29,9 @@ func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.Assignments(map[string]any{
+				"biz_id":      t.BizID,
+				"biz_type":    t.BizType,
+				"name":        t.Name,
 				"task_type":   t.TaskType,
 				"spec":        t.Spec,
 				"description": t.Description,

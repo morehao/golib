@@ -81,7 +81,6 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 		retried, _ := asynq.GetRetryCount(ctx)
 		maxRetry, _ := asynq.GetMaxRetry(ctx)
 
-		traceID, _ := ctx.Value(gconstant.KeyTraceID).(string)
 		requestID := gutil.GetRequestID(ctx)
 
 		start := time.Now()
@@ -94,7 +93,6 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 			MaxRetry:  maxRetry,
 			StartAt:   &start,
 			Payload:   gutil.TruncateString(string(task.Payload()), maxPayloadLen),
-			TraceID:   traceID,
 			RequestID: requestID,
 		}
 

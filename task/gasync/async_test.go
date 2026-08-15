@@ -54,7 +54,6 @@ func TestEnqueueAndProcess(t *testing.T) {
 	require.Equal(t, AsyncCompleted, run.Status)
 	require.Equal(t, "email:send", run.TaskType)
 	require.NotEmpty(t, run.RequestID)
-	require.NotEmpty(t, run.TraceID)
 	require.NotEmpty(t, run.ID)
 }
 

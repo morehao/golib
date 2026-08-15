@@ -22,7 +22,13 @@ type TaskFunc func(ctx context.Context) error
 
 type Task struct {
 	// ID 任务唯一标识，同时作为任务定义表的主键（业务方指定，不可变更）。
-	ID          string
+	ID string
+	// BizID 业务 ID（如商户号、订单号），任务标识之外的业务维度，可为空。
+	BizID string
+	// BizType 业务类型（如 merchant、order），可为空。
+	BizType string
+	// Name 任务名称（展示用），可为空。
+	Name        string
 	TaskType    string
 	Spec        string
 	Description string
@@ -186,7 +192,7 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 	}
 
 	if upsert {
-		taskEntity := &CronTask{ID: t.ID, TaskType: t.TaskType, Spec: t.Spec, Description: t.Description, Status: CronTaskEnabled}
+		taskEntity := &CronTask{ID: t.ID, BizID: t.BizID, BizType: t.BizType, Name: t.Name, TaskType: t.TaskType, Spec: t.Spec, Description: t.Description, Status: CronTaskEnabled}
 		if uerr := s.store.upsertTask(context.Background(), taskEntity); uerr != nil {
 			// 落库失败回滚调度，避免内存态与 DB 不一致
 			s.cron.Remove(entryID)
@@ -218,7 +224,7 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 
 		skip := func(reason string) {
 			if serr := s.store.insertRun(ctx, &CronTaskRun{
-				ID: runID, TaskID: t.ID, TaskType: t.TaskType,
+				ID: runID, TaskID: t.ID,
 				StartAt: time.Now(), Status: TaskRunSkipped, RequestID: gutil.GenUUID(), ErrorMsg: reason,
 			}); serr != nil {
 				taskLogger.Errorw(ctx, "insert skipped run failed", gconstant.KeyRunID, runID, "error", serr)
@@ -259,17 +265,15 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 		}
 		defer running.Store(false)
 
-		ctx, span, traceID, requestID := buildTraceContext(ctx, t.ID)
+		ctx, span, _, requestID := buildTraceContext(ctx, t.ID)
 		defer span.End()
 		start := time.Now()
 
 		run := &CronTaskRun{
 			ID:        runID,
 			TaskID:    t.ID,
-			TaskType:  t.TaskType,
 			StartAt:   start,
 			Status:    TaskRunRunning,
-			TraceID:   traceID,
 			RequestID: requestID,
 		}
 		if serr := s.store.insertRun(ctx, run); serr != nil {
@@ -298,7 +302,12 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 		status := TaskRunSuccess
 		errMsg := ""
 		if err != nil {
-			status = TaskRunFailed
+			// handler 超时被 ctx 取消时记录 timed_out，与普通失败区分
+			if timeout > 0 && handlerCtx.Err() == context.DeadlineExceeded {
+				status = TaskRunTimedOut
+			} else {
+				status = TaskRunFailed
+			}
 			errMsg = gutil.TruncateString(err.Error(), maxErrorMsgLen)
 		}
 

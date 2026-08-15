@@ -19,12 +19,32 @@ func newStoreForTest(t *testing.T) *store {
 
 func TestStoreUpsertAndGetTask(t *testing.T) {
 	s := newStoreForTest(t)
-	task := &CronTask{ID: "foo", TaskType: "report", Spec: "*/5 * * * *", Description: "demo", Status: CronTaskEnabled}
+	task := &CronTask{ID: "foo", BizID: "m-100", BizType: "merchant", Name: "demo-task", TaskType: "report", Spec: "*/5 * * * *", Description: "demo", Status: CronTaskEnabled}
 	require.NoError(t, s.upsertTask(context.Background(), task))
 
 	got, err := s.GetTaskByID(context.Background(), "foo")
 	require.NoError(t, err)
 	require.Equal(t, "*/5 * * * *", got.Spec)
+	require.Equal(t, "m-100", got.BizID)
+	require.Equal(t, "merchant", got.BizType)
+	require.Equal(t, "demo-task", got.Name)
+
+	// upsert 更新时业务字段同步覆盖
+	task2 := &CronTask{ID: "foo", BizID: "m-200", BizType: "merchant", Name: "renamed", TaskType: "report", Spec: "*/2 * * * *", Status: CronTaskEnabled}
+	require.NoError(t, s.upsertTask(context.Background(), task2))
+	got2, err := s.GetTaskByID(context.Background(), "foo")
+	require.NoError(t, err)
+	require.Equal(t, "m-200", got2.BizID)
+	require.Equal(t, "renamed", got2.Name)
+	require.Equal(t, "*/2 * * * *", got2.Spec)
+
+	// 按业务维度过滤
+	list, _, err := s.ListTask(context.Background(), &CronTaskCond{BizType: "merchant", BizID: "m-200"})
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	list, _, err = s.ListTask(context.Background(), &CronTaskCond{BizType: "merchant", BizID: "m-999"})
+	require.NoError(t, err)
+	require.Len(t, list, 0)
 }
 
 func TestStoreDeleteTaskByID(t *testing.T) {
@@ -69,7 +89,7 @@ func TestUpsertTaskRestoresSoftDeleted(t *testing.T) {
 
 func TestStoreRunLifecycle(t *testing.T) {
 	s := newStoreForTest(t)
-	e := &CronTaskRun{ID: "run-1", TaskID: "foo", TaskType: "report", StartAt: time.Now(), Status: TaskRunRunning, RequestID: "req-1"}
+	e := &CronTaskRun{ID: "run-1", TaskID: "foo", StartAt: time.Now(), Status: TaskRunRunning, RequestID: "req-1"}
 	require.NoError(t, s.insertRun(context.Background(), e))
 	require.Equal(t, "run-1", e.ID)
 
@@ -87,10 +107,10 @@ func TestMarkStaleRunningAsFailed(t *testing.T) {
 	s := newStoreForTest(t)
 
 	old := time.Now().Add(-2 * time.Hour)
-	stale := &CronTaskRun{ID: "r-stale", TaskID: "foo", TaskType: "report", StartAt: old, Status: TaskRunRunning}
+	stale := &CronTaskRun{ID: "r-stale", TaskID: "foo", StartAt: old, Status: TaskRunRunning}
 	require.NoError(t, s.insertRun(context.Background(), stale))
 
-	fresh := &CronTaskRun{ID: "r-fresh", TaskID: "bar", TaskType: "report", StartAt: time.Now(), Status: TaskRunRunning}
+	fresh := &CronTaskRun{ID: "r-fresh", TaskID: "bar", StartAt: time.Now(), Status: TaskRunRunning}
 	require.NoError(t, s.insertRun(context.Background(), fresh))
 
 	n, err := s.MarkStaleRunningAsFailed(context.Background(), time.Hour, "")
@@ -124,10 +144,10 @@ func TestCleanupRuns(t *testing.T) {
 	s := newStoreForTest(t)
 
 	old := time.Now().Add(-48 * time.Hour)
-	oldRun := &CronTaskRun{ID: "r-old", TaskID: "foo", TaskType: "report", StartAt: old, CreatedAt: old, Status: TaskRunSuccess}
+	oldRun := &CronTaskRun{ID: "r-old", TaskID: "foo", StartAt: old, CreatedAt: old, Status: TaskRunSuccess}
 	require.NoError(t, s.insertRun(context.Background(), oldRun))
 
-	freshRun := &CronTaskRun{ID: "r-new", TaskID: "bar", TaskType: "report", StartAt: time.Now(), Status: TaskRunSuccess}
+	freshRun := &CronTaskRun{ID: "r-new", TaskID: "bar", StartAt: time.Now(), Status: TaskRunSuccess}
 	require.NoError(t, s.insertRun(context.Background(), freshRun))
 
 	n, err := s.CleanupRuns(context.Background(), time.Now().Add(-24*time.Hour), "")
