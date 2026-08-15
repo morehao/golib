@@ -9,28 +9,28 @@ func GetClientIP(ctx *gin.Context) string {
 	return ctx.ClientIP()
 }
 
-func GetPersonID(ctx *gin.Context) uint {
-	return ctx.GetUint(gcontext.KeyPersonID)
+func GetPersonID(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyPersonID)
 }
 
-func GetUserID(ctx *gin.Context) uint {
-	return ctx.GetUint(gcontext.KeyUserID)
+func GetUserID(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyUserID)
 }
 
 func GetUserType(ctx *gin.Context) string {
 	return ctx.GetString(gcontext.KeyUserType)
 }
 
-func GetOrgID(ctx *gin.Context) uint {
-	return ctx.GetUint(gcontext.KeyOrgID)
+func GetOrgID(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyOrgID)
 }
 
-func GetTenantID(ctx *gin.Context) uint {
-	return ctx.GetUint(gcontext.KeyTenantID)
+func GetTenantID(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyTenantID)
 }
 
-func GetDeptID(ctx *gin.Context) uint {
-	return ctx.GetUint(gcontext.KeyDeptID)
+func GetDeptID(ctx *gin.Context) string {
+	return ctx.GetString(gcontext.KeyDeptID)
 }
 
 func GetRequestID(ctx *gin.Context) string {
