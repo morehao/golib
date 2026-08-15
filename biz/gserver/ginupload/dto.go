@@ -1,10 +1,18 @@
 package ginupload
 
-// --- common ---
+// --- uri ---
 
-type fileIDRequest struct {
-	FileID uint `json:"file_id" form:"file_id" binding:"required"` // 文件ID(core_file_upload.id)
+// fileIDURI 绑定文件资源路径参数 :id（gin 原生 ShouldBindUri）
+type fileIDURI struct {
+	ID uint `uri:"id" binding:"required,gt=0"` // 文件ID
 }
+
+// multipartFileIDURI 绑定 multipart 子资源路径参数 :fileID（gin 原生 ShouldBindUri）
+type multipartFileIDURI struct {
+	FileID uint `uri:"fileID" binding:"required,gt=0"` // 文件ID
+}
+
+// --- common ---
 
 type presignURLResponse struct {
 	URL       string `json:"url"`        // 预签名URL
@@ -51,14 +59,18 @@ type createMultipartResponse struct {
 	UploadID string `json:"upload_id"` // 上传会话ID
 }
 
+// presignPartRequest 混合绑定：FileID 来自路径参数 :fileID（gincontext.BindPathParams），
+// PartNumber 来自 JSON body（ShouldBindJSON），最终由 validator 统一校验。
+// json:"-" 保证 FileID 无法被 body 携带/覆盖，路径参数是唯一来源。
 type presignPartRequest struct {
-	FileID     uint  `json:"file_id" form:"file_id" binding:"required"`              // 文件ID
+	FileID     uint  `uri:"fileID" json:"-" binding:"required,gt=0"`               // 文件ID（路径参数）
 	PartNumber int32 `json:"part_number" form:"part_number" binding:"required,gt=0"` // 分片编号
 }
 
+// completeMultipartRequest 混合绑定：FileID 来自路径参数 :fileID，Parts 来自 JSON body。
 type completeMultipartRequest struct {
-	FileID uint         `json:"file_id" binding:"required"` // 文件ID
-	Parts  []uploadPart `json:"parts"`                      // 分片列表
+	FileID uint         `uri:"fileID" json:"-" binding:"required,gt=0"` // 文件ID（路径参数）
+	Parts  []uploadPart `json:"parts"`                                  // 分片列表
 }
 
 // --- file ---
@@ -79,10 +91,6 @@ type fileDetailResponse struct {
 	Status      string `json:"status"`                  // 文件状态
 	CreatedAt   string `json:"created_at"`              // 创建时间(RFC3339)
 	UpdatedAt   string `json:"updated_at"`              // 更新时间(RFC3339)
-}
-
-type presignDownloadRequest struct {
-	FileID uint `json:"file_id" form:"file_id" binding:"required"` // 文件ID
 }
 
 // --- presign ---

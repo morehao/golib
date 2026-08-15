@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/morehao/golib/biz/gserver/ginserver"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
@@ -25,7 +26,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// --- mocks ---
+// --- test constants & mocks ---
+
+const (
+	testAppName   = "ginupload"
+	testVersion   = "v1"
+	testAPIPrefix = "/v1/ginupload"
+)
 
 var bg = context.Background()
 
@@ -119,22 +126,40 @@ func newTestFileStore(t *testing.T) *filestore.FileStore {
 	return fs
 }
 
+// setupRouter 通过 ginserver 顶层分组搭建路由（前缀 /v1/ginupload），
+// 不再手写 /api/v1，见 docs/router-style.md §3.7。
 func setupRouter(fs *filestore.FileStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	group := r.Group("/api/v1")
-	Register(group, fs)
+	groups := ginserver.NewRouterGroups(r, testAppName, ginserver.VersionGroup{Version: testVersion})
+	Register(groups.MustGetGroup(testVersion), fs)
 	return r
 }
 
-func postJSON(router *gin.Engine, path string, body any) *httptest.ResponseRecorder {
+func doReq(method string, router *gin.Engine, path string, body any) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
-	_ = json.NewEncoder(&buf).Encode(body)
+	if body != nil {
+		_ = json.NewEncoder(&buf).Encode(body)
+	}
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", path, &buf)
-	req.Header.Set("Content-Type", "application/json")
+	req, _ := http.NewRequest(method, path, &buf)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	router.ServeHTTP(w, req)
 	return w
+}
+
+func postJSON(router *gin.Engine, path string, body any) *httptest.ResponseRecorder {
+	return doReq(http.MethodPost, router, path, body)
+}
+
+func getReq(router *gin.Engine, path string) *httptest.ResponseRecorder {
+	return doReq(http.MethodGet, router, path, nil)
+}
+
+func deleteReq(router *gin.Engine, path string) *httptest.ResponseRecorder {
+	return doReq(http.MethodDelete, router, path, nil)
 }
 
 func postForm(router *gin.Engine, path string, data map[string]string, fileField, fileName, fileContent string) *httptest.ResponseRecorder {
@@ -163,7 +188,7 @@ func TestHandleUpload(t *testing.T) {
 	router := setupRouter(fs)
 
 	t.Run("success with content hash", func(t *testing.T) {
-		w := postForm(router, "/api/v1/file/upload", map[string]string{"content_hash": "custom-fp"}, "file", "test.txt", "data")
+		w := postForm(router, testAPIPrefix+"/files", map[string]string{"content_hash": "custom-fp"}, "file", "test.txt", "data")
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -177,7 +202,7 @@ func TestHandleUpload(t *testing.T) {
 	})
 
 	t.Run("missing content hash", func(t *testing.T) {
-		w := postForm(router, "/api/v1/file/upload", nil, "file", "test.txt", "data")
+		w := postForm(router, testAPIPrefix+"/files", nil, "file", "test.txt", "data")
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -191,7 +216,7 @@ func TestHandleUpload(t *testing.T) {
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		w := postForm(router, "/api/v1/file/upload", nil, "", "", "")
+		w := postForm(router, testAPIPrefix+"/files", nil, "", "", "")
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -209,16 +234,17 @@ func TestHandleCheckExist(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
+	// pre-seed a file with known content hash
 	_, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
 		ContentHash: "fp-exist",
-		Name:        "a.txt",
-		Size:        10,
-		StoragePath: "a.txt",
+		Name:        "exist.txt",
+		Size:        100,
+		StoragePath: "exist.txt",
 	})
 	require.NoError(t, err)
 
 	t.Run("exists", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/checkExist", checkExistRequest{ContentHash: "fp-exist"})
+		w := postJSON(router, testAPIPrefix+"/files/check-exist", checkExistRequest{ContentHash: "fp-exist"})
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -233,7 +259,7 @@ func TestHandleCheckExist(t *testing.T) {
 	})
 
 	t.Run("not exists", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/checkExist", checkExistRequest{ContentHash: "fp-none"})
+		w := postJSON(router, testAPIPrefix+"/files/check-exist", checkExistRequest{ContentHash: "fp-none"})
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -248,7 +274,7 @@ func TestHandleCheckExist(t *testing.T) {
 	})
 
 	t.Run("missing content hash", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/checkExist", checkExistRequest{})
+		w := postJSON(router, testAPIPrefix+"/files/check-exist", checkExistRequest{})
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -273,11 +299,11 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 		MimeType:    "video/mp4",
 		StoragePath: "videos/large.mp4",
 	}
-	w := postJSON(router, "/api/v1/file/createMultipartUpload", req)
+	w := postJSON(router, testAPIPrefix+"/files/multipart", req)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int                  `json:"code"`
+		Code int                    `json:"code"`
 		Data createMultipartResponse `json:"data"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
@@ -305,11 +331,11 @@ func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 		Size:        999999,
 		StoragePath: "new.mp4",
 	}
-	w := postJSON(router, "/api/v1/file/createMultipartUpload", req)
+	w := postJSON(router, testAPIPrefix+"/files/multipart", req)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int                  `json:"code"`
+		Code int                    `json:"code"`
 		Data createMultipartResponse `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
@@ -332,14 +358,13 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/presignUploadPartURL", presignPartRequest{
-		FileID: detail.FileUploadID,
+	w := postJSON(router, fmt.Sprintf("%s/files/multipart/%d/parts", testAPIPrefix, detail.FileUploadID), presignPartRequest{
 		PartNumber: 1,
 	})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int               `json:"code"`
+		Code int                 `json:"code"`
 		Data presignURLResponse `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
@@ -352,8 +377,7 @@ func TestHandlePresignUploadPartURL_NotFound(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	w := postJSON(router, "/api/v1/file/presignUploadPartURL", presignPartRequest{
-		FileID:    999,
+	w := postJSON(router, testAPIPrefix+"/files/multipart/999/parts", presignPartRequest{
 		PartNumber: 1,
 	})
 	require.Equal(t, 200, w.Code)
@@ -381,17 +405,16 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 	require.NoError(t, err)
 
 	req := completeMultipartRequest{
-		FileID: detail.FileUploadID,
 		Parts: []uploadPart{
 			{PartNumber: 1, ETag: "etag-1"},
 			{PartNumber: 2, ETag: "etag-2"},
 		},
 	}
-	w := postJSON(router, "/api/v1/file/completeMultipartUpload", req)
+	w := postJSON(router, fmt.Sprintf("%s/files/multipart/%d/complete", testAPIPrefix, detail.FileUploadID), req)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int                `json:"code"`
+		Code int                  `json:"code"`
 		Data fileRecordResponse `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
@@ -404,7 +427,7 @@ func TestHandleCompleteMultipartUpload_NotFound(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	w := postJSON(router, "/api/v1/file/completeMultipartUpload", completeMultipartRequest{FileID: 999})
+	w := postJSON(router, testAPIPrefix+"/files/multipart/999/complete", completeMultipartRequest{})
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -429,7 +452,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/abortMultipartUpload", fileIDRequest{FileID: detail.FileUploadID})
+	w := deleteReq(router, fmt.Sprintf("%s/files/multipart/%d", testAPIPrefix, detail.FileUploadID))
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -459,11 +482,11 @@ func TestHandleGetFileDetail(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("found", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/getFileDetail", fileIDRequest{FileID: detail.FileUploadID})
+		w := getReq(router, fmt.Sprintf("%s/files/%d", testAPIPrefix, detail.FileUploadID))
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
-			Code int                `json:"code"`
+			Code int                  `json:"code"`
 			Data fileDetailResponse `json:"data"`
 		}
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
@@ -474,7 +497,7 @@ func TestHandleGetFileDetail(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		w := postJSON(router, "/api/v1/file/getFileDetail", fileIDRequest{FileID: 99999})
+		w := getReq(router, testAPIPrefix+"/files/99999")
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -501,11 +524,11 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/presignGetFileURL", presignDownloadRequest{FileID: detail.FileUploadID})
+	w := postJSON(router, fmt.Sprintf("%s/files/%d/presign-url", testAPIPrefix, detail.FileUploadID), nil)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int               `json:"code"`
+		Code int                 `json:"code"`
 		Data presignURLResponse `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
@@ -519,7 +542,7 @@ func TestHandlePresignGetFileURL_NotFound(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	w := postJSON(router, "/api/v1/file/presignGetFileURL", presignDownloadRequest{FileID: 999})
+	w := postJSON(router, testAPIPrefix+"/files/999/presign-url", nil)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -544,7 +567,7 @@ func TestHandleDeleteFile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, "/api/v1/file/deleteFile", fileIDRequest{FileID: detail.FileUploadID})
+	w := deleteReq(router, fmt.Sprintf("%s/files/%d", testAPIPrefix, detail.FileUploadID))
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -563,16 +586,16 @@ func TestHandleDeleteFile_NotFound(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	w := postJSON(router, "/api/v1/file/deleteFile", fileIDRequest{FileID: 999})
+	// DeleteFile 对不存在的记录是幂等成功（软删除无行可删，不报错）
+	w := deleteReq(router, testAPIPrefix+"/files/999")
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
+		Code int `json:"code"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	require.NotEqual(t, 0, resp.Code)
+	require.Equal(t, 0, resp.Code)
 }
 
 func TestHandleUpload_StorageFailure(t *testing.T) {
@@ -583,10 +606,10 @@ func TestHandleUpload_StorageFailure(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	group := r.Group("/api/v1")
-	Register(group, fs)
+	groups := ginserver.NewRouterGroups(r, testAppName, ginserver.VersionGroup{Version: testVersion})
+	Register(groups.MustGetGroup(testVersion), fs)
 
-	w := postForm(r, "/api/v1/file/upload", map[string]string{"content_hash": "fail-fp"}, "file", "test.txt", "data")
+	w := postForm(r, testAPIPrefix+"/files", map[string]string{"content_hash": "fail-fp"}, "file", "test.txt", "data")
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -599,7 +622,7 @@ func TestHandleUpload_StorageFailure(t *testing.T) {
 	require.Contains(t, resp.Msg, "unexpected EOF")
 }
 
-func TestHandleRedidetailtGetFileURL(t *testing.T) {
+func TestHandleRedirectGetFileURL(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
@@ -614,7 +637,7 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 
 	t.Run("redirects to presigned URL with file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/redirect?file_id=%d", detail.FileUploadID), nil)
+		req, _ := http.NewRequest("GET", fmt.Sprintf("%s/files/%d/redirect", testAPIPrefix, detail.FileUploadID), nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 302, w.Code)
@@ -625,7 +648,7 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 	t.Run("redirects to presigned URL with storage_uri", func(t *testing.T) {
 		storageURI := "file:///test-bucket/images/img.png"
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/redirect?storage_uri="+storageURI, nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/redirect?storage_uri="+storageURI, nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 302, w.Code)
@@ -635,7 +658,7 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 
 	t.Run("invalid file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/redirect?file_id=abc", nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/abc/redirect", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -649,7 +672,7 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 
 	t.Run("not found by file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/redirect?file_id=99999", nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/99999/redirect", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -663,7 +686,7 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 
 	t.Run("not found by storage_uri", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/redirect?storage_uri=file:///nonexistent/path", nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/redirect?storage_uri=file:///nonexistent/path", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -677,7 +700,7 @@ func TestHandleRedidetailtGetFileURL(t *testing.T) {
 
 	t.Run("missing both params", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/redirect", nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/redirect", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -705,7 +728,7 @@ func TestHandleServeFileByID(t *testing.T) {
 
 	t.Run("serves file content with file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", fmt.Sprintf("/api/v1/file/serve?file_id=%d", detail.FileUploadID), nil)
+		req, _ := http.NewRequest("GET", fmt.Sprintf("%s/files/%d/serve", testAPIPrefix, detail.FileUploadID), nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 200, w.Code)
@@ -718,7 +741,7 @@ func TestHandleServeFileByID(t *testing.T) {
 	t.Run("serves file content with storage_uri", func(t *testing.T) {
 		storageURI := "file:///test-bucket/files/hello.txt"
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/serve?storage_uri="+storageURI, nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/serve?storage_uri="+storageURI, nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 200, w.Code)
@@ -729,7 +752,7 @@ func TestHandleServeFileByID(t *testing.T) {
 
 	t.Run("invalid file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/serve?file_id=abc", nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/abc/serve", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -743,7 +766,7 @@ func TestHandleServeFileByID(t *testing.T) {
 
 	t.Run("not found by file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/serve?file_id=99999", nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/99999/serve", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -757,7 +780,7 @@ func TestHandleServeFileByID(t *testing.T) {
 
 	t.Run("not found by storage_uri", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/serve?storage_uri=file:///nonexistent/path", nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/serve?storage_uri=file:///nonexistent/path", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -771,7 +794,7 @@ func TestHandleServeFileByID(t *testing.T) {
 
 	t.Run("missing both params", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", "/api/v1/file/serve", nil)
+		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/serve", nil)
 		router.ServeHTTP(w, req)
 
 		var resp struct {
@@ -790,23 +813,26 @@ func TestHandleIDValidation(t *testing.T) {
 
 	tests := []struct {
 		name    string
+		method  string
 		path    string
 		body    any
 		wantMsg string
 	}{
-		{"getFileDetail id=0", "/api/v1/file/getFileDetail", fileIDRequest{FileID: 0}, "failed on the 'required' tag"},
-		{"presignGetFileURL id=0", "/api/v1/file/presignGetFileURL", presignDownloadRequest{FileID: 0}, "failed on the 'required' tag"},
-		{"deleteFile id=0", "/api/v1/file/deleteFile", fileIDRequest{FileID: 0}, "failed on the 'required' tag"},
-		{"presignUploadPartURL id=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{FileID: 0, PartNumber: 1}, "failed on the 'required' tag"},
-		{"presignUploadPartURL part=0", "/api/v1/file/presignUploadPartURL", presignPartRequest{FileID: 1, PartNumber: 0}, "failed on the 'required' tag"},
-		{"presignUploadPartURL part=-1", "/api/v1/file/presignUploadPartURL", presignPartRequest{FileID: 1, PartNumber: -1}, "failed on the 'gt' tag"},
-		{"completeMultipartUpload id=0", "/api/v1/file/completeMultipartUpload", completeMultipartRequest{FileID: 0}, "failed on the 'required' tag"},
-		{"abortMultipartUpload id=0", "/api/v1/file/abortMultipartUpload", fileIDRequest{FileID: 0}, "failed on the 'required' tag"},
+		// 路径参数由 gin 原生 ShouldBindUri 绑定（uri tag + validator）
+		{"getFileDetail id=0", http.MethodGet, testAPIPrefix + "/files/0", nil, "failed on the 'required' tag"},
+		{"getFileDetail id=abc", http.MethodGet, testAPIPrefix + "/files/abc", nil, "invalid syntax"},
+		{"presign-url id=0", http.MethodPost, testAPIPrefix + "/files/0/presign-url", nil, "failed on the 'required' tag"},
+		{"deleteFile id=0", http.MethodDelete, testAPIPrefix + "/files/0", nil, "failed on the 'required' tag"},
+		{"presignUploadPartURL id=0", http.MethodPost, testAPIPrefix + "/files/multipart/0/parts", presignPartRequest{PartNumber: 1}, "failed on the 'required' tag"},
+		{"presignUploadPartURL part=0", http.MethodPost, testAPIPrefix + "/files/multipart/1/parts", presignPartRequest{PartNumber: 0}, "failed on the 'required' tag"},
+		{"presignUploadPartURL part=-1", http.MethodPost, testAPIPrefix + "/files/multipart/1/parts", presignPartRequest{PartNumber: -1}, "failed on the 'gt' tag"},
+		{"completeMultipartUpload id=0", http.MethodPost, testAPIPrefix + "/files/multipart/0/complete", completeMultipartRequest{}, "failed on the 'required' tag"},
+		{"abortMultipartUpload id=0", http.MethodDelete, testAPIPrefix + "/files/multipart/0", nil, "failed on the 'required' tag"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := postJSON(router, tt.path, tt.body)
+			w := doReq(tt.method, router, tt.path, tt.body)
 			var resp struct {
 				Code int    `json:"code"`
 				Msg  string `json:"msg"`
@@ -846,7 +872,7 @@ func newTestFileStoreWithSignSecret(t *testing.T) *filestore.FileStore {
 }
 
 func presignPut(router *gin.Engine, bucket, key string, token, expires string, body io.Reader, contentType string) *httptest.ResponseRecorder {
-	path := "/object/" + bucket + "/" + key
+	path := testAPIPrefix + "/objects/" + bucket + "/" + key
 	req, _ := http.NewRequest("PUT", path, body)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -865,7 +891,7 @@ func presignPut(router *gin.Engine, bucket, key string, token, expires string, b
 }
 
 func presignGet(router *gin.Engine, bucket, key string, token, expires string) *httptest.ResponseRecorder {
-	path := "/object/" + bucket + "/" + key
+	path := testAPIPrefix + "/objects/" + bucket + "/" + key
 	req, _ := http.NewRequest("GET", path, nil)
 	q := req.URL.Query()
 	if token != "" {
@@ -883,7 +909,8 @@ func presignGet(router *gin.Engine, bucket, key string, token, expires string) *
 func setupPresignRouter(fs *filestore.FileStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	Register(&r.RouterGroup, fs)
+	groups := ginserver.NewRouterGroups(r, testAppName, ginserver.VersionGroup{Version: testVersion})
+	Register(groups.MustGetGroup(testVersion), fs)
 	return r
 }
 
@@ -905,7 +932,7 @@ func TestHandlePresignedPut(t *testing.T) {
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
-			Code int                  `json:"code"`
+			Code int                    `json:"code"`
 			Data presignedPutResponse `json:"data"`
 		}
 		err := json.Unmarshal(w.Body.Bytes(), &resp)

@@ -37,7 +37,7 @@ go get github.com/morehao/golib
 - **gcontext**: 上下文工具，包含请求 ID、用户 ID、租户 ID 等上下文键值定义和格式化
 - **gobject**: 通用业务对象，包含用户认证信息（UserClaims）、操作者信息（OperatorBaseInfo）、分页查询（PageQuery）
 - **gconstant**: 业务常量定义，包含错误码（100000 系列）、API 版本等
-- **gserver**: Gin 服务器相关，包含路由分组和中间件集成
+- **gserver**: Gin 服务器相关。`RouterGroups` 是唯一的顶层路由分组工厂（路径 `/v1/{app}`），自动挂载 otelgin 与访问日志中间件；业务模块通过 `Register(group, ...)` 注册路由。路由风格规范见 [docs/router-style.md](docs/router-style.md)
 - **gmiddleware**: Gin 中间件，包含 JWT 认证、CORS、访问日志、Token 黑名单
 - **gormplugin**: GORM 插件，包含多租户插件（自动添加 tenant_id 过滤条件）
 - **genericdao**: 泛型 DAO，封装基础的增删改查操作
@@ -51,7 +51,7 @@ go get github.com/morehao/golib
 ## codegen
 
 ### 简介
-`codegen` 是一个代码生成工具，通过读取数据库表结构，支持生成基础的 CRUD 代码，包括 router、controller、service、dto、model、errorCode 等。
+`codegen` 是一个代码生成工具，通过读取数据库表结构，支持生成基础的 CRUD 代码，包括 router、controller、service、dto、model、errorCode 等。生成的 router 层会注册 RESTful CRUD 路由（见 [docs/router-style.md](docs/router-style.md)）。
 
 ### 特性
 - 支持 MySQL 数据库
