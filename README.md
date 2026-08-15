@@ -78,7 +78,7 @@ Test-specific environment variables:
 - **gcontext**: Context utilities, including request ID, user ID, tenant ID and other context key-value definitions and formatting
 - **gobject**: Common business objects, including user authentication info (UserClaims), operator info (OperatorBaseInfo), pagination query (PageQuery)
 - **gconstant**: Business constant definitions, including error codes (100000 series), API versions, etc.
-- **gserver**: Gin server related, including route grouping and middleware integration
+- **gserver**: Gin server related. `RouterGroups` is the unique top-level route group factory (path `/v1/{app}`), auto-mounting otelgin & access-log middleware; business modules register routes via `Register(group, ...)`. Routing style spec: [docs/router-style.md](docs/router-style.md)
 - **gmiddleware**: Gin middleware, including JWT authentication, CORS, access logging, Token blacklist
 - **gormplugin**: GORM plugins, including multi-tenant plugin (automatically adds tenant_id filter conditions)
 - **genericdao**: Generic DAO,封装基础的增删改查操作
@@ -92,7 +92,7 @@ Test-specific environment variables:
 ## codegen
 
 ### Overview
-`codegen` is a code generation tool that reads database table structures and supports generating basic CRUD code, including router, controller, service, dto, model, errorCode, etc.
+`codegen` is a code generation tool that reads database table structures and supports generating basic CRUD code, including router, controller, service, dto, model, errorCode, etc. The generated router layer registers RESTful CRUD routes (see [docs/router-style.md](docs/router-style.md)).
 
 ### Features
 - Supports MySQL database

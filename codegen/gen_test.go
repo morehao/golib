@@ -73,9 +73,10 @@ func TestGenModuleCode(t *testing.T) {
 	templateParam, getParamErr := autoCodeTool.AnalysisModuleTpl(db, cfg)
 	assert.Nil(t, getParamErr)
 	type Param struct {
-		PackageName   string
-		StructName    string
-		DBServiceName string
+		PackageName         string
+		StructName          string
+		DBServiceName       string
+		ControllerImportPath string
 	}
 	var params []GenParamsItem
 	for _, tplItem := range templateParam.TplAnalysisList {
@@ -84,9 +85,10 @@ func TestGenModuleCode(t *testing.T) {
 			TargetFileName: tplItem.TargetFilename,
 			Template:       tplItem.Template,
 			ExtraParams: &Param{
-				PackageName:   templateParam.PackageName,
-				StructName:    templateParam.StructName,
-				DBServiceName: "mysql",
+				PackageName:          templateParam.PackageName,
+				StructName:           templateParam.StructName,
+				DBServiceName:        "mysql",
+				ControllerImportPath: "github.com/morehao/golib/codegen/example/internal/controller/ctruser",
 			},
 		})
 	}
@@ -246,9 +248,10 @@ func TestGenModuleCodeWithPostgreSQL(t *testing.T) {
 	templateParam, getParamErr := autoCodeTool.AnalysisModuleTpl(db, cfg)
 	assert.Nil(t, getParamErr)
 	type Param struct {
-		PackageName   string
-		StructName    string
-		DBServiceName string
+		PackageName         string
+		StructName          string
+		DBServiceName       string
+		ControllerImportPath string
 	}
 	var params []GenParamsItem
 	for _, tplItem := range templateParam.TplAnalysisList {
@@ -257,9 +260,10 @@ func TestGenModuleCodeWithPostgreSQL(t *testing.T) {
 			TargetFileName: tplItem.TargetFilename,
 			Template:       tplItem.Template,
 			ExtraParams: &Param{
-				PackageName:   templateParam.PackageName,
-				StructName:    templateParam.StructName,
-				DBServiceName: "postgresql",
+				PackageName:          templateParam.PackageName,
+				StructName:           templateParam.StructName,
+				DBServiceName:        "postgresql",
+				ControllerImportPath: "github.com/morehao/golib/codegen/example/postgresql/internal/controller/ctruser",
 			},
 		})
 	}

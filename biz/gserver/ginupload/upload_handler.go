@@ -19,7 +19,7 @@ import (
 // @Param file formData file true "上传文件"
 // @Param content_hash formData string false "内容哈希(SHA256)，用于去重"
 // @Success 200 {object} gincontext.DtoRender{data=fileRecordResponse}
-// @Router /file/upload [post]
+// @Router /files [post]
 func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req uploadRequest
@@ -67,7 +67,7 @@ func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 // @Produce application/json
 // @Param req body checkExistRequest true "内容哈希"
 // @Success 200 {object} gincontext.DtoRender{data=checkExistResponse}
-// @Router /file/checkExist [post]
+// @Router /files/check-exist [post]
 func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req checkExistRequest
@@ -95,7 +95,7 @@ func handleCheckExist(fs *filestore.FileStore) gin.HandlerFunc {
 // @Produce application/json
 // @Param req body createMultipartRequest true "创建分片上传"
 // @Success 200 {object} gincontext.DtoRender{data=createMultipartResponse}
-// @Router /file/createMultipartUpload [post]
+// @Router /files/multipart [post]
 func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req createMultipartRequest
@@ -127,17 +127,24 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 获取上传分片地址
 // @accept application/json
 // @Produce application/json
+// @Param fileID path uint true "文件ID"
 // @Param req body presignPartRequest true "分片上传"
 // @Success 200 {object} gincontext.DtoRender{data=presignURLResponse}
-// @Router /file/presignUploadPartURL [post]
+// @Router /files/multipart/{fileID}/parts [post]
 func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		id, err := parseIDParam(c, "fileID")
+		if err != nil {
+			gincontext.Fail(c, err)
+			return
+		}
+
 		var req presignPartRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		url, err := fs.PresignUploadPartURL(c.Request.Context(), req.FileID, req.PartNumber)
+		url, err := fs.PresignUploadPartURL(c.Request.Context(), id, req.PartNumber)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -154,11 +161,18 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 完成分片上传
 // @accept application/json
 // @Produce application/json
+// @Param fileID path uint true "文件ID"
 // @Param req body completeMultipartRequest true "完成分片上传"
 // @Success 200 {object} gincontext.DtoRender{data=fileRecordResponse}
-// @Router /file/completeMultipartUpload [post]
+// @Router /files/multipart/{fileID}/complete [post]
 func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		id, err := parseIDParam(c, "fileID")
+		if err != nil {
+			gincontext.Fail(c, err)
+			return
+		}
+
 		var req completeMultipartRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
@@ -170,7 +184,7 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		detail, err := fs.CompleteMultipartUpload(c.Request.Context(), filestore.CompleteMultipartUploadRequest{
-			ID:    req.FileID,
+			ID:    id,
 			Parts: parts,
 		})
 		if err != nil {
@@ -186,17 +200,18 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 取消分片上传
 // @accept application/json
 // @Produce application/json
-// @Param req body fileIDRequest true "文件ID"
+// @Param fileID path uint true "文件ID"
 // @Success 200 {object} gincontext.DtoRender
-// @Router /file/abortMultipartUpload [post]
+// @Router /files/multipart/{fileID} [delete]
 func handleAbortMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req fileIDRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+		id, err := parseIDParam(c, "fileID")
+		if err != nil {
+			gincontext.Fail(c, err)
 			return
 		}
-		if err := fs.AbortMultipartUpload(c.Request.Context(), req.FileID); err != nil {
+
+		if err := fs.AbortMultipartUpload(c.Request.Context(), id); err != nil {
 			gincontext.Fail(c, err)
 			return
 		}

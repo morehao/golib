@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,18 +17,18 @@ import (
 // @Summary 获取文件详情
 // @accept application/json
 // @Produce application/json
-// @Param req body fileIDRequest true "文件ID"
+// @Param id path uint true "文件ID"
 // @Success 200 {object} gincontext.DtoRender{data=fileDetailResponse}
-// @Router /file/getFileDetail [post]
+// @Router /files/{id} [get]
 func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req fileIDRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+		id, err := parseIDParam(c, "id")
+		if err != nil {
+			gincontext.Fail(c, err)
 			return
 		}
 
-		detail, err := fs.GetFile(c.Request.Context(), req.FileID)
+		detail, err := fs.GetFile(c.Request.Context(), id)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -41,18 +42,18 @@ func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 获取文件下载地址
 // @accept application/json
 // @Produce application/json
-// @Param req body presignDownloadRequest true "下载请求"
+// @Param id path uint true "文件ID"
 // @Success 200 {object} gincontext.DtoRender{data=presignURLResponse}
-// @Router /file/presignGetFileURL [post]
+// @Router /files/{id}/presign-url [post]
 func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req presignDownloadRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+		id, err := parseIDParam(c, "id")
+		if err != nil {
+			gincontext.Fail(c, err)
 			return
 		}
 
-		url, err := fs.PresignGetFileURL(c.Request.Context(), req.FileID)
+		url, err := fs.PresignGetFileURL(c.Request.Context(), id)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -69,18 +70,18 @@ func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 删除文件
 // @accept application/json
 // @Produce application/json
-// @Param req body fileIDRequest true "文件ID"
+// @Param id path uint true "文件ID"
 // @Success 200 {object} gincontext.DtoRender
-// @Router /file/deleteFile [post]
+// @Router /files/{id} [delete]
 func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req fileIDRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+		id, err := parseIDParam(c, "id")
+		if err != nil {
+			gincontext.Fail(c, err)
 			return
 		}
 
-		if err := fs.DeleteFile(c.Request.Context(), req.FileID); err != nil {
+		if err := fs.DeleteFile(c.Request.Context(), id); err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
@@ -92,16 +93,25 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 // @Tags 文件
 // @Summary 重定向获取文件URL
 // @Produce application/json
+// @Param id path uint false "文件ID（与 storage_uri 二选一）"
 // @Param file_id query uint false "文件ID"
 // @Param storage_uri query string false "存储URI"
 // @Success 302 {string} string "重定向到文件URL"
-// @Router /file/redirect [get]
+// @Router /files/{id}/redirect [get]
 func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req getFileQueryRequest
 		if err := c.ShouldBindQuery(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
+		}
+		if rawID := c.Param("id"); rawID != "" {
+			id, err := parseIDParam(c, "id")
+			if err != nil {
+				gincontext.Fail(c, err)
+				return
+			}
+			req.FileID = id
 		}
 
 		fileID, err := resolveFileID(c, fs, req)
@@ -123,16 +133,25 @@ func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 // @Tags 文件
 // @Summary 通过文件ID直接获取文件内容（仅 local storage 有效）
 // @Produce application/octet-stream
+// @Param id path uint false "文件ID（与 storage_uri 二选一）"
 // @Param file_id query uint false "文件ID"
 // @Param storage_uri query string false "存储URI"
 // @Success 200 {file} file "文件内容"
-// @Router /file/serve [get]
+// @Router /files/{id}/serve [get]
 func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req getFileQueryRequest
 		if err := c.ShouldBindQuery(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
+		}
+		if rawID := c.Param("id"); rawID != "" {
+			id, err := parseIDParam(c, "id")
+			if err != nil {
+				gincontext.Fail(c, err)
+				return
+			}
+			req.FileID = id
 		}
 
 		fileID, err := resolveFileID(c, fs, req)
@@ -166,6 +185,19 @@ func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
 }
 
 // -- helpers --
+
+// parseIDParam 解析路径参数 name 为 uint 文件ID，空值/非数字/0 均视为非法。
+func parseIDParam(c *gin.Context, name string) (uint, error) {
+	raw := strings.TrimSpace(c.Param(name))
+	if raw == "" {
+		return 0, fmt.Errorf("%s is required", name)
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return 0, fmt.Errorf("invalid file id: %q", raw)
+	}
+	return uint(id), nil
+}
 
 func resolveFileID(c *gin.Context, fs *filestore.FileStore, req getFileQueryRequest) (uint, error) {
 	if req.FileID > 0 {

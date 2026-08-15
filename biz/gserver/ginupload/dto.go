@@ -2,10 +2,6 @@ package ginupload
 
 // --- common ---
 
-type fileIDRequest struct {
-	FileID uint `json:"file_id" form:"file_id" binding:"required"` // 文件ID(core_file_upload.id)
-}
-
 type presignURLResponse struct {
 	URL       string `json:"url"`        // 预签名URL
 	ExpiresIn int    `json:"expires_in"` // 过期时间(秒)
@@ -52,13 +48,11 @@ type createMultipartResponse struct {
 }
 
 type presignPartRequest struct {
-	FileID     uint  `json:"file_id" form:"file_id" binding:"required"`              // 文件ID
 	PartNumber int32 `json:"part_number" form:"part_number" binding:"required,gt=0"` // 分片编号
 }
 
 type completeMultipartRequest struct {
-	FileID uint         `json:"file_id" binding:"required"` // 文件ID
-	Parts  []uploadPart `json:"parts"`                      // 分片列表
+	Parts []uploadPart `json:"parts"` // 分片列表
 }
 
 // --- file ---
@@ -79,10 +73,6 @@ type fileDetailResponse struct {
 	Status      string `json:"status"`                  // 文件状态
 	CreatedAt   string `json:"created_at"`              // 创建时间(RFC3339)
 	UpdatedAt   string `json:"updated_at"`              // 更新时间(RFC3339)
-}
-
-type presignDownloadRequest struct {
-	FileID uint `json:"file_id" form:"file_id" binding:"required"` // 文件ID
 }
 
 // --- presign ---
