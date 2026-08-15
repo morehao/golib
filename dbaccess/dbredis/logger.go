@@ -39,11 +39,17 @@ var blockingCommands = map[string]struct{}{
 
 // isBlockingNil 判断命令是否为"阻塞命令且执行结果为空应答（redis.Nil）"。
 // redis.Nil 在协议层仍是成功（nil reply），此处仅用于识别无信息量的阻塞空轮询（心跳）。
-func isBlockingNil(cmd redis.Cmder) bool {
+//
+// 兼容两种形态：
+//  1. 部分场景下驱动的超时空结果直接写到 cmd.Err()==redis.Nil；
+//  2. go-redis v9.18 真实运行时：BRPOP 等阻塞命令超时的空应答**不会写回 cmd.Err()**
+//     （ProcessHook 内 cmd.Err() 仍为 nil），只有 next() 的返回值才携带 redis.Nil，
+//     因此必须同时检查执行返回值 err。
+func isBlockingNil(cmd redis.Cmder, executeErr error) bool {
 	if _, ok := blockingCommands[cmd.FullName()]; !ok {
 		return false
 	}
-	return errors.Is(cmd.Err(), redis.Nil)
+	return errors.Is(executeErr, redis.Nil) || errors.Is(cmd.Err(), redis.Nil)
 }
 
 // DialHook 当创建网络连接时调用的hook
@@ -77,12 +83,12 @@ func (l redisLogger) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 			return err
 		}
 
-		hook := next(ctx, cmd)
+		hookErr := next(ctx, cmd)
 
 		// 阻塞命令（BRPOP/BLPOP 等）超时空结果是预期空闲事件（如 2s 一次的队列轮询心跳），
 		// 默认不记 debug 成功日志，避免高频刷屏；普通命令（含 GET miss 等 redis.Nil 结果）不受影响。
-		if !l.LogBlockingNil && isBlockingNil(cmd) {
-			return hook
+		if !l.LogBlockingNil && isBlockingNil(cmd, hookErr) {
+			return hookErr
 		}
 
 		end := time.Now()
@@ -94,7 +100,7 @@ func (l redisLogger) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		)
 
 		l.Logger.Debugw(ctx, "redis execute success", fields...)
-		return hook
+		return hookErr
 	}
 }
 
