@@ -5,7 +5,7 @@
 - **gcron**: 定时任务，基于 `robfig/cron/v3`，支持秒级 cron、多实例分布式锁互斥、执行记录落库。
 - **gasync**: 异步任务，基于 `hibiken/asynq`，支持重试、超时、延迟、优先级队列、执行记录落库、跨进程 trace 传递。
 
-两个子包统一了运行标识模型：`run_code`（每次运行的唯一标识，注入 ctx，可通过日志 `extra_keys` 配置 `task.run.code` 打印）、`task_type`（任务类型）、`trace_id`、`request_id`。其中 gcron 还额外以 `task_code` 作为任务定义的业务唯一标识。
+两个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
 
 ## gcron
 
@@ -18,14 +18,14 @@
 - 支持秒级 cron 表达式（`WithSeconds`）
 - 支持自定义时区（`Location`）
 - 支持多实例分布式锁互斥（基于 distlock，可选自动续期）
-- 执行记录自动落库（running/success/failed/skipped）
+- 执行记录自动落库（running/success/failed/skipped/timed_out）
 - 自动注入 TraceID、RequestID、RunID 与日志
-- 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`）
+- 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`，超时记录为 timed_out）
 - 同实例防重叠：上一轮未结束时本轮跳过（记录 skipped，与分布式锁互补）
-- 注册幂等：同一 `TaskCode` 已在 DB 中存在时自动 upsert 更新定义，进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
+- 注册幂等：同一任务 `ID` 已在 DB 中存在时自动 upsert 更新定义，进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
 - 运行时管理：`Disable` 暂停（定义保留）、`Enable` 恢复、`Remove` 移除（软删除定义并停止调度，可重新注册）
 - 执行记录兜底：`store.MarkStaleRunningAsFailed` 将崩溃残留的 running 记录标记为 failed；`store.CleanupRuns` 按保留策略清理旧记录
-- 任务需显式指定 `TaskCode` 与 `TaskType`（均不允许为空）
+- 任务需显式指定 `ID` 与 `TaskType`（均不允许为空）
 
 ### 数据表
 
@@ -33,8 +33,8 @@
 
 | 表名 | 说明 |
 |---|---|
-| `core_cron_task` | 定时任务定义（task_code、task_type、cron 表达式、描述、状态等） |
-| `core_cron_task_run` | 定时任务执行记录（task_code、task_type、run_code、起止时间、耗时、状态、trace/request id 等） |
+| `core_cron_task` | 定时任务定义（id=任务 ID、biz_id/biz_type=业务维度、name=任务名称、task_type、cron 表达式、描述、状态等） |
+| `core_cron_task_run` | 定时任务执行记录（id=运行 ID、task_id=所属任务、起止时间、耗时、状态（running/success/failed/skipped/timed_out）、request id 等） |
 
 ### 使用示例
 
@@ -69,9 +69,9 @@ func main() {
 
 	// 注册任务
 	if err := s.Register(gcron.Task{
-		TaskCode:  "demo-task",
-		TaskType: "report",
-		Spec:     "*/5 * * * * *",
+		ID:          "demo-task",
+		TaskType:    "report",
+		Spec:        "*/5 * * * * *",
 		Description: "示例任务",
 		Handler: func(ctx context.Context) error {
 			// TODO: 业务逻辑
@@ -96,12 +96,12 @@ func main() {
 ```go
 s.Disable("demo-task") // 暂停：DB 标记 disabled，停止调度（定义保留）
 s.Enable("demo-task")  // 恢复：重新调度（沿用注册时的定义）
-s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后可重新注册同一 TaskCode
+s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后可重新注册同一 ID
 ```
 
 #### 注意事项
 
-- **超时依赖 handler 配合 ctx**：`Timeout` 通过 `context.WithTimeout` 取消 handler 的 ctx，但无法强杀忽略 ctx 的 handler（如泄漏的后台 goroutine）。若 handler 不响应 ctx 取消，超时后任务仍可能继续在后台执行，且防重叠标记已复位，下一轮会再次触发。handler 内应监听 `ctx.Done()`。
+- **超时依赖 handler 配合 ctx**：`Timeout` 通过 `context.WithTimeout` 取消 handler 的 ctx，但无法强杀忽略 ctx 的 handler（如泄漏的后台 goroutine）。若 handler 不响应 ctx 取消，超时后任务仍可能继续在后台执行，且防重叠标记已复位，下一轮会再次触发。handler 内应监听 `ctx.Done()`。执行记录中，超时（ctx 到期后 handler 返回错误）记为 `timed_out`，与普通失败 `failed` 区分。
 - **锁自动续期**：默认 `AutoRenewal=false`、`LockTTL=60s`。handler 执行超过 TTL 且未开启自动续期时，锁会过期，其他实例可能并发执行同一任务。开启互斥且 handler 可能长时间运行时，建议设置 `AutoRenewal: true`（注册时会输出告警日志提示）。
 - **崩溃兜底**：进程被强杀时执行记录会停留在 `running`。可通过 `store.MarkStaleRunningAsFailed(ctx, cutoff, taskCode)` 将超过 cutoff 仍为 running 的记录标记为 failed（建议由独立定时任务调用）；`store.CleanupRuns(ctx, before, taskCode)` 可删除 `before` 之前的旧执行记录，控制表增长。
 
@@ -117,21 +117,23 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 - 支持多队列优先级配置
 - 基于 Redis 的任务队列
 - 执行记录自动落库（processing/completed/failed；同一任务 ID 只保留一行，重试覆盖该行，最终状态反映最后一次尝试）
+- 运行时启停：`Disable` / `Enable` 通过任务定义表（core_async_task）实时上下线任务类型，被下线类型已投递的任务会被消费端丢弃，无需重启
 - 跨进程 trace 传递与统一日志
 - 跨进程 request id 透传：生产端 ctx 携带的 `app.request.id` 会随任务 headers 传递，消费端写入执行记录
 - asynq 内部日志（调度/重试/归档）已桥接至 glog
-- 自动注入 RunID，可通过日志 `extra_keys` 配置 `task.run.code`
+- 自动注入 RunID，可通过日志 `extra_keys` 配置 `task.run.id`
 - 支持自定义并发数与优雅停机超时（`ShutdownTimeout`，生产端 `Client.Close`、消费端 `Server.ShutdownContext`）
 - 执行记录兜底：`store.MarkStaleProcessingAsFailed` 将崩溃残留的 processing 记录标记为 failed；`store.CleanupRuns` 按保留策略清理旧记录
 - 支持注入 `asynq.RedisConnOpt`（TLS / Cluster / 已有 client 等场景）
 
 ### 数据表
 
-`gasync.AutoMigrate` 会创建如下表：
+`gasync.AutoMigrate` 会创建以下两张表：
 
 | 表名 | 说明 |
 |---|---|
-| `core_async_task_run` | 异步任务执行记录（run_code、task_type、队列、状态、重试、trace/request id 等） |
+| `core_async_task` | 异步任务定义（id=任务类型、名称、描述、启停状态；由 `Register` 自动维护，新类型以 enabled 创建，已存在时保留既有状态） |
+| `core_async_task_run` | 异步任务执行记录（id=任务实例 ID、task_type、队列、状态、重试、request id 等） |
 
 ### 使用示例
 
@@ -202,10 +204,22 @@ func main() {
 }
 ```
 
+#### 运行时启停
+
+注册后可通过 `Disable` / `Enable` 管理任务类型的上线/下线（定义保留，可反复切换）：
+
+```go
+server.Disable("email:send") // 下线：DB 标记 disabled，已投递未消费的任务被消费端丢弃，定义保留
+server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务立即恢复处理，无需重启
+```
+
+`Register` 时会自动维护定义表：新任务类型以 `enabled` 创建，已存在（含被 `Disable` 或软删除的历史行）时保留既有状态——重启重新注册不会覆盖运营侧的下线操作；被下线类型仍会注册 handler 并输出告警日志，由消费中间件在运行时丢弃其任务，便于 `Enable` 后即时恢复。
+
 #### 注意事项
 
 - **超时依赖 handler 配合 ctx**：asynq 的 `Timeout` 通过取消 ctx 实现，handler 不响应 `ctx.Done()` 时任务仍可能在后台继续执行（asynq 会在超时后将任务重新入队）。handler 内应监听 `ctx.Done()`。
-- **执行记录为 at-least-once 语义下的快照**：同一任务可能被并发处理（lease 过期后重新入队），执行记录通过 `run_code` 原子 upsert，只保留一行；进程被强杀时记录会停留在 `processing`，可通过 `store.MarkStaleProcessingAsFailed(ctx, cutoff, taskType)` 兜底标记为 failed，`store.CleanupRuns(ctx, before, taskType)` 用于按保留策略清理旧记录。
+- **启停语义**：生产端 `Enqueue` 不做启停检查（Client 不依赖 DB），下线期间投递的任务会被消费端丢弃（不落执行记录、不触发重试/死信堆积）；任务定义不存在时视为启用（fail-open），兼容未建定义表的存量部署，也避免状态查询故障导致任务被误丢弃。启停状态在消费端按 `Config.StatusCacheTTL`（默认 30s，<=0 时每个任务查库）缓存，跨实例的 DB 变更最迟一个 TTL 后生效。
+- **执行记录为 at-least-once 语义下的快照**：同一任务可能被并发处理（lease 过期后重新入队），执行记录通过主键 `id`（任务实例 ID）原子 upsert，只保留一行；进程被强杀时记录会停留在 `processing`，可通过 `store.MarkStaleProcessingAsFailed(ctx, cutoff, taskType)` 兜底标记为 failed，`store.CleanupRuns(ctx, before, taskType)` 用于按保留策略清理旧记录。
 - **落库字段截断**：payload 超过 4KB、错误信息超过 1KB 时会截断存储，避免撑大执行记录表。
 
 ## 日志追踪
@@ -215,7 +229,7 @@ func main() {
 | 字段 | glog 常量 | 含义 |
 |---|---|---|
 | `task.type` | `glog.KeyTaskType` | 任务类型（gcron 为 `TaskType`，gasync 为任务类型名/`async`） |
-| `task.code` | `glog.KeyTaskCode` | 任务业务唯一标识（仅 gcron 任务定义） |
-| `task.run.code` | `glog.KeyRunCode` | 每次运行的唯一标识 |
+| `task.id` | `glog.KeyTaskID` | 任务唯一标识（即任务定义表主键 id，仅 gcron） |
+| `task.run.id` | `glog.KeyRunID` | 单次运行的唯一标识（即运行记录表主键 id） |
 
-在服务启动的日志配置里将 `task.run.code` 加入 `extra_keys`，即可在任务执行日志中追踪单次运行。
+在服务启动的日志配置里将 `task.run.id` 加入 `extra_keys`，即可在任务执行日志中追踪单次运行。

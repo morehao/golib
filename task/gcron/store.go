@@ -22,13 +22,16 @@ func newStore(dbGetter gormdao.DBGetter) *store {
 	}
 }
 
-// upsertTask 按 task_code 原子 upsert 任务定义：不存在则插入；
-// 已存在（含软删除的历史行）则覆盖更新定义并恢复，避免唯一索引冲突导致重新注册失败。
+// upsertTask 按任务主键 id 原子 upsert 任务定义：不存在则插入；
+// 已存在（含软删除的历史行）则覆盖更新定义并恢复，避免主键冲突导致重新注册失败。
 func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
 	err := s.dbGetter(ctx).Table(CronTaskTableName).
 		Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "task_code"}},
+			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.Assignments(map[string]any{
+				"biz_id":      t.BizID,
+				"biz_type":    t.BizType,
+				"name":        t.Name,
 				"task_type":   t.TaskType,
 				"spec":        t.Spec,
 				"description": t.Description,
@@ -42,23 +45,23 @@ func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
 	return err
 }
 
-func (s *store) updateTaskStatus(ctx context.Context, taskCode string, status CronTaskStatus) error {
+func (s *store) updateTaskStatus(ctx context.Context, taskID string, status CronTaskStatus) error {
 	return s.dbGetter(ctx).Model(&CronTask{}).Table(CronTaskTableName).
-		Where("task_code = ?", taskCode).Update("status", status).Error
+		Where("id = ?", taskID).Update("status", status).Error
 }
 
 // MarkStaleRunningAsFailed 将超过 cutoff 仍处于 running 的执行记录标记为 failed，
 // 作为进程崩溃/断电的兜底，避免执行状态永久停留在运行中。
-// taskCode 非空时仅清理指定任务。
-func (s *store) MarkStaleRunningAsFailed(ctx context.Context, cutoff time.Duration, taskCode string) (int64, error) {
+// taskID 非空时仅清理指定任务。
+func (s *store) MarkStaleRunningAsFailed(ctx context.Context, cutoff time.Duration, taskID string) (int64, error) {
 	if cutoff <= 0 {
 		return 0, nil
 	}
 	db := s.dbGetter(ctx).Model(&CronTaskRun{}).Table(CronTaskRunTableName).
 		Where("status = ?", TaskRunRunning).
 		Where("start_at < ?", time.Now().Add(-cutoff))
-	if taskCode != "" {
-		db = db.Where("task_code = ?", taskCode)
+	if taskID != "" {
+		db = db.Where("task_id = ?", taskID)
 	}
 	res := db.Updates(map[string]any{
 		"status":    TaskRunFailed,
@@ -69,20 +72,20 @@ func (s *store) MarkStaleRunningAsFailed(ctx context.Context, cutoff time.Durati
 }
 
 // CleanupRuns 删除 before 之前创建的旧执行记录（保留策略清理）。
-// taskCode 非空时仅清理指定任务。
-func (s *store) CleanupRuns(ctx context.Context, before time.Time, taskCode string) (int64, error) {
+// taskID 非空时仅清理指定任务。
+func (s *store) CleanupRuns(ctx context.Context, before time.Time, taskID string) (int64, error) {
 	db := s.dbGetter(ctx).Table(CronTaskRunTableName).Where("created_at < ?", before)
-	if taskCode != "" {
-		db = db.Where("task_code = ?", taskCode)
+	if taskID != "" {
+		db = db.Where("task_id = ?", taskID)
 	}
 	res := db.Delete(&CronTaskRun{})
 	return res.RowsAffected, res.Error
 }
 
-func (s *store) updateRunTimes(ctx context.Context, taskCode string, lastRun, nextRun *time.Time) error {
+func (s *store) updateRunTimes(ctx context.Context, taskID string, lastRun, nextRun *time.Time) error {
 	updates := map[string]any{"last_run_at": lastRun, "next_run_at": nextRun}
 	return s.dbGetter(ctx).Model(&CronTask{}).Table(CronTaskTableName).
-		Where("task_code = ?", taskCode).Updates(updates).Error
+		Where("id = ?", taskID).Updates(updates).Error
 }
 
 func (s *store) insertRun(ctx context.Context, e *CronTaskRun) error {
@@ -100,12 +103,12 @@ func (s *store) finishRun(ctx context.Context, id string, endAt time.Time, durat
 		Where("id = ?", id).Updates(updates).Error
 }
 
-func (s *store) DeleteTaskByCode(ctx context.Context, taskCode string) error {
-	return s.dbGetter(ctx).Where("task_code = ?", taskCode).Delete(&CronTask{}).Error
+func (s *store) DeleteTaskByID(ctx context.Context, taskID string) error {
+	return s.dbGetter(ctx).Where("id = ?", taskID).Delete(&CronTask{}).Error
 }
 
-func (s *store) GetTaskByCode(ctx context.Context, taskCode string) (*CronTask, error) {
-	return s.taskDao.GetByCond(ctx, &CronTaskCond{TaskCode: taskCode})
+func (s *store) GetTaskByID(ctx context.Context, taskID string) (*CronTask, error) {
+	return s.taskDao.GetByID(ctx, taskID)
 }
 
 func (s *store) ListTask(ctx context.Context, cond *CronTaskCond) ([]CronTask, int64, error) {

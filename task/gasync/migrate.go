@@ -3,5 +3,5 @@ package gasync
 import "gorm.io/gorm"
 
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(&AsyncTaskRun{})
+	return db.AutoMigrate(&AsyncTask{}, &AsyncTaskRun{})
 }

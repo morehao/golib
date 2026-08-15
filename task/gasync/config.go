@@ -20,15 +20,21 @@ type Config struct {
 	Timeout         time.Duration
 	Retention       time.Duration
 	ShutdownTimeout time.Duration
+
+	// StatusCacheTTL 任务启停状态（core_async_task.status）在消费端的内存缓存 TTL，
+	// 避免每个任务都查库；Disable/Enable 会同步更新本地缓存，跨实例的 DB 变更最迟在 TTL 后生效。
+	// <=0 时不缓存、每个任务直接查库。默认 30s。
+	StatusCacheTTL time.Duration
 }
 
 func defaultConfig() *Config {
 	return &Config{
-		Concurrency: 10,
-		Queues:      map[string]int{"default": 1},
-		MaxRetry:    10,
-		Timeout:     30 * time.Second,
-		Retention:   24 * time.Hour,
+		Concurrency:    10,
+		Queues:         map[string]int{"default": 1},
+		MaxRetry:       10,
+		Timeout:        30 * time.Second,
+		Retention:      24 * time.Hour,
+		StatusCacheTTL: 30 * time.Second,
 	}
 }
 

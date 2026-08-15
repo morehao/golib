@@ -286,7 +286,7 @@ if ok, err := lock.Lock(ctx); err != nil {
 - 多实例分布式锁互斥（可自动续期）
 - 重试、超时、保留时长、多队列优先级
 - 执行记录自动落库
-- 自动注入 TraceID、RequestID、RunID 与日志（统一 task_id/task_type/run_id 任务模型）
+- 自动注入 TraceID、RequestID、RunID 与日志（字符串主键即任务/运行唯一标识）
 - 跨进程 trace 传递
 
 ### 使用

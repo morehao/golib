@@ -328,7 +328,7 @@ For usage examples, refer to [gtrace usage](gtrace/README.md)
 - Per-task execution timeout and in-process overlap prevention (gcron)
 - Retry, timeout, retention, and multi-queue priority
 - Automatic execution record persistence (idempotent re-registration on restart)
-- Automatic TraceID/RequestID/RunID injection and logging (unified task_type/run_code model)
+- Automatic TraceID/RequestID/RunID injection and logging (string primary key as task/run identifier)
 - Cross-process trace propagation
 - Graceful shutdown: `Client.Close`, `Server.ShutdownContext` (gasync), `Scheduler.Stop(ctx)` (gcron)
 
