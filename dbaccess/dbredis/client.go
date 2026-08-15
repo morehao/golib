@@ -55,10 +55,11 @@ func New(cfg *RedisConfig, opts ...Option) (*redis.Client, error) {
 		return nil, getLoggerErr
 	}
 	logger := redisLogger{
-		Service:  service,
-		Addr:     cfg.Addr,
-		Database: cfg.DB,
-		Logger:   l,
+		Service:        service,
+		Addr:           cfg.Addr,
+		Database:       cfg.DB,
+		Logger:         l,
+		LogBlockingNil: cfg.logBlockingNil,
 	}
 	rdb.AddHook(logger)
 	// 发送PING命令，检查连接是否正常
