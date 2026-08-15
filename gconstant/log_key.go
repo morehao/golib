@@ -24,8 +24,10 @@ const (
 	KeyAppDeptID    = "app.dept.id"
 
 	KeyTaskType = "task.type"
-	KeyTaskCode = "task.code"
-	KeyRunCode  = "task.run.code"
+	// KeyTaskID 任务唯一标识（即任务表主键 id，业务方注册时指定）。
+	KeyTaskID = "task.id"
+	// KeyRunID 单次运行的唯一标识（即运行记录表主键 id）。
+	KeyRunID = "task.run.id"
 
 	MsgEventNotice = "notice"
 

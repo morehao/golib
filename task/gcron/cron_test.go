@@ -30,10 +30,10 @@ func TestRegisterValidation(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 	s, err := New(db, nil, nil)
 	require.NoError(t, err)
-	require.Error(t, s.Register(Task{TaskCode: "", TaskType: "report", Spec: "* * * * *", Handler: func(ctx context.Context) error { return nil }}))
-	require.Error(t, s.Register(Task{TaskCode: "x", TaskType: "", Spec: "* * * * *", Handler: func(ctx context.Context) error { return nil }}))
-	require.Error(t, s.Register(Task{TaskCode: "x", TaskType: "report", Spec: "", Handler: func(ctx context.Context) error { return nil }}))
-	require.Error(t, s.Register(Task{TaskCode: "x", TaskType: "report", Spec: "* * * * *"}))
+	require.Error(t, s.Register(Task{ID: "", TaskType: "report", Spec: "* * * * *", Handler: func(ctx context.Context) error { return nil }}))
+	require.Error(t, s.Register(Task{ID: "x", TaskType: "", Spec: "* * * * *", Handler: func(ctx context.Context) error { return nil }}))
+	require.Error(t, s.Register(Task{ID: "x", TaskType: "report", Spec: "", Handler: func(ctx context.Context) error { return nil }}))
+	require.Error(t, s.Register(Task{ID: "x", TaskType: "report", Spec: "* * * * *"}))
 	_, err = New(nil, nil, nil)
 	require.Error(t, err)
 }
@@ -46,7 +46,7 @@ func TestRegisterAndExecute(t *testing.T) {
 	s, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
-		TaskCode: "tick",
+		ID:       "tick",
 		TaskType: "report",
 		Spec:     "* * * * * *",
 		Handler: func(ctx context.Context) error {
@@ -54,7 +54,7 @@ func TestRegisterAndExecute(t *testing.T) {
 			return nil
 		},
 	}))
-	require.Error(t, s.Register(Task{TaskCode: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error { return nil }}))
+	require.Error(t, s.Register(Task{ID: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error { return nil }}))
 
 	s.Start()
 	time.Sleep(2500 * time.Millisecond)
@@ -62,16 +62,16 @@ func TestRegisterAndExecute(t *testing.T) {
 
 	require.GreaterOrEqual(t, atomic.LoadInt32(&count), int32(1))
 
-	got, err := s.GetStore().GetTaskByCode(context.Background(), "tick")
+	got, err := s.GetStore().GetTaskByID(context.Background(), "tick")
 	require.NoError(t, err)
 	require.Equal(t, CronTaskEnabled, got.Status)
 
-	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskCode: "tick"})
+	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskID: "tick"})
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(runs), 1)
 }
 
-// TestRegisterRestartIdempotent 验证进程重启后重新注册同一 TaskCode 是幂等的（DB upsert 而非报错）。
+// TestRegisterRestartIdempotent 验证进程重启后重新注册同一 ID 是幂等的（DB upsert 而非报错）。
 func TestRegisterRestartIdempotent(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
@@ -79,16 +79,16 @@ func TestRegisterRestartIdempotent(t *testing.T) {
 	// 第一次"进程"：注册并更新定义
 	s1, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
-	require.NoError(t, s1.Register(Task{TaskCode: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error { return nil }}))
+	require.NoError(t, s1.Register(Task{ID: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error { return nil }}))
 
-	// 模拟重启：新 Scheduler 复用同一 DB，重新注册同一 TaskCode 应成功
+	// 模拟重启：新 Scheduler 复用同一 DB，重新注册同一 ID 应成功
 	s2, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
-	require.NoError(t, s2.Register(Task{TaskCode: "tick", TaskType: "report", Spec: "*/2 * * * * *", Handler: func(ctx context.Context) error { return nil }}))
+	require.NoError(t, s2.Register(Task{ID: "tick", TaskType: "report", Spec: "*/2 * * * * *", Handler: func(ctx context.Context) error { return nil }}))
 	// 同进程内重复注册仍被拒绝
-	require.Error(t, s2.Register(Task{TaskCode: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error { return nil }}))
+	require.Error(t, s2.Register(Task{ID: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error { return nil }}))
 
-	got, err := s2.GetStore().GetTaskByCode(context.Background(), "tick")
+	got, err := s2.GetStore().GetTaskByID(context.Background(), "tick")
 	require.NoError(t, err)
 	require.Equal(t, "*/2 * * * * *", got.Spec)
 
@@ -96,7 +96,7 @@ func TestRegisterRestartIdempotent(t *testing.T) {
 	var count int32
 	s3, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
-	require.NoError(t, s3.Register(Task{TaskCode: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error {
+	require.NoError(t, s3.Register(Task{ID: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error {
 		atomic.AddInt32(&count, 1)
 		return nil
 	}}))
@@ -123,7 +123,7 @@ func TestOverlapGuard(t *testing.T) {
 	s, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
-		TaskCode: "slow",
+		ID:       "slow",
 		TaskType: "report",
 		Spec:     "* * * * * *",
 		Handler: func(ctx context.Context) error {
@@ -163,7 +163,7 @@ func TestOverlapGuard(t *testing.T) {
 	// 停止调度并等待在途任务结束
 	require.NoError(t, s.Stop(context.Background()))
 
-	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskCode: "slow"})
+	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskID: "slow"})
 	require.NoError(t, err)
 	var skipped int
 	for _, r := range runs {
@@ -186,7 +186,7 @@ func TestLastRunAtWrittenAfterCompletion(t *testing.T) {
 	s, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
-		TaskCode: "lastrun",
+		ID:       "lastrun",
 		TaskType: "report",
 		Spec:     "* * * * * *",
 		Handler: func(ctx context.Context) error {
@@ -206,13 +206,13 @@ func TestLastRunAtWrittenAfterCompletion(t *testing.T) {
 	}
 
 	// handler 运行中：last_run_at 不应已写入
-	taskRow, err := s.GetStore().GetTaskByCode(context.Background(), "lastrun")
+	taskRow, err := s.GetStore().GetTaskByID(context.Background(), "lastrun")
 	require.NoError(t, err)
 	require.Nil(t, taskRow.LastRunAt)
 
 	close(release)
 	require.Eventually(t, func() bool {
-		row, err := s.GetStore().GetTaskByCode(context.Background(), "lastrun")
+		row, err := s.GetStore().GetTaskByID(context.Background(), "lastrun")
 		return err == nil && row.LastRunAt != nil
 	}, 3*time.Second, 50*time.Millisecond)
 }
@@ -225,7 +225,7 @@ func TestTaskTimeout(t *testing.T) {
 	s, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
-		TaskCode: "slow-timeout",
+		ID:       "slow-timeout",
 		TaskType: "report",
 		Spec:     "* * * * * *",
 		Timeout:  500 * time.Millisecond,
@@ -239,7 +239,7 @@ func TestTaskTimeout(t *testing.T) {
 	time.Sleep(2500 * time.Millisecond)
 	require.NoError(t, s.Stop(context.Background()))
 
-	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskCode: "slow-timeout"})
+	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskID: "slow-timeout"})
 	require.NoError(t, err)
 	var failed bool
 	for _, r := range runs {
@@ -258,14 +258,14 @@ func TestRegisterInvalidSpecNotPersisted(t *testing.T) {
 	s, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
 	err = s.Register(Task{
-		TaskCode: "bad-spec",
+		ID:       "bad-spec",
 		TaskType: "report",
 		Spec:     "not-a-cron-spec",
 		Handler:  func(ctx context.Context) error { return nil },
 	})
 	require.Error(t, err)
 
-	got, qerr := s.GetStore().GetTaskByCode(context.Background(), "bad-spec")
+	got, qerr := s.GetStore().GetTaskByID(context.Background(), "bad-spec")
 	require.NoError(t, qerr)
 	require.Nil(t, got)
 }
@@ -279,7 +279,7 @@ func TestTaskLifecycleDisableEnableRemove(t *testing.T) {
 	s, err := New(db, nil, nil, WithSeconds(true))
 	require.NoError(t, err)
 	task := Task{
-		TaskCode: "lifecycle",
+		ID:       "lifecycle",
 		TaskType: "report",
 		Spec:     "* * * * * *",
 		Handler: func(ctx context.Context) error {
@@ -290,19 +290,19 @@ func TestTaskLifecycleDisableEnableRemove(t *testing.T) {
 	require.NoError(t, s.Register(task))
 
 	// 初始 enabled
-	got, err := s.GetStore().GetTaskByCode(context.Background(), "lifecycle")
+	got, err := s.GetStore().GetTaskByID(context.Background(), "lifecycle")
 	require.NoError(t, err)
 	require.Equal(t, CronTaskEnabled, got.Status)
 
 	// Disable：DB 状态 disabled，调度停止
 	require.NoError(t, s.Disable("lifecycle"))
-	got, err = s.GetStore().GetTaskByCode(context.Background(), "lifecycle")
+	got, err = s.GetStore().GetTaskByID(context.Background(), "lifecycle")
 	require.NoError(t, err)
 	require.Equal(t, CronTaskDisabled, got.Status)
 
 	// Enable：恢复调度（沿用注册时的定义）
 	require.NoError(t, s.Enable("lifecycle"))
-	got, err = s.GetStore().GetTaskByCode(context.Background(), "lifecycle")
+	got, err = s.GetStore().GetTaskByID(context.Background(), "lifecycle")
 	require.NoError(t, err)
 	require.Equal(t, CronTaskEnabled, got.Status)
 
@@ -313,13 +313,13 @@ func TestTaskLifecycleDisableEnableRemove(t *testing.T) {
 
 	// Remove：DB 定义被软删除，调度停止
 	require.NoError(t, s.Remove("lifecycle"))
-	got, err = s.GetStore().GetTaskByCode(context.Background(), "lifecycle")
+	got, err = s.GetStore().GetTaskByID(context.Background(), "lifecycle")
 	require.NoError(t, err)
 	require.Nil(t, got)
 
-	// Remove 后可重新注册同一 TaskCode（软删除行原子恢复）
+	// Remove 后可重新注册同一 ID（软删除行原子恢复）
 	require.NoError(t, s.Register(task))
-	got, err = s.GetStore().GetTaskByCode(context.Background(), "lifecycle")
+	got, err = s.GetStore().GetTaskByID(context.Background(), "lifecycle")
 	require.NoError(t, err)
 	require.Equal(t, CronTaskEnabled, got.Status)
 	require.False(t, got.DeletedAt.Valid)
@@ -339,7 +339,7 @@ func TestWithLockFactoryOption(t *testing.T) {
 	s, err := New(db, nil, nil, WithEnableLock(true))
 	require.NoError(t, err)
 	err = s.Register(Task{
-		TaskCode: "lock1", TaskType: "report", Spec: "* * * * *", EnableLock: true,
+		ID: "lock1", TaskType: "report", Spec: "* * * * *", EnableLock: true,
 		Handler: func(ctx context.Context) error { return nil },
 	})
 	require.ErrorIs(t, err, ErrLockNotSet)
@@ -348,7 +348,7 @@ func TestWithLockFactoryOption(t *testing.T) {
 	s2, err := New(db, nil, nil, WithEnableLock(true), WithLockFactory(&fakeLockFactory{}))
 	require.NoError(t, err)
 	require.NoError(t, s2.Register(Task{
-		TaskCode: "lock2", TaskType: "report", Spec: "* * * * *", EnableLock: true,
+		ID: "lock2", TaskType: "report", Spec: "* * * * *", EnableLock: true,
 		Handler: func(ctx context.Context) error { return nil },
 	}))
 }
@@ -362,7 +362,7 @@ func TestTaskWithLockExecutes(t *testing.T) {
 	s, err := New(db, nil, nil, WithSeconds(true), WithLockFactory(&fakeLockFactory{}))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
-		TaskCode: "locked-run", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
+		ID: "locked-run", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
 		Handler: func(ctx context.Context) error {
 			count.Add(1)
 			return nil

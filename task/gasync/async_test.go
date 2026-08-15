@@ -45,17 +45,17 @@ func TestEnqueueAndProcess(t *testing.T) {
 	server.Shutdown()
 
 	require.Eventually(t, func() bool {
-		run, err := server.GetStore().GetRunByRunCode(context.Background(), info.ID)
+		run, err := server.GetStore().GetRunByID(context.Background(), info.ID)
 		return err == nil && run != nil && run.Status == AsyncCompleted
 	}, 3_000_000_000, 50_000_000)
 
-	run, err := server.GetStore().GetRunByRunCode(context.Background(), info.ID)
+	run, err := server.GetStore().GetRunByID(context.Background(), info.ID)
 	require.NoError(t, err)
 	require.Equal(t, AsyncCompleted, run.Status)
 	require.Equal(t, "email:send", run.TaskType)
 	require.NotEmpty(t, run.RequestID)
 	require.NotEmpty(t, run.TraceID)
-	require.NotEmpty(t, run.RunCode)
+	require.NotEmpty(t, run.ID)
 }
 
 // TestRequestIDPropagation 验证生产端 ctx 携带的 request id 会跨进程透传到消费端执行记录。
@@ -85,7 +85,7 @@ func TestRequestIDPropagation(t *testing.T) {
 	require.Eventually(t, func() bool { return processed.Load() }, 3_000_000_000, 50_000_000)
 	server.Shutdown()
 
-	run, err := server.GetStore().GetRunByRunCode(context.Background(), info.ID)
+	run, err := server.GetStore().GetRunByID(context.Background(), info.ID)
 	require.NoError(t, err)
 	require.Equal(t, "req-propagate-1", run.RequestID)
 }
@@ -124,7 +124,7 @@ func TestPayloadTruncation(t *testing.T) {
 	require.Eventually(t, func() bool { return processed.Load() }, 3_000_000_000, 50_000_000)
 	server.Shutdown()
 
-	run, err := server.GetStore().GetRunByRunCode(context.Background(), info.ID)
+	run, err := server.GetStore().GetRunByID(context.Background(), info.ID)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(run.Payload), maxPayloadLen+len("..."))
 	require.True(t, strings.HasSuffix(run.Payload, "..."))

@@ -27,14 +27,14 @@ func (s *Server) logMiddleware(next asynq.Handler) asynq.Handler {
 		if requestID == "" {
 			requestID = gutil.GenUUID()
 		}
-		runCode, _ := asynq.GetTaskID(ctx)
+		runID, _ := asynq.GetTaskID(ctx)
 		queue, _ := asynq.GetQueueName(ctx)
 
 		ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
-		ctx = context.WithValue(ctx, gconstant.KeyRunCode, runCode)
+		ctx = context.WithValue(ctx, gconstant.KeyRunID, runID)
 		ctx = context.WithValue(ctx, gconstant.KeyTaskType, "async")
 
-		// run_code 通过 ctx 由 glog extra_keys 打印，不再重复写入 With 字段
+		// 运行 ID（task.run.id）通过 ctx 由 glog extra_keys 打印，不再重复写入 With 字段
 		logger := s.logger.With(
 			gconstant.KeyTaskType, "async",
 			"queue", queue,
@@ -76,7 +76,7 @@ func (s *Server) traceMiddleware(next asynq.Handler) asynq.Handler {
 
 func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
-		runCode, _ := asynq.GetTaskID(ctx)
+		runID, _ := asynq.GetTaskID(ctx)
 		queue, _ := asynq.GetQueueName(ctx)
 		retried, _ := asynq.GetRetryCount(ctx)
 		maxRetry, _ := asynq.GetMaxRetry(ctx)
@@ -86,7 +86,7 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 
 		start := time.Now()
 		run := &AsyncTaskRun{
-			RunCode:   runCode,
+			ID:        runID,
 			TaskType:  task.Type(),
 			Queue:     queue,
 			Status:    AsyncProcessing,
@@ -98,13 +98,11 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 			RequestID: requestID,
 		}
 
-		// asynq 重试复用同一任务 ID（run_code），同一任务只保留一行：
+		// asynq 重试复用同一任务 ID（主键 id），同一任务只保留一行：
 		// 原子 upsert 覆盖开始信息，兼容 at-least-once 下同一任务被并发处理的场景，
-		// 避免"先查再写"竞态导致重复插入撞唯一索引而丢失执行记录。
-		if rid, uerr := s.store.upsertRunStart(ctx, run); uerr != nil {
-			s.logger.Errorw(ctx, "upsert async run failed", "run_code", runCode, "error", uerr)
-		} else {
-			run.ID = rid
+		// 避免"先查再写"竞态导致重复插入撞主键而丢失执行记录。
+		if uerr := s.store.upsertRunStart(ctx, run); uerr != nil {
+			s.logger.Errorw(ctx, "upsert async run failed", gconstant.KeyRunID, runID, "error", uerr)
 		}
 
 		err := next.ProcessTask(ctx, task)
@@ -119,7 +117,7 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 		if run.ID != "" {
 			// asynq 超时会取消 ctx，收尾落库需用未取消的 ctx，否则写库静默失败
 			if ferr := s.store.finishRun(context.WithoutCancel(ctx), run.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
-				s.logger.Errorw(ctx, "finish async run failed", "run_code", runCode, "error", ferr)
+				s.logger.Errorw(ctx, "finish async run failed", gconstant.KeyRunID, runID, "error", ferr)
 			}
 		}
 		return err

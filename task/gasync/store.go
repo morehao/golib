@@ -2,7 +2,6 @@ package gasync
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/morehao/golib/dbaccess/gormdao"
@@ -26,32 +25,17 @@ func (s *store) insertRun(ctx context.Context, e *AsyncTaskRun) error {
 }
 
 // upsertRunStart 原子写入一次执行尝试的开始信息：
-// 按 run_code 冲突时覆盖更新（asynq 重试/并发处理同一任务复用同一行），
-// 避免"先查再写"竞态导致重复插入撞唯一索引而丢失执行记录。
-// 返回该 run_code 对应行的真实主键 ID。
-//
-// 注意：string 主键由 BeforeCreate 在 SQL 执行前预填 UUID，冲突更新时驱动
-// 不会回填真实主键，因此统一回查 run_code 取实际行主键（对 MySQL/SQLite 均正确）。
-func (s *store) upsertRunStart(ctx context.Context, run *AsyncTaskRun) (string, error) {
-	err := s.dbGetter(ctx).Table(AsyncTaskRunTableName).
+// 主键 id 即 asynq 任务实例 ID，冲突时覆盖更新（asynq 重试/并发处理同一任务复用同一行），
+// 避免"先查再写"竞态导致重复插入撞主键而丢失执行记录。
+func (s *store) upsertRunStart(ctx context.Context, run *AsyncTaskRun) error {
+	return s.dbGetter(ctx).Table(AsyncTaskRunTableName).
 		Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "run_code"}},
+			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"status", "start_at", "retried", "max_retry", "payload", "trace_id", "request_id",
 			}),
 		}).
 		Create(run).Error
-	if err != nil {
-		return "", err
-	}
-	existing, qerr := s.GetRunByRunCode(ctx, run.RunCode)
-	if qerr != nil {
-		return "", qerr
-	}
-	if existing == nil {
-		return "", fmt.Errorf("gasync: run not found after upsert, run_code=%s", run.RunCode)
-	}
-	return existing.ID, nil
 }
 
 // MarkStaleProcessingAsFailed 将超过 cutoff 仍处于 processing 的执行记录标记为 failed，
@@ -95,10 +79,6 @@ func (s *store) finishRun(ctx context.Context, id string, endAt time.Time, durat
 	}
 	return s.dbGetter(ctx).Model(&AsyncTaskRun{}).Table(AsyncTaskRunTableName).
 		Where("id = ?", id).Updates(updates).Error
-}
-
-func (s *store) GetRunByRunCode(ctx context.Context, runCode string) (*AsyncTaskRun, error) {
-	return s.runDao.GetByCond(ctx, &AsyncTaskRunCond{RunCode: runCode})
 }
 
 func (s *store) GetRunByID(ctx context.Context, id string) (*AsyncTaskRun, error) {
