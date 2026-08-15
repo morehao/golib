@@ -22,7 +22,7 @@ const (
 
 // FileEntity 物理文件的元数据记录，按内容哈希去重。
 type FileEntity struct {
-	ID          uint      `gorm:"primarykey"`
+	gormdao.StringID
 	CreatedAt   time.Time `gorm:"column:created_at;not null;autoCreateTime"`
 	UpdatedAt   time.Time `gorm:"column:updated_at;not null;autoUpdateTime"`
 	ContentHash string    `gorm:"column:content_hash;type:varchar(64);not null;default:'';uniqueIndex:uk_content_hash"`
@@ -35,8 +35,8 @@ func (FileEntity) TableName() string { return "core_file" }
 // FileUploadEntity 一次上传行为的记录，只存跟"这次上传"相关的信息。
 // 内容相关信息（哈希/大小/存储路径）不冗余存储，需要时按 FileID 查 File 表。
 type FileUploadEntity struct {
-	gorm.Model
-	FileID   uint       `gorm:"column:file_id;not null;default:0;index"`
+	gormdao.BaseEntity
+	FileID   string     `gorm:"column:file_id;type:varchar(36);not null;default:'';index"`
 	UploadID string     `gorm:"column:upload_id;type:varchar(128);not null;default:'';index"`
 	Name     string     `gorm:"column:name;type:varchar(256);not null;default:''"`
 	MimeType string     `gorm:"column:mime_type;type:varchar(128);not null;default:''"`
@@ -47,7 +47,7 @@ type FileUploadEntity struct {
 func (FileUploadEntity) TableName() string { return "core_file_upload" }
 
 type fileCond struct {
-	gormdao.BaseCond
+	gormdao.BaseCond[string]
 	ContentHash string
 	StorageURI  string
 }
@@ -63,15 +63,15 @@ func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 }
 
 type fileUploadCond struct {
-	gormdao.BaseCond
-	FileID   uint
+	gormdao.BaseCond[string]
+	FileID   string
 	UploadID string
 	Status   FileStatus
 }
 
 func (c *fileUploadCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
-	if c.FileID > 0 {
+	if c.FileID != "" {
 		db.Where(fmt.Sprintf("%s.file_id = ?", tableName), c.FileID)
 	}
 	if c.UploadID != "" {

@@ -47,7 +47,7 @@ func IsLocal() bool {
 	return Get().IsLocal()
 }
 
-func Open(ctx context.Context, id uint) (io.ReadCloser, *FileDetail, error) {
+func Open(ctx context.Context, id string) (io.ReadCloser, *FileDetail, error) {
 	return Get().Open(ctx, id)
 }
 
@@ -63,19 +63,19 @@ func UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileDeta
 	return Get().UploadAndRecord(ctx, req)
 }
 
-func GetFile(ctx context.Context, id uint) (*FileDetail, error) {
+func GetFile(ctx context.Context, id string) (*FileDetail, error) {
 	return Get().GetFile(ctx, id)
 }
 
-func PresignGetFileURL(ctx context.Context, id uint, opts ...PresignOption) (string, error) {
+func PresignGetFileURL(ctx context.Context, id string, opts ...PresignOption) (string, error) {
 	return Get().PresignGetFileURL(ctx, id, opts...)
 }
 
-func DeleteFile(ctx context.Context, id uint) error {
+func DeleteFile(ctx context.Context, id string) error {
 	return Get().DeleteFile(ctx, id)
 }
 
-func GetFileUploadIDByStorageURI(ctx context.Context, storageURI string) (uint, error) {
+func GetFileUploadIDByStorageURI(ctx context.Context, storageURI string) (string, error) {
 	return Get().GetFileUploadIDByStorageURI(ctx, storageURI)
 }
 
@@ -83,7 +83,7 @@ func InitMultipartUpload(ctx context.Context, req InitMultipartUploadRequest) (*
 	return Get().InitMultipartUpload(ctx, req)
 }
 
-func PresignUploadPartURL(ctx context.Context, id uint, partNum int32, opts ...PresignOption) (string, error) {
+func PresignUploadPartURL(ctx context.Context, id string, partNum int32, opts ...PresignOption) (string, error) {
 	return Get().PresignUploadPartURL(ctx, id, partNum, opts...)
 }
 
@@ -91,7 +91,7 @@ func CompleteMultipartUpload(ctx context.Context, req CompleteMultipartUploadReq
 	return Get().CompleteMultipartUpload(ctx, req)
 }
 
-func AbortMultipartUpload(ctx context.Context, id uint) error {
+func AbortMultipartUpload(ctx context.Context, id string) error {
 	return Get().AbortMultipartUpload(ctx, id)
 }
 

@@ -57,7 +57,7 @@ func TestUpsertTaskRestoresSoftDeleted(t *testing.T) {
 
 	got, err := s.GetTaskByCode(context.Background(), "foo")
 	require.NoError(t, err)
-	require.NotZero(t, got.ID)
+	require.NotEmpty(t, got.ID)
 	require.Equal(t, "*/2 * * * *", got.Spec)
 	require.False(t, got.DeletedAt.Valid)
 
@@ -70,7 +70,7 @@ func TestStoreRunLifecycle(t *testing.T) {
 	s := newStoreForTest(t)
 	e := &CronTaskRun{TaskCode: "foo", TaskType: "report", RunCode: "run-1", StartAt: time.Now(), Status: TaskRunRunning, RequestID: "req-1"}
 	require.NoError(t, s.insertRun(context.Background(), e))
-	require.NotZero(t, e.ID)
+	require.NotEmpty(t, e.ID)
 
 	require.NoError(t, s.finishRun(context.Background(), e.ID, time.Now(), 120, TaskRunSuccess, ""))
 

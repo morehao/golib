@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
@@ -41,10 +42,17 @@ func (impl *postgresqlImpl) GetModuleTemplateParam(db *gorm.DB, cfg *ModuleCfg) 
 		})
 	}
 	structName := gutil.SnakeToPascal(cfg.TableName)
+	pkField := findPKField(modelFieldList)
+	var pkFieldType string
+	if pkField != nil {
+		pkFieldType = pkField.FieldType
+	}
 	res := &ModuleTplAnalysisRes{
 		PackageName:     cfg.PackageName,
 		TableName:       cfg.TableName,
 		StructName:      structName,
+		PKField:         pkField,
+		PKFieldType:     pkFieldType,
 		TplAnalysisList: moduleAnalysisList,
 	}
 	return res, nil
@@ -102,22 +110,29 @@ func (impl *postgresqlImpl) getModelField(db *gorm.DB, schemaName string, cfg *M
 	for _, v := range entities {
 		// 判断是否是主键
 		columnKey := ""
+		isPrimaryKey := false
 		if _, isPK := primaryKeys[v.ColumnName]; isPK {
 			columnKey = ColumnKeyPRI
+			isPrimaryKey = true
 		}
+
+		// 判断是否自增（serial/bigserial 等通过 nextval 序列默认值实现）
+		isAutoIncrement := strings.Contains(v.ColumnDefault.String, "nextval")
 
 		// 构建完整的列类型（包含长度等信息）
 		columnType := impl.buildColumnType(v)
 
 		item := ModelField{
-			FieldName:    gutil.SnakeToPascal(v.ColumnName),
-			FieldType:    columnTypeMap[v.UdtName],
-			ColumnName:   v.ColumnName,
-			ColumnType:   columnType,
-			ColumnKey:    columnKey,
-			IsNullable:   v.IsNullable == "YES",
-			DefaultValue: v.ColumnDefault.String,
-			Comment:      v.ColumnComment,
+			FieldName:       gutil.SnakeToPascal(v.ColumnName),
+			FieldType:       columnTypeMap[v.UdtName],
+			ColumnName:      v.ColumnName,
+			ColumnType:      columnType,
+			ColumnKey:       columnKey,
+			IsNullable:      v.IsNullable == "YES",
+			DefaultValue:    v.ColumnDefault.String,
+			Comment:         v.ColumnComment,
+			IsPrimaryKey:    isPrimaryKey,
+			IsAutoIncrement: isAutoIncrement,
 		}
 		// 如果类型映射中没有找到，使用 data_type 作为后备
 		if item.FieldType == "" {

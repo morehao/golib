@@ -38,7 +38,7 @@ const (
 
 // ConfigEntity 配置项
 type ConfigEntity struct {
-	gorm.Model
+	gormdao.BaseEntity
 	GroupName      string         `gorm:"column:group_name;type:varchar(64);not null;default:'default';uniqueIndex:uk_group_key;comment:配置分组，用于业务隔离，如 payment、notification，默认 default"`
 	Key            string         `gorm:"column:key;type:varchar(128);not null;uniqueIndex:uk_group_key;comment:配置键名，同一分组内唯一"`
 	ValueType      ValueType      `gorm:"column:value_type;type:varchar(32);not null;default:'string';comment:值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string"`
@@ -53,12 +53,12 @@ func (ConfigEntity) TableName() string {
 }
 
 type ConfigCond struct {
-	gormdao.BaseCond
-	Group      string
-	Key        string
-	ValueType  string
-	Status     string
-	ExactKey   bool
+	gormdao.BaseCond[string]
+	Group     string
+	Key       string
+	ValueType string
+	Status    string
+	ExactKey  bool
 }
 
 func (c *ConfigCond) BuildCondition(db *gorm.DB, tableName string) {

@@ -12,8 +12,8 @@ import (
 )
 
 type FileStore struct {
-	fileDao    *gormdao.Dao[FileEntity, []FileEntity]
-	uploadDao  *gormdao.Dao[FileUploadEntity, []FileUploadEntity]
+	fileDao    *gormdao.Dao[FileEntity, []FileEntity, string]
+	uploadDao  *gormdao.Dao[FileUploadEntity, []FileUploadEntity, string]
 	st         storage.Storage
 	bucket     string
 	signSecret string
@@ -31,8 +31,8 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...StoreOption) (*
 
 	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
 	return &FileStore{
-		fileDao:    gormdao.NewDao[FileEntity, []FileEntity](FileEntity{}.TableName(), "filestore.file", getDB, gormdao.WithoutSoftDelete()),
-		uploadDao:  gormdao.NewDao[FileUploadEntity, []FileUploadEntity](FileUploadEntity{}.TableName(), "filestore.upload", getDB, gormdao.WithoutSoftDelete()),
+		fileDao:    gormdao.NewDao[FileEntity, []FileEntity, string](FileEntity{}.TableName(), "filestore.file", getDB, gormdao.WithoutSoftDelete()),
+		uploadDao:  gormdao.NewDao[FileUploadEntity, []FileUploadEntity, string](FileUploadEntity{}.TableName(), "filestore.upload", getDB, gormdao.WithoutSoftDelete()),
 		st:         st,
 		bucket:     bucket,
 		signSecret: o.signSecret,
@@ -81,7 +81,7 @@ func (s *FileStore) fillFileDetail(ctx context.Context, upload *FileUploadEntity
 		Status:       upload.Status,
 		Scene:        upload.Scene,
 	}
-	if upload.FileID == 0 {
+	if upload.FileID == "" {
 		return detail, nil
 	}
 	fh, err := s.fileDao.GetByID(ctx, upload.FileID)
@@ -89,7 +89,7 @@ func (s *FileStore) fillFileDetail(ctx context.Context, upload *FileUploadEntity
 		return nil, err
 	}
 	if fh == nil {
-		return nil, fmt.Errorf("%w: file_id=%d", ErrFileNotFound, upload.FileID)
+		return nil, fmt.Errorf("%w: file_id=%s", ErrFileNotFound, upload.FileID)
 	}
 	detail.ContentHash = fh.ContentHash
 	detail.Size = fh.Size
@@ -117,7 +117,7 @@ func (s *FileStore) findOrCreateFile(ctx context.Context, contentHash string, si
 	return fh, nil
 }
 
-func (s *FileStore) Open(ctx context.Context, id uint) (io.ReadCloser, *FileDetail, error) {
+func (s *FileStore) Open(ctx context.Context, id string) (io.ReadCloser, *FileDetail, error) {
 	detail, err := s.GetFile(ctx, id)
 	if err != nil {
 		return nil, nil, fmt.Errorf("filestore.Open: %w", err)
@@ -223,18 +223,18 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 	return s.fillFileDetail(ctx, upload)
 }
 
-func (s *FileStore) GetFile(ctx context.Context, id uint) (*FileDetail, error) {
+func (s *FileStore) GetFile(ctx context.Context, id string) (*FileDetail, error) {
 	upload, err := s.uploadDao.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.GetFile: %w", err)
 	}
 	if upload == nil {
-		return nil, fmt.Errorf("%w: id=%d", ErrFileNotFound, id)
+		return nil, fmt.Errorf("%w: id=%s", ErrFileNotFound, id)
 	}
 	return s.fillFileDetail(ctx, upload)
 }
 
-func (s *FileStore) PresignGetFileURL(ctx context.Context, id uint, opts ...PresignOption) (string, error) {
+func (s *FileStore) PresignGetFileURL(ctx context.Context, id string, opts ...PresignOption) (string, error) {
 	detail, err := s.GetFile(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignGetFileURL: %w", err)
@@ -253,20 +253,20 @@ func (s *FileStore) PresignGetFileURL(ctx context.Context, id uint, opts ...Pres
 	return url, nil
 }
 
-func (s *FileStore) DeleteFile(ctx context.Context, id uint) error {
-	if err := s.uploadDao.Delete(ctx, id, 0); err != nil {
+func (s *FileStore) DeleteFile(ctx context.Context, id string) error {
+	if err := s.uploadDao.Delete(ctx, id, ""); err != nil {
 		return fmt.Errorf("filestore.DeleteFile: %w", err)
 	}
 	return nil
 }
 
-func (s *FileStore) GetFileUploadIDByStorageURI(ctx context.Context, storageURI string) (uint, error) {
+func (s *FileStore) GetFileUploadIDByStorageURI(ctx context.Context, storageURI string) (string, error) {
 	fh, err := s.fileDao.GetByCond(ctx, &fileCond{StorageURI: storageURI})
 	if err != nil {
-		return 0, fmt.Errorf("filestore.GetFileUploadIDByStorageURI: %w", err)
+		return "", fmt.Errorf("filestore.GetFileUploadIDByStorageURI: %w", err)
 	}
 	if fh == nil {
-		return 0, fmt.Errorf("%w: storage_uri=%s", ErrFileNotFound, storageURI)
+		return "", fmt.Errorf("%w: storage_uri=%s", ErrFileNotFound, storageURI)
 	}
 
 	rec, err := s.uploadDao.GetByCond(ctx, &fileUploadCond{
@@ -274,10 +274,10 @@ func (s *FileStore) GetFileUploadIDByStorageURI(ctx context.Context, storageURI 
 		Status: FileStatusCompleted,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("filestore.GetFileUploadIDByStorageURI: %w", err)
+		return "", fmt.Errorf("filestore.GetFileUploadIDByStorageURI: %w", err)
 	}
 	if rec == nil {
-		return 0, fmt.Errorf("%w: file_id=%d from storage_uri=%s", ErrFileNotFound, fh.ID, storageURI)
+		return "", fmt.Errorf("%w: file_id=%s from storage_uri=%s", ErrFileNotFound, fh.ID, storageURI)
 	}
 	return rec.ID, nil
 }
@@ -314,13 +314,13 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 	return s.fillFileDetail(ctx, upload)
 }
 
-func (s *FileStore) PresignUploadPartURL(ctx context.Context, id uint, partNum int32, opts ...PresignOption) (string, error) {
+func (s *FileStore) PresignUploadPartURL(ctx context.Context, id string, partNum int32, opts ...PresignOption) (string, error) {
 	detail, err := s.GetFile(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("filestore.PresignUploadPartURL: %w", err)
 	}
 	if detail.UploadID == "" {
-		return "", fmt.Errorf("%w: id=%d", ErrNotMultipartUpload, id)
+		return "", fmt.Errorf("%w: id=%s", ErrNotMultipartUpload, id)
 	}
 
 	_, bucket, key, err := s.parseStorageURI(detail.StorageURI)
@@ -342,7 +342,7 @@ func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMul
 		return nil, fmt.Errorf("filestore.CompleteMultipartUpload: %w", err)
 	}
 	if detail.UploadID == "" {
-		return nil, fmt.Errorf("%w: id=%d", ErrNotMultipartUpload, req.ID)
+		return nil, fmt.Errorf("%w: id=%s", ErrNotMultipartUpload, req.ID)
 	}
 
 	_, bucket, key, err := s.parseStorageURI(detail.StorageURI)
@@ -373,13 +373,13 @@ func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMul
 	return updated, nil
 }
 
-func (s *FileStore) AbortMultipartUpload(ctx context.Context, id uint) error {
+func (s *FileStore) AbortMultipartUpload(ctx context.Context, id string) error {
 	detail, err := s.GetFile(ctx, id)
 	if err != nil {
 		return fmt.Errorf("filestore.AbortMultipartUpload: %w", err)
 	}
 	if detail.UploadID == "" {
-		return fmt.Errorf("%w: id=%d", ErrNotMultipartUpload, id)
+		return fmt.Errorf("%w: id=%s", ErrNotMultipartUpload, id)
 	}
 
 	_, bucket, key, err := s.parseStorageURI(detail.StorageURI)

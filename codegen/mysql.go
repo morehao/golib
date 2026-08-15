@@ -44,10 +44,17 @@ func (impl *mysqlImpl) GetModuleTemplateParam(db *gorm.DB, cfg *ModuleCfg) (*Mod
 		})
 	}
 	structName := gutil.SnakeToPascal(cfg.TableName)
+	pkField := findPKField(modelFieldList)
+	var pkFieldType string
+	if pkField != nil {
+		pkFieldType = pkField.FieldType
+	}
 	res := &ModuleTplAnalysisRes{
 		PackageName:     cfg.PackageName,
 		TableName:       cfg.TableName,
 		StructName:      structName,
+		PKField:         pkField,
+		PKFieldType:     pkFieldType,
 		TplAnalysisList: moduleAnalysisList,
 	}
 	return res, nil
@@ -72,14 +79,16 @@ func (impl *mysqlImpl) getModelField(db *gorm.DB, dbName string, cfg *ModuleCfg)
 	var modelFieldList []ModelField
 	for _, v := range entities {
 		item := ModelField{
-			FieldName:    gutil.SnakeToPascal(v.ColumnName),
-			FieldType:    columnTypeMap[v.DataType],
-			ColumnName:   v.ColumnName,
-			ColumnType:   v.ColumnType,
-			ColumnKey:    v.ColumnKey,
-			IsNullable:   v.IsNullable == "YES",
-			DefaultValue: v.ColumnDefault.String,
-			Comment:      v.ColumnComment,
+			FieldName:       gutil.SnakeToPascal(v.ColumnName),
+			FieldType:       columnTypeMap[v.DataType],
+			ColumnName:      v.ColumnName,
+			ColumnType:      v.ColumnType,
+			ColumnKey:       v.ColumnKey,
+			IsNullable:      v.IsNullable == "YES",
+			DefaultValue:    v.ColumnDefault.String,
+			Comment:         v.ColumnComment,
+			IsPrimaryKey:    v.ColumnKey == ColumnKeyPRI,
+			IsAutoIncrement: v.Extra == "auto_increment",
 		}
 		if colIndexInfo, ok := indexInfoMap[v.ColumnName]; ok {
 			item.IndexName = colIndexInfo.IndexName

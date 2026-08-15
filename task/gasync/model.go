@@ -18,7 +18,7 @@ const (
 )
 
 type AsyncTaskRun struct {
-	ID         uint               `gorm:"column:id;primaryKey;autoIncrement"`
+	gormdao.StringID
 	CreatedAt  time.Time          `gorm:"column:created_at"`
 	RunCode    string             `gorm:"column:run_code;type:varchar(64);not null;uniqueIndex:uk_run_code;comment:asynq 任务实例 ID（任务唯一标识，重试复用同一行）"`
 	TaskType   string             `gorm:"column:task_type;type:varchar(128);index:idx_task_type;comment:任务类型"`
@@ -38,7 +38,7 @@ type AsyncTaskRun struct {
 func (AsyncTaskRun) TableName() string { return AsyncTaskRunTableName }
 
 type AsyncTaskRunCond struct {
-	gormdao.BaseCond
+	gormdao.BaseCond[string]
 	RunCode  string
 	TaskType string
 	Queue    string

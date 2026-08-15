@@ -53,16 +53,18 @@ type postgresqlTableColumn struct {
 }
 
 type ModelField struct {
-	FieldName      string // 字段名称
-	FieldType      string // 字段数据类型，如int、string
-	ColumnName     string // 列名
-	ColumnType     string // 列数据类型，如varchar(255)
-	ColumnKey      string // 索引类型，如PRI（主键）, UNI（唯一索引）, MUL（非唯一索引）
-	IsNullable     bool   // 是否允许为空
-	DefaultValue   string // 默认值
-	Comment        string // 字段注释
-	IndexName      string // 索引名称
-	IsUniqueIndex  bool   // 是否唯一索引
+	FieldName       string // 字段名称
+	FieldType       string // 字段数据类型，如int、string
+	ColumnName      string // 列名
+	ColumnType      string // 列数据类型，如varchar(255)
+	ColumnKey       string // 索引类型，如PRI（主键）, UNI（唯一索引）, MUL（非唯一索引）
+	IsNullable      bool   // 是否允许为空
+	DefaultValue    string // 默认值
+	Comment         string // 字段注释
+	IndexName       string // 索引名称
+	IsUniqueIndex   bool   // 是否唯一索引
+	IsPrimaryKey    bool   // 是否主键（模板据此生成 primaryKey 标签）
+	IsAutoIncrement bool   // 是否自增（string 主键模板需省略 autoIncrement 标签）
 }
 
 type mysqlIndexInfo struct {

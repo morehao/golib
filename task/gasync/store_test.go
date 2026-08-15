@@ -46,7 +46,7 @@ func TestAsyncRunLifecycle(t *testing.T) {
 
 	e := &AsyncTaskRun{RunCode: "t-1", TaskType: "email", Queue: "default", Status: AsyncProcessing}
 	require.NoError(t, s.insertRun(context.Background(), e))
-	require.NotZero(t, e.ID)
+	require.NotEmpty(t, e.ID)
 
 	require.NoError(t, s.finishRun(context.Background(), e.ID, time.Now(), 30, AsyncCompleted, ""))
 	got, err := s.GetRunByRunCode(context.Background(), "t-1")
@@ -64,7 +64,7 @@ func TestAsyncRunRetryOverwrites(t *testing.T) {
 	now := time.Now()
 	run := &AsyncTaskRun{RunCode: "retry-1", TaskType: "email", Queue: "default", Status: AsyncProcessing, Retried: 0, StartAt: &now}
 	require.NoError(t, s.insertRun(context.Background(), run))
-	require.NotZero(t, run.ID)
+	require.NotEmpty(t, run.ID)
 
 	// 第一次尝试失败
 	require.NoError(t, s.finishRun(context.Background(), run.ID, time.Now(), 10, AsyncFailed, "boom"))
@@ -183,7 +183,7 @@ func TestAsyncCleanupRuns(t *testing.T) {
 
 	got, err := s.GetRunByRunCode(context.Background(), "c-new")
 	require.NoError(t, err)
-	require.NotZero(t, got.ID)
+	require.NotEmpty(t, got.ID)
 
 	gone, err := s.GetRunByRunCode(context.Background(), "c-old")
 	require.NoError(t, err)

@@ -1,7 +1,7 @@
 package configkv
 
 type ConfigInfo struct {
-	ID             uint
+	ID             string
 	GroupName      string
 	Key            string
 	ValueType      ValueType

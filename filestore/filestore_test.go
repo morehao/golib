@@ -276,7 +276,7 @@ func TestGetFile_NotFound(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	_, err = fs.GetFile(context.Background(), 999)
+	_, err = fs.GetFile(context.Background(), "not-exist")
 	require.ErrorIs(t, err, ErrFileNotFound)
 }
 
@@ -306,7 +306,7 @@ func TestPresignGetFileURL_NotFound(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	_, err = fs.PresignGetFileURL(context.Background(), 999, WithExpires(time.Hour))
+	_, err = fs.PresignGetFileURL(context.Background(), "not-exist", WithExpires(time.Hour))
 	require.ErrorIs(t, err, ErrFileNotFound)
 }
 
@@ -402,7 +402,7 @@ func TestPresignUploadPartURL_NotFound(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	_, err = fs.PresignUploadPartURL(context.Background(), 999, 1, WithExpires(time.Hour))
+	_, err = fs.PresignUploadPartURL(context.Background(), "not-exist", 1, WithExpires(time.Hour))
 	require.ErrorIs(t, err, ErrFileNotFound)
 }
 

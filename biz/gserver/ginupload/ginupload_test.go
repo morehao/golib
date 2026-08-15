@@ -358,7 +358,7 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, fmt.Sprintf("%s/files/multipart/%d/parts", testAPIPrefix, detail.FileUploadID), presignPartRequest{
+	w := postJSON(router, fmt.Sprintf("%s/files/multipart/%s/parts", testAPIPrefix, detail.FileUploadID), presignPartRequest{
 		PartNumber: 1,
 	})
 	require.Equal(t, 200, w.Code)
@@ -410,7 +410,7 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 			{PartNumber: 2, ETag: "etag-2"},
 		},
 	}
-	w := postJSON(router, fmt.Sprintf("%s/files/multipart/%d/complete", testAPIPrefix, detail.FileUploadID), req)
+	w := postJSON(router, fmt.Sprintf("%s/files/multipart/%s/complete", testAPIPrefix, detail.FileUploadID), req)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -452,7 +452,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := deleteReq(router, fmt.Sprintf("%s/files/multipart/%d", testAPIPrefix, detail.FileUploadID))
+	w := deleteReq(router, fmt.Sprintf("%s/files/multipart/%s", testAPIPrefix, detail.FileUploadID))
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -482,7 +482,7 @@ func TestHandleGetFileDetail(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("found", func(t *testing.T) {
-		w := getReq(router, fmt.Sprintf("%s/files/%d", testAPIPrefix, detail.FileUploadID))
+		w := getReq(router, fmt.Sprintf("%s/files/%s", testAPIPrefix, detail.FileUploadID))
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
@@ -524,7 +524,7 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := postJSON(router, fmt.Sprintf("%s/files/%d/presign-url", testAPIPrefix, detail.FileUploadID), nil)
+	w := postJSON(router, fmt.Sprintf("%s/files/%s/presign-url", testAPIPrefix, detail.FileUploadID), nil)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -567,7 +567,7 @@ func TestHandleDeleteFile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	w := deleteReq(router, fmt.Sprintf("%s/files/%d", testAPIPrefix, detail.FileUploadID))
+	w := deleteReq(router, fmt.Sprintf("%s/files/%s", testAPIPrefix, detail.FileUploadID))
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
@@ -637,7 +637,7 @@ func TestHandleRedirectGetFileURL(t *testing.T) {
 
 	t.Run("redirects to presigned URL with file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", fmt.Sprintf("%s/files/%d/redirect", testAPIPrefix, detail.FileUploadID), nil)
+		req, _ := http.NewRequest("GET", fmt.Sprintf("%s/files/%s/redirect", testAPIPrefix, detail.FileUploadID), nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 302, w.Code)
@@ -728,7 +728,7 @@ func TestHandleServeFileByID(t *testing.T) {
 
 	t.Run("serves file content with file_id", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		req, _ := http.NewRequest("GET", fmt.Sprintf("%s/files/%d/serve", testAPIPrefix, detail.FileUploadID), nil)
+		req, _ := http.NewRequest("GET", fmt.Sprintf("%s/files/%s/serve", testAPIPrefix, detail.FileUploadID), nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 200, w.Code)
@@ -818,16 +818,16 @@ func TestHandleIDValidation(t *testing.T) {
 		body    any
 		wantMsg string
 	}{
-		// 路径参数由 gin 原生 ShouldBindUri 绑定（uri tag + validator）
-		{"getFileDetail id=0", http.MethodGet, testAPIPrefix + "/files/0", nil, "failed on the 'required' tag"},
-		{"getFileDetail id=abc", http.MethodGet, testAPIPrefix + "/files/abc", nil, "invalid syntax"},
-		{"presign-url id=0", http.MethodPost, testAPIPrefix + "/files/0/presign-url", nil, "failed on the 'required' tag"},
-		{"deleteFile id=0", http.MethodDelete, testAPIPrefix + "/files/0", nil, "failed on the 'required' tag"},
-		{"presignUploadPartURL id=0", http.MethodPost, testAPIPrefix + "/files/multipart/0/parts", presignPartRequest{PartNumber: 1}, "failed on the 'required' tag"},
+		// 路径参数由 gin 原生 ShouldBindUri 绑定（uri tag + validator）。
+		// 主键改为 string 后只要求非空：id=0 / 非数字串均可通过绑定，落到 filestore 层报 file not found。
+		{"getFileDetail id=0", http.MethodGet, testAPIPrefix + "/files/0", nil, "file not found"},
+		{"getFileDetail id=not-exist", http.MethodGet, testAPIPrefix + "/files/not-exist", nil, "file not found"},
+		{"presign-url id=not-exist", http.MethodPost, testAPIPrefix + "/files/not-exist/presign-url", nil, "file not found"},
+		{"presignUploadPartURL id=not-exist", http.MethodPost, testAPIPrefix + "/files/multipart/not-exist/parts", presignPartRequest{PartNumber: 1}, "file not found"},
 		{"presignUploadPartURL part=0", http.MethodPost, testAPIPrefix + "/files/multipart/1/parts", presignPartRequest{PartNumber: 0}, "failed on the 'required' tag"},
 		{"presignUploadPartURL part=-1", http.MethodPost, testAPIPrefix + "/files/multipart/1/parts", presignPartRequest{PartNumber: -1}, "failed on the 'gt' tag"},
-		{"completeMultipartUpload id=0", http.MethodPost, testAPIPrefix + "/files/multipart/0/complete", completeMultipartRequest{}, "failed on the 'required' tag"},
-		{"abortMultipartUpload id=0", http.MethodDelete, testAPIPrefix + "/files/multipart/0", nil, "failed on the 'required' tag"},
+		{"completeMultipartUpload id=not-exist", http.MethodPost, testAPIPrefix + "/files/multipart/not-exist/complete", completeMultipartRequest{}, "file not found"},
+		{"abortMultipartUpload id=not-exist", http.MethodDelete, testAPIPrefix + "/files/multipart/not-exist", nil, "file not found"},
 	}
 
 	for _, tt := range tests {
@@ -843,6 +843,20 @@ func TestHandleIDValidation(t *testing.T) {
 			require.Contains(t, resp.Msg, tt.wantMsg)
 		})
 	}
+}
+
+// TestHandleDeleteFile_NonExistentID 验证删除不存在的主键幂等成功：
+// 主键为 string 后 id=not-exist 能通过绑定，硬删除无匹配行时 GORM 不报错，返回成功。
+func TestHandleDeleteFile_NonExistentID(t *testing.T) {
+	fs := newTestFileStore(t)
+	router := setupRouter(fs)
+
+	w := deleteReq(router, testAPIPrefix+"/files/not-exist")
+	var resp struct {
+		Code int `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
 }
 
 // --- presign token helpers ---

@@ -306,7 +306,7 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 		if rerr := s.store.updateRunTimes(ctx, t.TaskCode, &start, nextRun); rerr != nil {
 			taskLogger.Errorw(ctx, "update run times failed", "error", rerr)
 		}
-		if run.ID != 0 {
+		if run.ID != "" {
 			if ferr := s.store.finishRun(ctx, run.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
 				taskLogger.Errorw(ctx, "finish run failed", "error", ferr)
 			}

@@ -29,7 +29,8 @@ type Entity interface {
 
 // Dao 基于 GORM 的通用数据访问对象。
 //
-// 泛型 T 为实体类型，L 为实体切片类型（如 []T）。
+// 泛型 T 为实体类型，L 为实体切片类型（如 []T），ID 为主键类型
+// （支持 uint / int64 / string 等，见 IDType）。
 //
 // 软删除约定（默认启用）：
 //   - Delete 将 deleted_at 置为当前时间，不物理删除；要求表包含 deleted_at 列
@@ -40,19 +41,19 @@ type Entity interface {
 //
 // 使用 WithoutSoftDelete() 创建时，Delete 将通过 Unscoped 物理删除，
 // 对声明了 gorm.DeletedAt 的实体同样生效，避免退化为 GORM 默认软删除。
-type Dao[T Entity, L ~[]T] struct {
+type Dao[T Entity, L ~[]T, ID IDType] struct {
 	base
 	TableName    string
 	daoName      string
 	isSoftDelete bool
 }
 
-func NewDao[T Entity, L ~[]T](tableName string, daoName string, getDB DBGetter, opts ...Option) *Dao[T, L] {
+func NewDao[T Entity, L ~[]T, ID IDType](tableName string, daoName string, getDB DBGetter, opts ...Option) *Dao[T, L, ID] {
 	cfg := &options{isSoftDelete: true}
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	return &Dao[T, L]{
+	return &Dao[T, L, ID]{
 		base:         newBase(getDB),
 		TableName:    tableName,
 		daoName:      daoName,
@@ -61,8 +62,8 @@ func NewDao[T Entity, L ~[]T](tableName string, daoName string, getDB DBGetter, 
 }
 
 // WithTx 返回绑定指定事务的新 Dao，原 Dao 与事务外的调用不受影响。
-func (d *Dao[T, L]) WithTx(tx *gorm.DB) *Dao[T, L] {
-	return &Dao[T, L]{
+func (d *Dao[T, L, ID]) WithTx(tx *gorm.DB) *Dao[T, L, ID] {
+	return &Dao[T, L, ID]{
 		base:         d.base.withTx(tx),
 		TableName:    d.TableName,
 		daoName:      d.daoName,
@@ -74,7 +75,7 @@ func (d *Dao[T, L]) WithTx(tx *gorm.DB) *Dao[T, L] {
 //   - 未启用软删除：不追加任何条件；
 //   - cond 声明包含已删除记录（IncludeDeleted 返回 true）：Unscoped，取消 GORM 自动过滤；
 //   - 默认：追加 "deleted_at IS NULL"。
-func (d *Dao[T, L]) deletedScope(db *gorm.DB, cond Cond) *gorm.DB {
+func (d *Dao[T, L, ID]) deletedScope(db *gorm.DB, cond Cond) *gorm.DB {
 	if !d.isSoftDelete {
 		return db
 	}
@@ -85,7 +86,7 @@ func (d *Dao[T, L]) deletedScope(db *gorm.DB, cond Cond) *gorm.DB {
 }
 
 // Insert 插入单条记录。
-func (d *Dao[T, L]) Insert(ctx context.Context, entity *T) error {
+func (d *Dao[T, L, ID]) Insert(ctx context.Context, entity *T) error {
 	db := d.DB(ctx).Table(d.TableName)
 	if err := db.Create(entity).Error; err != nil {
 		return getDBError(gconstant.DBInsertErr).Wrapf(err, "[%s] Insert fail, entity:%s", d.daoName, gutil.ToJsonString(entity))
@@ -94,7 +95,7 @@ func (d *Dao[T, L]) Insert(ctx context.Context, entity *T) error {
 }
 
 // BatchInsert 批量插入；空列表视为 no-op，直接返回 nil。
-func (d *Dao[T, L]) BatchInsert(ctx context.Context, entityList L) error {
+func (d *Dao[T, L, ID]) BatchInsert(ctx context.Context, entityList L) error {
 	if len(entityList) == 0 {
 		return nil
 	}
@@ -108,19 +109,19 @@ func (d *Dao[T, L]) BatchInsert(ctx context.Context, entityList L) error {
 
 // UpdateByID 按主键更新。注意：GORM 的 Updates 对 struct 会跳过零值字段，
 // 需要写入零值字段时请使用 UpdateMap。
-func (d *Dao[T, L]) UpdateByID(ctx context.Context, id uint, entity *T) error {
+func (d *Dao[T, L, ID]) UpdateByID(ctx context.Context, id ID, entity *T) error {
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	if err := db.Where("id = ?", id).Updates(entity).Error; err != nil {
-		return getDBError(gconstant.DBUpdateErr).Wrapf(err, "[%s] UpdateByID fail, id:%d entity:%s", d.daoName, id, gutil.ToJsonString(entity))
+		return getDBError(gconstant.DBUpdateErr).Wrapf(err, "[%s] UpdateByID fail, id:%v entity:%s", d.daoName, id, gutil.ToJsonString(entity))
 	}
 	return nil
 }
 
 // UpdateMap 按主键用 map 更新，map 中的键值全部写入（含零值）。
-func (d *Dao[T, L]) UpdateMap(ctx context.Context, id uint, updateMap map[string]any) error {
+func (d *Dao[T, L, ID]) UpdateMap(ctx context.Context, id ID, updateMap map[string]any) error {
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	if err := db.Where("id = ?", id).Updates(updateMap).Error; err != nil {
-		return getDBError(gconstant.DBUpdateErr).Wrapf(err, "[%s] UpdateMap fail, id:%d, updateMap:%s", d.daoName, id, gutil.ToJsonString(updateMap))
+		return getDBError(gconstant.DBUpdateErr).Wrapf(err, "[%s] UpdateMap fail, id:%v, updateMap:%s", d.daoName, id, gutil.ToJsonString(updateMap))
 	}
 	return nil
 }
@@ -130,11 +131,11 @@ func (d *Dao[T, L]) UpdateMap(ctx context.Context, id uint, updateMap map[string
 //     若实体声明了 deleted_by 列（如 DeletedBy uint `gorm:"column:deleted_by"`），
 //     同时写入操作人。
 //   - 未启用软删除（WithoutSoftDelete）：Unscoped 物理删除。
-func (d *Dao[T, L]) Delete(ctx context.Context, id, deletedBy uint) error {
+func (d *Dao[T, L, ID]) Delete(ctx context.Context, id ID, deletedBy ID) error {
 	db := d.DB(ctx).Model(new(T)).Table(d.TableName)
 	if !d.isSoftDelete {
 		if err := db.Unscoped().Where("id = ?", id).Delete(new(T)).Error; err != nil {
-			return getDBError(gconstant.DBDeleteErr).Wrapf(err, "[%s] HardDelete fail, id:%d", d.daoName, id)
+			return getDBError(gconstant.DBDeleteErr).Wrapf(err, "[%s] HardDelete fail, id:%v", d.daoName, id)
 		}
 		return nil
 	}
@@ -146,7 +147,7 @@ func (d *Dao[T, L]) Delete(ctx context.Context, id, deletedBy uint) error {
 		updatedField["deleted_by"] = deletedBy
 	}
 	if err := db.Where("id = ?", id).Updates(updatedField).Error; err != nil {
-		return getDBError(gconstant.DBDeleteErr).Wrapf(err, "[%s] Delete fail, id:%d, deletedBy:%d", d.daoName, id, deletedBy)
+		return getDBError(gconstant.DBDeleteErr).Wrapf(err, "[%s] Delete fail, id:%v, deletedBy:%v", d.daoName, id, deletedBy)
 	}
 	return nil
 }
@@ -162,7 +163,7 @@ func modelHasColumn(db *gorm.DB, model any, columnName string) bool {
 }
 
 // GetByID 按主键查询，仅返回未删除记录；不存在时返回 (nil, nil)。
-func (d *Dao[T, L]) GetByID(ctx context.Context, id uint) (*T, error) {
+func (d *Dao[T, L, ID]) GetByID(ctx context.Context, id ID) (*T, error) {
 	var entity T
 	db := d.DB(ctx).Table(d.TableName)
 	if d.isSoftDelete {
@@ -172,13 +173,13 @@ func (d *Dao[T, L]) GetByID(ctx context.Context, id uint) (*T, error) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
-		return nil, getDBError(gconstant.DBFindErr).Wrapf(err, "[%s] GetByID fail, id:%d", d.daoName, id)
+		return nil, getDBError(gconstant.DBFindErr).Wrapf(err, "[%s] GetByID fail, id:%v", d.daoName, id)
 	}
 	return &entity, nil
 }
 
 // GetByCond 按条件查询单条（LIMIT 1），仅返回未删除记录；不存在时返回 (nil, nil)。
-func (d *Dao[T, L]) GetByCond(ctx context.Context, cond Cond) (*T, error) {
+func (d *Dao[T, L, ID]) GetByCond(ctx context.Context, cond Cond) (*T, error) {
 	var entity T
 	db := d.deletedScope(d.DB(ctx).Table(d.TableName), cond)
 	cond.BuildCondition(db, d.TableName)
@@ -192,7 +193,7 @@ func (d *Dao[T, L]) GetByCond(ctx context.Context, cond Cond) (*T, error) {
 }
 
 // GetListByCond 按条件查询列表，仅返回未删除记录。
-func (d *Dao[T, L]) GetListByCond(ctx context.Context, cond Cond) (L, error) {
+func (d *Dao[T, L, ID]) GetListByCond(ctx context.Context, cond Cond) (L, error) {
 	var entityList L
 	db := d.deletedScope(d.DB(ctx).Table(d.TableName), cond)
 	cond.BuildCondition(db, d.TableName)
@@ -205,7 +206,7 @@ func (d *Dao[T, L]) GetListByCond(ctx context.Context, cond Cond) (L, error) {
 // GetPageListByCond 按条件分页查询，返回当前页数据与总条数（已排除已删除记录）。
 // 当 page <= 0 或 pageSize <= 0 时不分页，返回全部记录（含 count），
 // 需要严格分页时请确保两者均为正整数；pageSize 超过 MaxPageSize 时按 MaxPageSize 截断。
-func (d *Dao[T, L]) GetPageListByCond(ctx context.Context, cond Cond) (L, int64, error) {
+func (d *Dao[T, L, ID]) GetPageListByCond(ctx context.Context, cond Cond) (L, int64, error) {
 	page, pageSize := cond.GetPageInfo()
 	if pageSize > MaxPageSize {
 		pageSize = MaxPageSize
@@ -231,7 +232,7 @@ func (d *Dao[T, L]) GetPageListByCond(ctx context.Context, cond Cond) (L, int64,
 }
 
 // CountByCond 按条件统计记录数（已排除已删除记录）。
-func (d *Dao[T, L]) CountByCond(ctx context.Context, cond Cond) (int64, error) {
+func (d *Dao[T, L, ID]) CountByCond(ctx context.Context, cond Cond) (int64, error) {
 	db := d.deletedScope(d.DB(ctx).Model(new(T)).Table(d.TableName), cond)
 	cond.BuildCondition(db, d.TableName)
 

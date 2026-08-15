@@ -8,10 +8,10 @@ import (
 )
 
 type FileDetail struct {
-	FileUploadID uint
+	FileUploadID string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
-	FileID       uint
+	FileID       string
 	UploadID     string
 	Name         string
 	MimeType     string
@@ -51,6 +51,6 @@ type InitMultipartUploadRequest struct {
 }
 
 type CompleteMultipartUploadRequest struct {
-	ID    uint
+	ID    string
 	Parts []storage.CompletedPart
 }
