@@ -13,7 +13,7 @@ const (
 
 type store struct {
 	dbGetter      gormdao.DBGetter
-	dao           *gormdao.Dao[*ConfigEntity, []*ConfigEntity]
+	dao           *gormdao.Dao[*ConfigEntity, []*ConfigEntity, string]
 	codecRegistry map[ValueType]Codec
 	crypto        *aesCrypto
 }
@@ -21,7 +21,7 @@ type store struct {
 func newStore(dbGetter gormdao.DBGetter, codecRegistry map[ValueType]Codec, crypto *aesCrypto) *store {
 	return &store{
 		dbGetter:      dbGetter,
-		dao:           gormdao.NewDao[*ConfigEntity, []*ConfigEntity](tableName, "configkv", dbGetter, gormdao.WithoutSoftDelete()),
+		dao:           gormdao.NewDao[*ConfigEntity, []*ConfigEntity, string](tableName, "configkv", dbGetter, gormdao.WithoutSoftDelete()),
 		codecRegistry: codecRegistry,
 		crypto:        crypto,
 	}
@@ -118,14 +118,14 @@ func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, erro
 	if err != nil {
 		return nil, err
 	}
-	if entity == nil || (*entity).ID == 0 {
+	if entity == nil || (*entity).ID == "" {
 		return &ConfigEntity{}, nil
 	}
 
 	return s.decryptEntity(*entity), nil
 }
 
-func (s *store) GetByID(ctx context.Context, id uint) (*ConfigEntity, error) {
+func (s *store) GetByID(ctx context.Context, id string) (*ConfigEntity, error) {
 	entity, err := s.dao.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -146,18 +146,18 @@ func (s *store) DeleteByGroupKey(ctx context.Context, group, key string) error {
 	if err != nil {
 		return err
 	}
-	if entity == nil || (*entity).ID == 0 {
+	if entity == nil || (*entity).ID == "" {
 		return nil
 	}
 
-	return s.dao.Delete(ctx, (*entity).ID, 0)
+	return s.dao.Delete(ctx, (*entity).ID, "")
 }
 
-func (s *store) DeleteByID(ctx context.Context, id uint) error {
-	return s.dao.Delete(ctx, id, 0)
+func (s *store) DeleteByID(ctx context.Context, id string) error {
+	return s.dao.Delete(ctx, id, "")
 }
 
-func (s *store) UpdateByID(ctx context.Context, id uint, updateMap map[string]any) error {
+func (s *store) UpdateByID(ctx context.Context, id string, updateMap map[string]any) error {
 	return s.dao.UpdateMap(ctx, id, updateMap)
 }
 

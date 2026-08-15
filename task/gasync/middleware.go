@@ -116,7 +116,7 @@ func (s *Server) runRecordMiddleware(next asynq.Handler) asynq.Handler {
 			status = AsyncFailed
 			errMsg = gutil.TruncateString(err.Error(), maxErrorMsgLen)
 		}
-		if run.ID != 0 {
+		if run.ID != "" {
 			// asynq 超时会取消 ctx，收尾落库需用未取消的 ctx，否则写库静默失败
 			if ferr := s.store.finishRun(context.WithoutCancel(ctx), run.ID, end, end.Sub(start).Milliseconds(), status, errMsg); ferr != nil {
 				s.logger.Errorw(ctx, "finish async run failed", "run_code", runCode, "error", ferr)

@@ -194,7 +194,7 @@ func TestGenModelCode(t *testing.T) {
 				FieldName:    field.FieldName,
 				ColumnName:   field.ColumnName,
 				Comment:      field.Comment,
-				IsPrimaryKey: field.ColumnKey == "PRI",
+				IsPrimaryKey: field.IsPrimaryKey,
 			})
 		}
 
@@ -330,7 +330,7 @@ func TestGenModelCodeWithPostgreSQL(t *testing.T) {
 				FieldName:    field.FieldName,
 				ColumnName:   field.ColumnName,
 				Comment:      field.Comment,
-				IsPrimaryKey: field.ColumnKey == "PRI",
+				IsPrimaryKey: field.IsPrimaryKey,
 			})
 		}
 

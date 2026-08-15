@@ -11,13 +11,13 @@ import (
 
 type store struct {
 	dbGetter gormdao.DBGetter
-	runDao   *gormdao.Dao[AsyncTaskRun, []AsyncTaskRun]
+	runDao   *gormdao.Dao[AsyncTaskRun, []AsyncTaskRun, string]
 }
 
 func newStore(dbGetter gormdao.DBGetter) *store {
 	return &store{
 		dbGetter: dbGetter,
-		runDao:   gormdao.NewDao[AsyncTaskRun, []AsyncTaskRun](AsyncTaskRunTableName, "gasync_run", dbGetter, gormdao.WithoutSoftDelete()),
+		runDao:   gormdao.NewDao[AsyncTaskRun, []AsyncTaskRun, string](AsyncTaskRunTableName, "gasync_run", dbGetter, gormdao.WithoutSoftDelete()),
 	}
 }
 
@@ -28,8 +28,11 @@ func (s *store) insertRun(ctx context.Context, e *AsyncTaskRun) error {
 // upsertRunStart 原子写入一次执行尝试的开始信息：
 // 按 run_code 冲突时覆盖更新（asynq 重试/并发处理同一任务复用同一行），
 // 避免"先查再写"竞态导致重复插入撞唯一索引而丢失执行记录。
-// 返回该 run_code 对应行的主键 ID。
-func (s *store) upsertRunStart(ctx context.Context, run *AsyncTaskRun) (uint, error) {
+// 返回该 run_code 对应行的真实主键 ID。
+//
+// 注意：string 主键由 BeforeCreate 在 SQL 执行前预填 UUID，冲突更新时驱动
+// 不会回填真实主键，因此统一回查 run_code 取实际行主键（对 MySQL/SQLite 均正确）。
+func (s *store) upsertRunStart(ctx context.Context, run *AsyncTaskRun) (string, error) {
 	err := s.dbGetter(ctx).Table(AsyncTaskRunTableName).
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "run_code"}},
@@ -39,18 +42,14 @@ func (s *store) upsertRunStart(ctx context.Context, run *AsyncTaskRun) (uint, er
 		}).
 		Create(run).Error
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	if run.ID != 0 {
-		return run.ID, nil
-	}
-	// 部分驱动（如 MySQL）冲突更新时不回填主键，回查补取
 	existing, qerr := s.GetRunByRunCode(ctx, run.RunCode)
 	if qerr != nil {
-		return 0, qerr
+		return "", qerr
 	}
 	if existing == nil {
-		return 0, fmt.Errorf("gasync: run not found after upsert, run_code=%s", run.RunCode)
+		return "", fmt.Errorf("gasync: run not found after upsert, run_code=%s", run.RunCode)
 	}
 	return existing.ID, nil
 }
@@ -87,7 +86,7 @@ func (s *store) CleanupRuns(ctx context.Context, before time.Time, taskType stri
 	return res.RowsAffected, res.Error
 }
 
-func (s *store) finishRun(ctx context.Context, id uint, endAt time.Time, durationMS int64, status AsyncTaskRunStatus, errMsg string) error {
+func (s *store) finishRun(ctx context.Context, id string, endAt time.Time, durationMS int64, status AsyncTaskRunStatus, errMsg string) error {
 	updates := map[string]any{
 		"end_at":      endAt,
 		"duration_ms": durationMS,
@@ -102,7 +101,7 @@ func (s *store) GetRunByRunCode(ctx context.Context, runCode string) (*AsyncTask
 	return s.runDao.GetByCond(ctx, &AsyncTaskRunCond{RunCode: runCode})
 }
 
-func (s *store) GetRunByID(ctx context.Context, id uint) (*AsyncTaskRun, error) {
+func (s *store) GetRunByID(ctx context.Context, id string) (*AsyncTaskRun, error) {
 	return s.runDao.GetByID(ctx, id)
 }
 

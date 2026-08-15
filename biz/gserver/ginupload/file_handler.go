@@ -16,7 +16,7 @@ import (
 // @Summary 获取文件详情
 // @accept application/json
 // @Produce application/json
-// @Param id path uint true "文件ID"
+// @Param id path string true "文件ID"
 // @Success 200 {object} gincontext.DtoRender{data=fileDetailResponse}
 // @Router /files/{id} [get]
 func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
@@ -41,7 +41,7 @@ func handleGetFileDetail(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 获取文件下载地址
 // @accept application/json
 // @Produce application/json
-// @Param id path uint true "文件ID"
+// @Param id path string true "文件ID"
 // @Success 200 {object} gincontext.DtoRender{data=presignURLResponse}
 // @Router /files/{id}/presign-url [post]
 func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
@@ -69,7 +69,7 @@ func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 // @Summary 删除文件
 // @accept application/json
 // @Produce application/json
-// @Param id path uint true "文件ID"
+// @Param id path string true "文件ID"
 // @Success 200 {object} gincontext.DtoRender
 // @Router /files/{id} [delete]
 func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
@@ -92,7 +92,7 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 // @Tags 文件
 // @Summary 重定向获取文件URL（路径参数形式）
 // @Produce application/json
-// @Param id path uint true "文件ID"
+// @Param id path string true "文件ID"
 // @Success 302 {string} string "重定向到文件URL"
 // @Router /files/{id}/redirect [get]
 func handleRedirectByID(fs *filestore.FileStore) gin.HandlerFunc {
@@ -109,7 +109,7 @@ func handleRedirectByID(fs *filestore.FileStore) gin.HandlerFunc {
 // @Tags 文件
 // @Summary 重定向获取文件URL（query 形式，兼容 storage_uri/file_id 场景）
 // @Produce application/json
-// @Param file_id query uint false "文件ID"
+// @Param file_id query string false "文件ID"
 // @Param storage_uri query string false "存储URI"
 // @Success 302 {string} string "重定向到文件URL"
 // @Router /files/redirect [get]
@@ -130,7 +130,7 @@ func handleRedirectByQuery(fs *filestore.FileStore) gin.HandlerFunc {
 }
 
 // redirectToFileURL 按文件ID生成预签名URL并 302 重定向
-func redirectToFileURL(c *gin.Context, fs *filestore.FileStore, fileID uint) {
+func redirectToFileURL(c *gin.Context, fs *filestore.FileStore, fileID string) {
 	url, err := fs.PresignGetFileURL(c.Request.Context(), fileID)
 	if err != nil {
 		gincontext.Fail(c, err)
@@ -142,7 +142,7 @@ func redirectToFileURL(c *gin.Context, fs *filestore.FileStore, fileID uint) {
 // @Tags 文件
 // @Summary 直接获取文件内容（路径参数形式，仅 local storage 有效）
 // @Produce application/octet-stream
-// @Param id path uint true "文件ID"
+// @Param id path string true "文件ID"
 // @Success 200 {file} file "文件内容"
 // @Router /files/{id}/serve [get]
 func handleServeByID(fs *filestore.FileStore) gin.HandlerFunc {
@@ -159,7 +159,7 @@ func handleServeByID(fs *filestore.FileStore) gin.HandlerFunc {
 // @Tags 文件
 // @Summary 直接获取文件内容（query 形式，兼容 storage_uri/file_id 场景，仅 local storage 有效）
 // @Produce application/octet-stream
-// @Param file_id query uint false "文件ID"
+// @Param file_id query string false "文件ID"
 // @Param storage_uri query string false "存储URI"
 // @Success 200 {file} file "文件内容"
 // @Router /files/serve [get]
@@ -180,7 +180,7 @@ func handleServeByQuery(fs *filestore.FileStore) gin.HandlerFunc {
 }
 
 // serveFileByID 按文件ID输出文件内容
-func serveFileByID(c *gin.Context, fs *filestore.FileStore, fileID uint) {
+func serveFileByID(c *gin.Context, fs *filestore.FileStore, fileID string) {
 	rc, detail, err := fs.Open(c.Request.Context(), fileID)
 	if err != nil {
 		gincontext.Fail(c, err)
@@ -206,14 +206,14 @@ func serveFileByID(c *gin.Context, fs *filestore.FileStore, fileID uint) {
 
 // -- helpers --
 
-func resolveFileID(c *gin.Context, fs *filestore.FileStore, req getFileQueryRequest) (uint, error) {
-	if req.FileID > 0 {
+func resolveFileID(c *gin.Context, fs *filestore.FileStore, req getFileQueryRequest) (string, error) {
+	if req.FileID != "" {
 		return req.FileID, nil
 	}
 	if req.StorageURI != "" {
 		return fs.GetFileUploadIDByStorageURI(c.Request.Context(), req.StorageURI)
 	}
-	return 0, fmt.Errorf("file_id or storage_uri is required")
+	return "", fmt.Errorf("file_id or storage_uri is required")
 }
 
 func toFileRecordResp(detail *filestore.FileDetail) *fileRecordResponse {

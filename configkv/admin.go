@@ -60,7 +60,7 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 	return a.store.Set(ctx, entity)
 }
 
-func (a *AdminAPI) Update(ctx context.Context, id uint, req *UpdateReq) error {
+func (a *AdminAPI) Update(ctx context.Context, id string, req *UpdateReq) error {
 	entity, err := a.store.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -102,11 +102,11 @@ func (a *AdminAPI) Update(ctx context.Context, id uint, req *UpdateReq) error {
 	return a.store.UpdateByID(ctx, id, updateMap)
 }
 
-func (a *AdminAPI) Delete(ctx context.Context, id uint) error {
+func (a *AdminAPI) Delete(ctx context.Context, id string) error {
 	return a.store.DeleteByID(ctx, id)
 }
 
-func (a *AdminAPI) GetByID(ctx context.Context, id uint) (*ConfigInfo, error) {
+func (a *AdminAPI) GetByID(ctx context.Context, id string) (*ConfigInfo, error) {
 	entity, err := a.store.GetByID(ctx, id)
 	if err != nil {
 		return nil, err

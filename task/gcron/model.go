@@ -29,7 +29,7 @@ const (
 )
 
 type CronTask struct {
-	gorm.Model
+	gormdao.BaseEntity
 	TaskCode    string         `gorm:"column:task_code;type:varchar(128);not null;uniqueIndex:uk_task_code;comment:任务唯一标识"`
 	TaskType    string         `gorm:"column:task_type;type:varchar(128);not null;comment:任务类型"`
 	Spec        string         `gorm:"column:spec;type:varchar(64);not null;comment:cron 表达式"`
@@ -42,7 +42,7 @@ type CronTask struct {
 func (CronTask) TableName() string { return CronTaskTableName }
 
 type CronTaskRun struct {
-	ID         uint              `gorm:"column:id;primaryKey;autoIncrement"`
+	gormdao.StringID
 	CreatedAt  time.Time         `gorm:"column:created_at"`
 	TaskCode   string            `gorm:"column:task_code;type:varchar(128);not null;index:idx_task_code;comment:任务唯一标识"`
 	TaskType   string            `gorm:"column:task_type;type:varchar(128);not null;comment:任务类型"`
@@ -59,7 +59,7 @@ type CronTaskRun struct {
 func (CronTaskRun) TableName() string { return CronTaskRunTableName }
 
 type CronTaskCond struct {
-	gormdao.BaseCond
+	gormdao.BaseCond[string]
 	TaskCode string
 	TaskType string
 	Status   string
@@ -79,7 +79,7 @@ func (c *CronTaskCond) BuildCondition(db *gorm.DB, tableName string) {
 }
 
 type CronTaskRunCond struct {
-	gormdao.BaseCond
+	gormdao.BaseCond[string]
 	TaskCode string
 	TaskType string
 	RunCode  string

@@ -22,7 +22,19 @@ type ModuleTplAnalysisRes struct {
 	PackageName     string
 	TableName       string
 	StructName      string
+	PKField         *ModelField // 主键字段（模板据此生成 primaryKey 标签与 DAO 泛型参数，无主键时为 nil）
+	PKFieldType     string      // 主键字段的 Go 类型，如 uint/string/int64；无主键时为空
 	TplAnalysisList []ModuleTplAnalysisItem
+}
+
+// findPKField 返回模型字段列表中的主键字段；无主键时返回 nil。
+func findPKField(fields []ModelField) *ModelField {
+	for i := range fields {
+		if fields[i].IsPrimaryKey {
+			return &fields[i]
+		}
+	}
+	return nil
 }
 
 type TplAnalysisItem struct {
