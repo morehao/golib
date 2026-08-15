@@ -27,7 +27,7 @@
 | `biz/gserver/ginupload/*_handler.go` | handler 工厂函数 + swagger 注解 | handler 约定 |
 | `biz/gserver/gindocs/swagger.go` | Swagger/ReDoc 文档路由 | 模块 `Register` 风格 |
 | `biz/gmiddleware/ginmiddleware/` | JWT/CORS/AccessLog/Token 黑名单 | 中间件约定 |
-| `biz/gcontext/gincontext/` | 上下文取值 + `Success/Fail/Abort` 响应 | 响应约定 |
+| `biz/gcontext/gincontext/` | 上下文取值 + `Success/Fail/Abort` 响应 + `BindPathParams` 路径参数映射 | 响应/绑定约定 |
 | `codegen/example/router/user.go` | 生成产物（router 层） | 空占位 |
 | `codegen/example/tplExample/module/router.go.tpl` | router 生成模板 | 空占位 |
 | `gast/_test.go` | AST 工具的测试样本（`platformRouter` 等，供 `gast/generator_test.go` 读写分析） | 非路由规范，不参与统一 |
@@ -105,7 +105,10 @@
 ### 3.4 handler 写法
 
 - 一律工厂函数注入依赖：`func handleXxx(dep) gin.HandlerFunc`；
-- 入参绑定：JSON 用 `c.ShouldBindJSON`，表单/文件用 `c.ShouldBind`，路径参数用 gin 原生 `c.ShouldBindUri`（`uri` tag + validator，如 `binding:"required,gt=0"`），不手写参数解析；
+- 入参绑定分两种形态，均不手写参数解析：
+  1. **纯路径参数**（无 body/query 必填字段）：用 gin 原生 `c.ShouldBindUri`（`uri` tag + validator，如 `binding:"required,gt=0"`），绑定即校验；
+  2. **路径参数 + body/query 混合结构体**（RESTful 常见形态，如 `PUT /xxx/:xxxID`）：用 `gincontext.BindPathParams` 先映射 `uri` tag 字段（**只映射不校验**），再 `ShouldBindJSON` / `ShouldBindQuery` 绑定并统一校验。原因：gin 原生 `ShouldBindUri` 在映射后立即对整个结构体校验，混合结构体中的 body 必填字段尚未绑定会误报失败。
+- 混合结构体中来自路径的字段必须加 `json:"-"`（或 `form:"-"`），保证路径参数是唯一来源、body 无法携带/覆盖；
 - 出参：成功 `gincontext.Success(c, data)`，失败 `gincontext.Fail(c, err)`，认证失败用 `gincontext.Abort`；
 - 每个 handler 顶部带 swagger 注解块（`@Tags/@Summary/@accept/@Produce/@Param/@Success/@Router`）。
 

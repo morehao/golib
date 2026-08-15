@@ -133,18 +133,16 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 // @Router /files/multipart/{fileID}/parts [post]
 func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var uri multipartFileIDURI
-		if err := c.ShouldBindUri(&uri); err != nil {
+		var req presignPartRequest
+		if err := gincontext.BindPathParams(c, &req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-
-		var req presignPartRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		url, err := fs.PresignUploadPartURL(c.Request.Context(), uri.FileID, req.PartNumber)
+		url, err := fs.PresignUploadPartURL(c.Request.Context(), req.FileID, req.PartNumber)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
@@ -167,13 +165,11 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 // @Router /files/multipart/{fileID}/complete [post]
 func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var uri multipartFileIDURI
-		if err := c.ShouldBindUri(&uri); err != nil {
+		var req completeMultipartRequest
+		if err := gincontext.BindPathParams(c, &req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-
-		var req completeMultipartRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
@@ -184,7 +180,7 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		detail, err := fs.CompleteMultipartUpload(c.Request.Context(), filestore.CompleteMultipartUploadRequest{
-			ID:    uri.FileID,
+			ID:    req.FileID,
 			Parts: parts,
 		})
 		if err != nil {
