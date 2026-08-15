@@ -90,98 +90,117 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 }
 
 // @Tags 文件
-// @Summary 重定向获取文件URL
+// @Summary 重定向获取文件URL（路径参数形式）
 // @Produce application/json
-// @Param id path uint false "文件ID（与 storage_uri 二选一）"
-// @Param file_id query uint false "文件ID"
-// @Param storage_uri query string false "存储URI"
+// @Param id path uint true "文件ID"
 // @Success 302 {string} string "重定向到文件URL"
 // @Router /files/{id}/redirect [get]
-func handleRedirectGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
+func handleRedirectByID(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req getFileQueryRequest
-		if err := c.ShouldBindQuery(&req); err != nil {
+		var uri fileIDURI
+		if err := c.ShouldBindUri(&uri); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		// 兼容双路由：/files/:id/redirect 走路径参数，/files/redirect 仅支持 query 形式
-		if c.Param("id") != "" {
-			var uri fileIDURI
-			if err := c.ShouldBindUri(&uri); err != nil {
-				gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
-				return
-			}
-			req.FileID = uri.ID
-		}
-
-		fileID, err := resolveFileID(c, fs, req)
-		if err != nil {
-			gincontext.Fail(c, err)
-			return
-		}
-
-		url, err := fs.PresignGetFileURL(c.Request.Context(), fileID)
-		if err != nil {
-			gincontext.Fail(c, err)
-			return
-		}
-
-		c.Redirect(http.StatusFound, url)
+		redirectToFileURL(c, fs, uri.ID)
 	}
 }
 
 // @Tags 文件
-// @Summary 通过文件ID直接获取文件内容（仅 local storage 有效）
-// @Produce application/octet-stream
-// @Param id path uint false "文件ID（与 storage_uri 二选一）"
+// @Summary 重定向获取文件URL（query 形式，兼容 storage_uri/file_id 场景）
+// @Produce application/json
 // @Param file_id query uint false "文件ID"
 // @Param storage_uri query string false "存储URI"
-// @Success 200 {file} file "文件内容"
-// @Router /files/{id}/serve [get]
-func handleServeFileByID(fs *filestore.FileStore) gin.HandlerFunc {
+// @Success 302 {string} string "重定向到文件URL"
+// @Router /files/redirect [get]
+func handleRedirectByQuery(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req getFileQueryRequest
 		if err := c.ShouldBindQuery(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		// 兼容双路由：/files/:id/serve 走路径参数，/files/serve 仅支持 query 形式
-		if c.Param("id") != "" {
-			var uri fileIDURI
-			if err := c.ShouldBindUri(&uri); err != nil {
-				gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
-				return
-			}
-			req.FileID = uri.ID
-		}
-
 		fileID, err := resolveFileID(c, fs, req)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
+		redirectToFileURL(c, fs, fileID)
+	}
+}
 
-		rc, detail, err := fs.Open(c.Request.Context(), fileID)
+// redirectToFileURL 按文件ID生成预签名URL并 302 重定向
+func redirectToFileURL(c *gin.Context, fs *filestore.FileStore, fileID uint) {
+	url, err := fs.PresignGetFileURL(c.Request.Context(), fileID)
+	if err != nil {
+		gincontext.Fail(c, err)
+		return
+	}
+	c.Redirect(http.StatusFound, url)
+}
+
+// @Tags 文件
+// @Summary 直接获取文件内容（路径参数形式，仅 local storage 有效）
+// @Produce application/octet-stream
+// @Param id path uint true "文件ID"
+// @Success 200 {file} file "文件内容"
+// @Router /files/{id}/serve [get]
+func handleServeByID(fs *filestore.FileStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var uri fileIDURI
+		if err := c.ShouldBindUri(&uri); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+		serveFileByID(c, fs, uri.ID)
+	}
+}
+
+// @Tags 文件
+// @Summary 直接获取文件内容（query 形式，兼容 storage_uri/file_id 场景，仅 local storage 有效）
+// @Produce application/octet-stream
+// @Param file_id query uint false "文件ID"
+// @Param storage_uri query string false "存储URI"
+// @Success 200 {file} file "文件内容"
+// @Router /files/serve [get]
+func handleServeByQuery(fs *filestore.FileStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req getFileQueryRequest
+		if err := c.ShouldBindQuery(&req); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+		fileID, err := resolveFileID(c, fs, req)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
-		defer rc.Close()
+		serveFileByID(c, fs, fileID)
+	}
+}
 
-		if detail.MimeType != "" {
-			c.Header("Content-Type", detail.MimeType)
-		} else {
-			c.Header("Content-Type", "application/octet-stream")
-		}
-		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", detail.Name))
-		if detail.Size > 0 {
-			c.Header("Content-Length", strconv.FormatInt(detail.Size, 10))
-		}
-		c.Status(http.StatusOK)
+// serveFileByID 按文件ID输出文件内容
+func serveFileByID(c *gin.Context, fs *filestore.FileStore, fileID uint) {
+	rc, detail, err := fs.Open(c.Request.Context(), fileID)
+	if err != nil {
+		gincontext.Fail(c, err)
+		return
+	}
+	defer rc.Close()
 
-		if _, err := io.Copy(c.Writer, rc); err != nil {
-			_ = c.Error(err)
-		}
+	if detail.MimeType != "" {
+		c.Header("Content-Type", detail.MimeType)
+	} else {
+		c.Header("Content-Type", "application/octet-stream")
+	}
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", detail.Name))
+	if detail.Size > 0 {
+		c.Header("Content-Length", strconv.FormatInt(detail.Size, 10))
+	}
+	c.Status(http.StatusOK)
+
+	if _, err := io.Copy(c.Writer, rc); err != nil {
+		_ = c.Error(err)
 	}
 }
 
