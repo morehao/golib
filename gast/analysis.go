@@ -202,7 +202,11 @@ func getMethodDeclaration(filePath, receiverType, methodName string) (string, er
 			}
 			if funcDecl.Name.Name == methodName {
 				// 找到方法，构建声明字符串。
-				methodDecl = methodName + fieldListToString(funcDecl.Type.Params, false) + " " + fieldListToString(funcDecl.Type.Results, true)
+				results := fieldListToString(funcDecl.Type.Results, true)
+				methodDecl = methodName + fieldListToString(funcDecl.Type.Params, false)
+				if results != "" {
+					methodDecl += " " + results
+				}
 				return false // 停止遍历 AST。
 			}
 		}
