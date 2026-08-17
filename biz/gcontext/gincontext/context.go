@@ -1,68 +1,69 @@
 package gincontext
 
 import (
+	"strconv"
+
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gcontext"
-	"github.com/morehao/golib/gutil"
 )
 
 func GetClientIP(ctx *gin.Context) string {
 	return ctx.ClientIP()
 }
 
-// GetPersonID 返回自然人ID，兼容 context 中存储的 uint 或 string 类型。
+// GetPersonID 返回自然人ID 的数值形式；UUID 存储下返回 0，请改用 GetPersonIDString。
 func GetPersonID(ctx *gin.Context) uint {
-	return getUint(ctx, gcontext.KeyPersonID)
+	return parseUintString(ctx.GetString(gcontext.KeyPersonID))
 }
 
-// GetPersonIDString 返回自然人ID 的字符串形式，兼容 uint 或 string 存储。
+// GetPersonIDString 返回自然人ID 的字符串形式。
 func GetPersonIDString(ctx *gin.Context) string {
-	return getString(ctx, gcontext.KeyPersonID)
+	return ctx.GetString(gcontext.KeyPersonID)
 }
 
-// GetUserID 返回用户ID，兼容 context 中存储的 uint 或 string 类型。
+// GetUserID 返回用户ID 的数值形式；UUID 存储下返回 0，请改用 GetUserIDString。
 func GetUserID(ctx *gin.Context) uint {
-	return getUint(ctx, gcontext.KeyUserID)
+	return parseUintString(ctx.GetString(gcontext.KeyUserID))
 }
 
-// GetUserIDString 返回用户ID 的字符串形式，兼容 uint 或 string 存储。
+// GetUserIDString 返回用户ID 的字符串形式。
 func GetUserIDString(ctx *gin.Context) string {
-	return getString(ctx, gcontext.KeyUserID)
+	return ctx.GetString(gcontext.KeyUserID)
 }
 
 // GetUserType 返回用户类型，本身为字符串。
 func GetUserType(ctx *gin.Context) string {
-	return getString(ctx, gcontext.KeyUserType)
+	return ctx.GetString(gcontext.KeyUserType)
 }
 
-// GetOrgID 返回组织ID，兼容 context 中存储的 uint 或 string 类型。
+// GetOrgID 返回组织ID 的数值形式；UUID 存储下返回 0，请改用 GetOrgIDString。
 func GetOrgID(ctx *gin.Context) uint {
-	return getUint(ctx, gcontext.KeyOrgID)
+	return parseUintString(ctx.GetString(gcontext.KeyOrgID))
 }
 
-// GetOrgIDString 返回组织ID 的字符串形式，兼容 uint 或 string 存储。
+// GetOrgIDString 返回组织ID 的字符串形式。
 func GetOrgIDString(ctx *gin.Context) string {
-	return getString(ctx, gcontext.KeyOrgID)
+	return ctx.GetString(gcontext.KeyOrgID)
 }
 
-// GetTenantID 返回租户ID，兼容 context 中存储的 uint 或 string 类型。
+// GetTenantID 返回租户ID 的数值形式；UUID 存储下返回 0，请改用 GetTenantIDString。
 func GetTenantID(ctx *gin.Context) uint {
-	return getUint(ctx, gcontext.KeyTenantID)
+	return parseUintString(ctx.GetString(gcontext.KeyTenantID))
 }
 
-// GetTenantIDString 返回租户ID 的字符串形式，兼容 uint 或 string 存储。
+// GetTenantIDString 返回租户ID 的字符串形式。
 func GetTenantIDString(ctx *gin.Context) string {
-	return getString(ctx, gcontext.KeyTenantID)
+	return ctx.GetString(gcontext.KeyTenantID)
 }
 
-// GetDeptID 返回部门ID，兼容 context 中存储的 uint 或 string 类型。
+// GetDeptID 返回部门ID 的数值形式；UUID 存储下返回 0，请改用 GetDeptIDString。
 func GetDeptID(ctx *gin.Context) uint {
-	return getUint(ctx, gcontext.KeyDeptID)
+	return parseUintString(ctx.GetString(gcontext.KeyDeptID))
 }
 
-// GetDeptIDString 返回部门ID 的字符串形式，兼容 uint 或 string 存储。
+// GetDeptIDString 返回部门ID 的字符串形式。
 func GetDeptIDString(ctx *gin.Context) string {
-	return getString(ctx, gcontext.KeyDeptID)
+	return ctx.GetString(gcontext.KeyDeptID)
 }
 
 func GetRequestID(ctx *gin.Context) string {
@@ -86,28 +87,21 @@ func GetURLFull(ctx *gin.Context) string {
 }
 
 func GetString(ctx *gin.Context, key string) string {
-	return getString(ctx, key)
+	return ctx.GetString(key)
 }
 
 func GetUint(ctx *gin.Context, key string) uint {
-	return getUint(ctx, key)
+	return parseUintString(ctx.GetString(key))
 }
 
-// GetUint64 返回 key 对应的整数，兼容 context 中存储的 uint 或 string 类型。
+// GetUint64 返回 key 对应的整数，以 string 存储，解析失败返回 0。
 func GetUint64(ctx *gin.Context, key string) uint64 {
-	if val, ok := ctx.Get(key); ok {
-		return gutil.VToUint64(val)
-	}
-	return 0
+	v, _ := strconv.ParseUint(ctx.GetString(key), 10, 64)
+	return v
 }
 
-func getUint(ctx *gin.Context, key string) uint {
-	return uint(GetUint64(ctx, key))
-}
-
-func getString(ctx *gin.Context, key string) string {
-	if val, ok := ctx.Get(key); ok {
-		return gutil.ToString(val)
-	}
-	return ""
+// parseUintString 把以字符串存储的数字解析为 uint，解析失败返回 0。
+func parseUintString(s string) uint {
+	v, _ := strconv.ParseUint(s, 10, 64)
+	return uint(v)
 }

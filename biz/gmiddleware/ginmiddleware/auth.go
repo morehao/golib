@@ -95,5 +95,3 @@ func extractToken(ctx *gin.Context) string {
 	}
 	return auth
 }
-
-
