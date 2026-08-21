@@ -33,6 +33,11 @@ type Provider interface {
 
 > 这也意味着 `openai` provider + `BaseURL/模型名` 配置化，即可打通绝大多数 LLM API。
 
+> **`openai` provider 的 Chat/ChatStream 基于 [`sashabaranov/go-openai`](https://github.com/sashabaranov/go-openai) 执行**
+> （成熟 HTTP / SSE / 重试 / 错误归一），统一 `dto` <-> go-openai 由本包映射。只有当
+> 设置了 `RequestTransform` 或 `Raw`（需要 go-openai 未建模的任意 body 字段）时，才回退到
+> 本仓库 `protocol/ghttp` 的序列化 map + 透传路径。
+
 ### 双协议支持：Chat Completions / Responses
 
 OpenAI 自身有**两套**互相独立的协议：
@@ -48,18 +53,52 @@ OpenAI 自身有**两套**互相独立的协议：
 `dto.ChatRequest` 提供 `Raw any` 字段（`json:"-"`）。非空时 provider **原样透传**该值
 作为请求体，不经过统一协议转换，用于下发统一结构未覆盖的供应商独有字段。
 
+### OpenAI 兼容「小差异」治理：`ModelMapping` + `RequestTransform`
+
+现存的 OpenAI 兼容供应商（deepseek、智谱、kimi、硅基流动等）之间常有**细微协议差异**
+（deepseek 的 thinking 字段、kimi 的 temperature 约束、xai 的 search_parameters 等）。
+这些差异不该写进传输层（`ghttp`），而是由 `llm` 语义层治理。两种方式都不需要新增 provider 包：
+
+```go
+client, _ := llm.NewClient(llm.Config{
+    BaseURL: "https://api.deepseek.com/v1",
+    APIKey:  "sk-xxx",
+    Model:   "deepseek-chat",
+
+    // 1) 模型映射：逻辑名 -> 各厂商真实模型名（链式重定向、自动防循环）
+    ModelMapping: map[string]string{"my-reasoner": "deepseek-reasoner"},
+
+    // 2) 请求前钩子：直接改「序列化后的 OpenAI 兼容请求体 map」
+    //    用于注入/删除 upstream 独有字段（仅作用于 openai provider 的 Chat/ChatStream）
+    RequestTransform: func(req *dto.ChatRequest, body map[string]any) error {
+        if req.Model == "deepseek-reasoner" {
+            body["thinking"] = map[string]any{"type": "enabled"}
+        }
+        return nil
+    },
+})
+```
+
+- **默认（不配置 transform / Raw）**：`Chat`/`ChatStream` 完全走 go-openai。
+  差异字段只要属于 go-openai 已建模的扩展即可直接用——例如 deepseek 的
+  `reasoning_content` / `reasoning_effort`（go-openai 内置支持）。
+- **配置了 `RequestTransform`（或 `Raw`）**：表示需要 go-openai 未建模的任意 body 字段。
+  此时 openai provider 回退到 `protocol/ghttp`，把统一请求体先序列化为 map、应用该钩子
+  （或整体透传 Raw）再发包；`stream=true`、`model` 等字段自然跟随，不影响流式协议。
+- `anthropic` / `gemini` 为异协议，不使用这两个配置；对应差异仍走各自的双向映射。
+
 ## 目录结构
 
 ```
 llm/
 ├── dto/          # 统一请求/响应结构（对齐 OpenAI 协议）
 ├── provider/
-│   ├── openai/   # OpenAI 兼容 provider（Chat/ChatStream）
+│   ├── openai/   # OpenAI 兼容 provider（基于 go-openai 执行 Chat/ChatStream；含 dto 映射 convert.go）
 │   ├── anthropic/# Anthropic Claude Messages provider（异协议，含双向映射）
 │   └── gemini/   # Google Gemini provider（异协议，含双向映射）
-├── provider.go   # Provider 接口 + 注册表
-├── config.go     # Config（BaseURL/APIKey/Model/HTTP 透传/Responses 开关）
-└── client.go     # 统一入口 Client
+├── provider.go   # Provider 接口 + 注册表 + 可选接口（transform / go-openai 注入）
+├── config.go     # Config（BaseURL/APIKey/Model/HTTP 透传/Responses 开关/ModelMapping/RequestTransform）
+└── client.go     # 统一入口 Client（含 go-openai 客户端构造）
 ```
 
 ## 安装与使用

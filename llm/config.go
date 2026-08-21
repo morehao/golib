@@ -1,5 +1,7 @@
 package llm
 
+import "github.com/morehao/golib/llm/dto"
+
 // Config 是 llm 客户端的统一配置。
 type Config struct {
 	// BaseURL 供应商 API 基础地址，例如 "https://api.openai.com/v1"。
@@ -26,6 +28,17 @@ type Config struct {
 	// 该能力是可插拔增值能力，仅当供应商实现 ResponsesProvider 接口时才生效，
 	// 用作深水区逃生通道，不影响主流 Chat 路径。
 	Responses bool
+
+	// ModelMapping 模型名映射表：key 为调用方模型名（或逻辑名），value 为上游实际模型名。
+	// 支持链式重定向到链尾模型，自动防循环。用于「逻辑名 -> 各厂商真实模型名」的别名收敛，
+	// 相似实现见 new-api relay/helper/model_mapped.go。nil 表示不映射。
+	ModelMapping map[string]string
+
+	// RequestTransform 请求前钩子，仅作用于 OpenAI 兼容请求体（openai provider 的 Chat/ChatStream）。
+	// 在请求体被序列化之前调用；body 是统一 dto.ChatRequest 序列化后的 JSON map，
+	// 直接修改该 map 即可注入/改/删上游独有字段（如 deepseek 的 thinking、xai 的 search_parameters）。
+	// 返回错误则终止请求。用于「OpenAI 兼容小差异」的库侧治理，无需新增 provider。nil 表示不处理。
+	RequestTransform func(req *dto.ChatRequest, body map[string]any) error
 }
 
 // HTTPConfig 透传到底层 ghttp 客户端的连接与重试配置。

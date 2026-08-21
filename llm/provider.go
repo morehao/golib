@@ -7,6 +7,7 @@ import (
 
 	"github.com/morehao/golib/llm/dto"
 	"github.com/morehao/golib/protocol/ghttp"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // Errors 包级错误定义。
@@ -14,6 +15,25 @@ var (
 	// ErrProviderNotFound provider 名称在注册表中不存在。
 	ErrProviderNotFound = errors.New("llm: provider not found")
 )
+
+// RequestTransformFunc 请求前钩子，作用于「序列化后的 OpenAI 兼容请求体 map」。
+// 在 openai provider 真正发出请求之前调用，用于注入/改/删上游独有字段，
+// 是语义层（差异治理）而非传输层（ghttp）的关注点。实现方一般直接改 map。
+type RequestTransformFunc func(req *dto.ChatRequest, body map[string]any) error
+
+// RequestTransformProvider 可选接口：实现方接收一个请求前 transform。
+// Client 在 NewClient 时若探测到 provider 实现了该接口，则将 Config.RequestTransform 注入。
+// 这样基础 Provider 接口签名保持不变，只有需要差异治理的 provider（如 openai）选择实现。
+type RequestTransformProvider interface {
+	SetRequestTransform(fn RequestTransformFunc)
+}
+
+// OpenAIClientProvider 可选接口：实现方接收一个 sasbharabranov/go-openai *openai.Client。
+// Client 在 NewClient 时基于 Config.BaseURL/APIKey 构造 go-openai 客户端并注入。
+// openai provider 用其执行 Chat/ChatStream（go-openai 提供成熟 HTTP/SSE/重试/错误归一）。
+type OpenAIClientProvider interface {
+	SetOpenAIClient(cli *openai.Client)
+}
 
 // Provider 定义 llm 组件的供应商统一接口。
 //
