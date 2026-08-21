@@ -119,6 +119,65 @@ client.Chat(ctx, &dto.ChatRequest{
 })
 ```
 
+## 可插拔增值能力
+
+基础 `Provider` 只约定 Chat 能力。**Responses / Embedding / Image / Audio** 作为可插拔增值能力，
+通过可选的子接口（`llm.ResponsesProvider` / `llm.EmbeddingProvider` / `llm.ImageProvider` /
+`llm.AudioProvider`）按供应商能力选择性实现。`Client.xxx()` 方法内部用类型断言判定当前供应商
+是否支持，不支持则返回对应的 `ErrXxxNotSupported`。
+
+### Responses API（OpenAI /responses，走 `input` 而非 `messages`）
+
+```go
+resp, err := client.Responses(ctx, &dto.ResponsesRequest{
+    Input: []dto.ResponseInputItem{{Role: dto.RoleUser, Content: "hello"}},
+})
+if err != nil { return err }
+fmt.Println(resp.OutputText()) // 拼接后的纯文本
+
+// 流式：逐事件回调
+err = client.ResponsesStream(ctx, &dto.ResponsesRequest{Input: "hi"}, func(evt *dto.ResponsesStreamEvent) error {
+    if evt.Type == "response.output_text.delta" {
+        fmt.Print(evt.Delta)
+    }
+    return nil
+})
+```
+
+### Embedding（OpenAI /embeddings）
+
+```go
+resp, err := client.Embedding(ctx, &dto.EmbeddingRequest{
+    Model: "text-embedding-3-small",
+    Input: "hello", // 或 []string{...}
+})
+// resp.Data[0].Embedding 为 []float64
+```
+
+### Image（OpenAI /images/generations）
+
+```go
+resp, err := client.Image(ctx, &dto.ImageRequest{
+    Model:  "dall-e-3",
+    Prompt: "a cat",
+    Size:   "1024x1024",
+})
+// resp.Data[0].URL 或 .B64JSON
+```
+
+### Audio（OpenAI /audio/transcriptions，multipart 上传）
+
+```go
+resp, err := client.AudioTranscription(ctx, &dto.AudioRequest{
+    Model: "whisper-1",
+    File:  "/tmp/audio.wav",
+})
+// resp.Text 为转写文本
+```
+
+> `anthropic` / `gemini` 目前未实现上述增值能力（`Client.Embedding` 等会返回对应
+> `ErrXxxNotSupported`），基础 `Chat` / `ChatStream` 不受影响。
+
 ## 底层 HTTP 复用
 
 复用 golib 自有组件，不重复造轮子：
@@ -148,4 +207,4 @@ client.Chat(ctx, &dto.ChatRequest{
 
 - **P0（已完成）**：`openai` 兼容 provider，`Chat` / `ChatStream`，覆盖绝大多数 LLM API。
 - **P1（已完成）**：`anthropic`、`gemini` 异协议 provider 的双向字段映射。
-- **增值能力**：Responses API / Embedding / Image / Audio。
+- **增值能力（已完成）**：Responses API / Embedding / Image / Audio，全部作为可插拔能力挂在 `openai` provider 上。

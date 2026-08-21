@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/morehao/golib/llm/dto"
@@ -70,6 +71,71 @@ func normalize(req *dto.ChatRequest, defaultModel string) {
 	if req.Model == "" {
 		req.Model = defaultModel
 	}
+}
+
+// Responses 调用 OpenAI /responses 协议（可插拔能力）。
+// 供应商未实现时返回 ErrResponsesNotSupported。
+func (c *Client) Responses(ctx context.Context, req *dto.ResponsesRequest) (*dto.ResponsesResponse, error) {
+	p, ok := c.provider.(ResponsesProvider)
+	if !ok {
+		return nil, ErrResponsesNotSupported
+	}
+	if req.Model == "" {
+		req.Model = c.cfg.Model
+	}
+	if req.Stream {
+		return nil, errors.New("llm: Responses 流式请使用 ResponsesStream")
+	}
+	return p.Responses(ctx, c.httpClient, c.cfg.APIKey, req)
+}
+
+// ResponsesStream 调用 OpenAI /responses 流式（可插拔能力）。
+func (c *Client) ResponsesStream(ctx context.Context, req *dto.ResponsesRequest, handler func(*dto.ResponsesStreamEvent) error) error {
+	p, ok := c.provider.(ResponsesProvider)
+	if !ok {
+		return ErrResponsesNotSupported
+	}
+	if req.Model == "" {
+		req.Model = c.cfg.Model
+	}
+	req.Stream = true
+	return p.ResponsesStream(ctx, c.httpClient, c.cfg.APIKey, req, handler)
+}
+
+// Embedding 文本向量化（可插拔能力）。
+func (c *Client) Embedding(ctx context.Context, req *dto.EmbeddingRequest) (*dto.EmbeddingResponse, error) {
+	p, ok := c.provider.(EmbeddingProvider)
+	if !ok {
+		return nil, ErrEmbeddingNotSupported
+	}
+	if req.Model == "" {
+		req.Model = c.cfg.Model
+	}
+	return p.Embedding(ctx, c.httpClient, c.cfg.APIKey, req)
+}
+
+// Image 文生图（可插拔能力）。
+func (c *Client) Image(ctx context.Context, req *dto.ImageRequest) (*dto.ImageResponse, error) {
+	p, ok := c.provider.(ImageProvider)
+	if !ok {
+		return nil, ErrImageNotSupported
+	}
+	if req.Model == "" {
+		req.Model = c.cfg.Model
+	}
+	return p.Image(ctx, c.httpClient, c.cfg.APIKey, req)
+}
+
+// AudioTranscription 语音转写（可插拔能力）。
+func (c *Client) AudioTranscription(ctx context.Context, req *dto.AudioRequest) (*dto.AudioResponse, error) {
+	p, ok := c.provider.(AudioProvider)
+	if !ok {
+		return nil, ErrAudioNotSupported
+	}
+	if req.Model == "" {
+		req.Model = c.cfg.Model
+	}
+	return p.AudioTranscription(ctx, c.httpClient, c.cfg.APIKey, req)
 }
 
 func seconds(s int) time.Duration {

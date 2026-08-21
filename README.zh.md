@@ -285,6 +285,8 @@ if ok, err := lock.Lock(ctx); err != nil {
 - `openai` provider 通过 BaseURL + 模型名即可覆盖绝大多数 OpenAI 兼容供应商
 - 异协议供应商 `anthropic`（Claude Messages）、`gemini`（generateContent）自带双向字段映射
 - 非流式 `Chat` 与流式 `ChatStream` 双能力
+- 可插拔增值能力：`Responses`（/responses）、`Embedding`、`Image`、`AudioTranscript`，
+  供应商未实现时返回对应 `ErrXxxNotSupported`
 - `Raw` 逃生舱透传上游独有字段
 - 复用 `protocol/ghttp` 的连接池、重试、流式能力
 - 非 2xx 归一为 `*ghttp.HTTPError`，携带上游可读错误信息
