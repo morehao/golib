@@ -17,6 +17,7 @@
 - [gtrace](#gtrace) OpenTelemetry Trace 初始化组件
 - [gtree](#gtree) 树结构构建工具
 - [gutil](#gutil) 常用工具函数集合
+- [llm](#llm) LLM API 统一调用组件（多供应商、多协议）
 - [task](#task) 任务调度组件
 - [protocol](#protocol) 协议组件（包含 ghttp、gresty）
 - [ratelimit](#ratelimit) 限流组件
@@ -271,6 +272,35 @@ if ok, err := lock.Lock(ctx); err != nil {
 - 类型转换
 - Slice/Map 操作
 - 文件处理
+
+## llm
+
+### 简介
+`llm` 是 LLM API 统一调用组件，封装各供应商、各协议的 LLM API 调用。
+参考 new-api 的 relay/channel 设计思想（以 OpenAI 协议为统一基准 + 每供应商一个 provider 做协议映射），
+但砍掉网关层（计费、额度、路由），只保留请求翻译与调用。
+
+### 特性
+- 统一 `dto`（对齐 OpenAI Chat Completions），调用方面向一套结构
+- `openai` provider 通过 BaseURL + 模型名即可覆盖绝大多数 OpenAI 兼容供应商
+- 非流式 `Chat` 与流式 `ChatStream` 双能力
+- `Raw` 逃生舱透传上游独有字段
+- 复用 `protocol/ghttp` 的连接池、重试、流式能力
+- 非 2xx 归一为 `*ghttp.HTTPError`，携带上游可读错误信息
+
+### 使用
+```go
+client, _ := llm.NewClient(llm.Config{
+    BaseURL: "https://api.deepseek.com/v1",
+    APIKey:  "sk-xxx",
+    Model:   "deepseek-chat",
+})
+resp, err := client.Chat(ctx, &dto.ChatRequest{
+    Messages: []dto.ChatMessage{{Role: dto.RoleUser, Content: "你好"}},
+})
+```
+
+详细用法见 [llm/README.md](llm/README.md)。
 
 ## task
 
