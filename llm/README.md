@@ -54,7 +54,9 @@ OpenAI 自身有**两套**互相独立的协议：
 llm/
 ├── dto/          # 统一请求/响应结构（对齐 OpenAI 协议）
 ├── provider/
-│   └── openai/   # OpenAI 兼容 provider（Chat/ChatStream）
+│   ├── openai/   # OpenAI 兼容 provider（Chat/ChatStream）
+│   ├── anthropic/# Anthropic Claude Messages provider（异协议，含双向映射）
+│   └── gemini/   # Google Gemini provider（异协议，含双向映射）
 ├── provider.go   # Provider 接口 + 注册表
 ├── config.go     # Config（BaseURL/APIKey/Model/HTTP 透传/Responses 开关）
 └── client.go     # 统一入口 Client
@@ -132,8 +134,18 @@ client.Chat(ctx, &dto.ChatRequest{
 2. 实现 `llm.Provider` 接口，在 `init()` 调用 `llm.RegisterProvider(name, factory)`。
 3. OpenAI 兼容供应商直接复用 `openai` provider，无需新包。
 
+### 已支持的供应商
+
+| Provider | 协议 | 说明 |
+|----------|------|------|
+| `openai` | OpenAI Chat Completions | 默认；通过 BaseURL + 模型名覆盖绝大多数 OpenAI 兼容供应商 |
+| `anthropic` | Claude Messages | 异协议，双向映射系统提示词、消息交替、tool_use/tool_result、流式事件 |
+| `gemini` | Gemini generateContent | 异协议，映射 contents/parts、systemInstruction、functionCall、流式 |
+
+使用异协议供应商只需改 `ProviderName`：`llm.Config{ProviderName: "anthropic", ...}`。
+
 ### 规划路线
 
 - **P0（已完成）**：`openai` 兼容 provider，`Chat` / `ChatStream`，覆盖绝大多数 LLM API。
-- **P1**：`anthropic`、`gemini` 异协议 provider 的双向字段映射。
+- **P1（已完成）**：`anthropic`、`gemini` 异协议 provider 的双向字段映射。
 - **增值能力**：Responses API / Embedding / Image / Audio。
