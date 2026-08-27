@@ -1,10 +1,11 @@
-package gtrace
+package otel
 
 import (
 	"context"
 	"fmt"
 	"time"
 
+	"github.com/morehao/golib/gtrace"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -15,7 +16,11 @@ import (
 
 type ExporterFactory func(ctx context.Context) (sdktrace.SpanExporter, error)
 
-func Init(ctx context.Context, cfg Config, ef ExporterFactory, opts ...Option) (*Provider, error) {
+// Init builds a real OpenTelemetry TracerProvider from gtrace.Config and the given
+// exporter factory, registers it process-wide, and installs it as the active
+// gtrace.Tracer. After a successful Init, every module of golib that uses gtrace
+// (gasync, gcron, ginserver, gresty, ...) emits real spans.
+func Init(ctx context.Context, cfg gtrace.Config, ef ExporterFactory, opts ...Option) (*Provider, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -24,7 +29,7 @@ func Init(ctx context.Context, cfg Config, ef ExporterFactory, opts ...Option) (
 	}
 
 	if cfg.Sampler == "" {
-		cfg.Sampler = SamplerTraceIDRatio
+		cfg.Sampler = gtrace.SamplerTraceIDRatio
 		if cfg.TraceIDRatio == 0 {
 			cfg.TraceIDRatio = 1.0
 		}
@@ -42,7 +47,7 @@ func Init(ctx context.Context, cfg Config, ef ExporterFactory, opts ...Option) (
 		cfg.ExportTimeout = 30 * time.Second
 	}
 
-	if err := ValidateConfig(cfg); err != nil {
+	if err := gtrace.ValidateConfig(cfg); err != nil {
 		return nil, err
 	}
 
@@ -106,6 +111,8 @@ func Init(ctx context.Context, cfg Config, ef ExporterFactory, opts ...Option) (
 
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(prop)
+
+	gtrace.SetTracer(&TracerAdapter{tracer: tp.Tracer(tracerName), propagator: prop})
 
 	return &Provider{
 		tp:         tp,

@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/morehao/golib/gconstant"
+	"github.com/morehao/golib/gtrace"
 	_ "github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestStreamResult_Read_Close(t *testing.T) {
@@ -363,12 +363,7 @@ func TestGetStreamInjectsOTelTraceAndRequestID(t *testing.T) {
 	}
 	client := NewClient(cfg)
 
-	tp := sdktrace.NewTracerProvider()
-	defer func() {
-		_ = tp.Shutdown(context.Background())
-	}()
-
-	ctx, span := tp.Tracer("ghttp-stream-test").Start(context.Background(), "stream-outbound")
+	ctx, span := gtrace.T().Start(context.Background(), "stream-outbound", gtrace.SpanKindClient)
 	defer span.End()
 	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
 

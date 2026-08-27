@@ -4,9 +4,10 @@ import (
 	"context"
 
 	"github.com/morehao/golib/gtrace"
+	"github.com/morehao/golib/gtrace/otel"
 )
 
-func NewGRPCProvider(ctx context.Context, serviceName, env string, cfg gtrace.TraceConfig) (*gtrace.Provider, error) {
+func NewGRPCProvider(ctx context.Context, serviceName, env string, cfg gtrace.TraceConfig) (*otel.Provider, error) {
 	eCfg := DefaultConfig()
 	eCfg.Endpoint = cfg.OTLP.Endpoint
 	eCfg.Insecure = cfg.OTLP.Insecure
@@ -14,5 +15,5 @@ func NewGRPCProvider(ctx context.Context, serviceName, env string, cfg gtrace.Tr
 		eCfg.Timeout = cfg.OTLP.Timeout
 	}
 
-	return gtrace.NewProvider(ctx, serviceName, env, cfg, NewExporterFactory(eCfg))
+	return otel.NewProvider(ctx, serviceName, env, cfg, NewExporterFactory(eCfg))
 }

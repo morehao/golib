@@ -1,7 +1,6 @@
 package ginmiddleware
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,8 +14,8 @@ import (
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 	_ "github.com/morehao/golib/glog/driver/zap"
+	"github.com/morehao/golib/gtrace"
 	"github.com/stretchr/testify/assert"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func init() {
@@ -27,7 +26,6 @@ func init() {
 type logFixture struct {
 	dir    string
 	engine *gin.Engine
-	tp     *sdktrace.TracerProvider
 }
 
 func newLogFixture(t *testing.T, opts ...AccessLogOption) *logFixture {
@@ -44,10 +42,7 @@ func newLogFixture(t *testing.T, opts ...AccessLogOption) *logFixture {
 	assert.NoError(t, glog.InitLogger(cfg))
 	t.Cleanup(func() { _ = glog.Close() })
 
-	tp := sdktrace.NewTracerProvider()
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
-
-	return &logFixture{dir: dir, engine: gin.New(), tp: tp}
+	return &logFixture{dir: dir, engine: gin.New()}
 }
 
 func (f *logFixture) flushAndRead() string {
@@ -60,15 +55,20 @@ func (f *logFixture) flushAndRead() string {
 	return string(b)
 }
 
-// do serves target/body through the middleware. A sampled server span is started in the
-// request context (as otelgin would) so otel injection sees a valid, sampled context.
+// do serves target/body through the middleware. A sampled span is placed in the
+// request context first (as the gin trace middleware would) so that otel injection
+// sees a valid, sampled context.
 func (f *logFixture) do(t *testing.T, path, body string, handler gin.HandlerFunc, opts ...AccessLogOption) *httptest.ResponseRecorder {
 	t.Helper()
 
 	spanInject := func(c *gin.Context) {
-		spanCtx, span := f.tp.Tracer("accesslog-test").Start(c.Request.Context(), "test")
-		defer span.End()
-		c.Request = c.Request.WithContext(spanCtx)
+		sc := gtrace.SpanContext{
+			TraceID: strings.Repeat("a", 32),
+			SpanID:  strings.Repeat("b", 16),
+			Sampled: true,
+			Valid:   true,
+		}
+		c.Request = c.Request.WithContext(gtrace.ContextWithSpanContext(c.Request.Context(), sc))
 		c.Next()
 	}
 

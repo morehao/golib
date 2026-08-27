@@ -16,7 +16,6 @@ import (
 	"github.com/morehao/golib/gtrace"
 	"github.com/morehao/golib/gutil"
 	"github.com/stretchr/testify/assert"
-	"go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestSlogLoggerInit(t *testing.T) {
@@ -222,12 +221,7 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
-	tp := trace.NewTracerProvider()
-	defer func() {
-		_ = tp.Shutdown(context.Background())
-	}()
-
-	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx, span := gtrace.T().Start(context.Background(), "test-span", gtrace.SpanKindInternal)
 	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace fields", "key", "value")
 	span.End()
@@ -259,12 +253,7 @@ func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 	logger, err := glog.NewLogger(config)
 	assert.Nil(t, err)
 
-	tp := trace.NewTracerProvider()
-	defer func() {
-		_ = tp.Shutdown(context.Background())
-	}()
-
-	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx, span := gtrace.T().Start(context.Background(), "test-span", gtrace.SpanKindInternal)
 	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace fields disabled", "key", "value")
 	span.End()
@@ -296,12 +285,7 @@ func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
 	logger, err := glog.NewLogger(config, glog.WithOTELTrace(false))
 	assert.Nil(t, err)
 
-	tp := trace.NewTracerProvider()
-	defer func() {
-		_ = tp.Shutdown(context.Background())
-	}()
-
-	ctx, span := tp.Tracer("glog-test").Start(context.Background(), "test-span")
+	ctx, span := gtrace.T().Start(context.Background(), "test-span", gtrace.SpanKindInternal)
 	ctx = gtrace.InjectTraceFields(ctx)
 	logger.Infow(ctx, "otel trace option override", "key", "value")
 	span.End()

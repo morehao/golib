@@ -1,12 +1,14 @@
-package gtrace
+package otel
 
 import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/morehao/golib/gtrace"
 )
 
-func NewProvider(ctx context.Context, serviceName, env string, cfg TraceConfig, ef ExporterFactory) (*Provider, error) {
+func NewProvider(ctx context.Context, serviceName, env string, cfg gtrace.TraceConfig, ef ExporterFactory) (*Provider, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -19,12 +21,12 @@ func NewProvider(ctx context.Context, serviceName, env string, cfg TraceConfig, 
 		return nil, nil
 	}
 
-	sampler, err := ParseSampler(cfg.Sampler)
+	sampler, err := gtrace.ParseSampler(cfg.Sampler)
 	if err != nil {
 		return nil, fmt.Errorf("new trace provider failed: %w", err)
 	}
 
-	tCfg := DefaultConfig(serviceName)
+	tCfg := gtrace.DefaultConfig(serviceName)
 	tCfg.ServiceVersion = cfg.ServiceVersion
 	tCfg.Environment = env
 	tCfg.TraceIDRatio = cfg.TraceIDRatio

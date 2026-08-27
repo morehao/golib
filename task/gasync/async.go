@@ -10,7 +10,7 @@ import (
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/gutil"
-	"go.opentelemetry.io/otel"
+	"github.com/morehao/golib/gtrace"
 	"gorm.io/gorm"
 )
 
@@ -116,7 +116,7 @@ func (c *Client) Enqueue(ctx context.Context, t Task, opts ...asynq.Option) (*as
 	fullOpts = append(fullOpts, opts...)
 
 	headers := make(map[string]string)
-	otel.GetTextMapPropagator().Inject(ctx, headerCarrier(headers))
+	gtrace.T().Inject(ctx, headerCarrier(headers))
 	// 透传生产端 request id，消费端恢复后写入 ctx / 执行记录，便于跨进程关联
 	if reqID := gutil.GetRequestID(ctx); reqID != "" {
 		headers[gconstant.HeaderRequestID] = reqID

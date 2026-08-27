@@ -1,4 +1,4 @@
-package gtrace
+package otel
 
 import (
 	"context"

@@ -12,9 +12,9 @@ import (
 
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gtrace"
 	_ "github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"resty.dev/v3"
 )
 
@@ -181,12 +181,7 @@ func TestClientInjectsOTelTraceAndRequestID(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient()
-	tp := sdktrace.NewTracerProvider()
-	defer func() {
-		_ = tp.Shutdown(context.Background())
-	}()
-
-	ctx, span := tp.Tracer("gresty-test").Start(context.Background(), "outbound")
+	ctx, span := gtrace.T().Start(context.Background(), "outbound", gtrace.SpanKindClient)
 	defer span.End()
 	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
 

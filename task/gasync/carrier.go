@@ -1,7 +1,7 @@
 package gasync
 
 import (
-	"go.opentelemetry.io/otel/propagation"
+	"github.com/morehao/golib/gtrace"
 )
 
 type headerCarrier map[string]string
@@ -18,4 +18,4 @@ func (c headerCarrier) Keys() []string {
 	return out
 }
 
-var _ propagation.TextMapCarrier = headerCarrier{}
+var _ gtrace.TextMapCarrier = headerCarrier{}

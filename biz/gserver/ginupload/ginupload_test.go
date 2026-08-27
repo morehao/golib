@@ -131,7 +131,7 @@ func newTestFileStore(t *testing.T) *filestore.FileStore {
 func setupRouter(fs *filestore.FileStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	groups := ginserver.NewRouterGroups(r, testAppName, ginserver.VersionGroup{Version: testVersion})
+	groups := ginserver.NewRouterGroups(r, testAppName, []ginserver.VersionGroup{{Version: testVersion}})
 	Register(groups.MustGetGroup(testVersion), fs)
 	return r
 }
@@ -606,7 +606,7 @@ func TestHandleUpload_StorageFailure(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	groups := ginserver.NewRouterGroups(r, testAppName, ginserver.VersionGroup{Version: testVersion})
+	groups := ginserver.NewRouterGroups(r, testAppName, []ginserver.VersionGroup{{Version: testVersion}})
 	Register(groups.MustGetGroup(testVersion), fs)
 
 	w := postForm(r, testAPIPrefix+"/files", map[string]string{"content_hash": "fail-fp"}, "file", "test.txt", "data")
@@ -923,7 +923,7 @@ func presignGet(router *gin.Engine, bucket, key string, token, expires string) *
 func setupPresignRouter(fs *filestore.FileStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	groups := ginserver.NewRouterGroups(r, testAppName, ginserver.VersionGroup{Version: testVersion})
+	groups := ginserver.NewRouterGroups(r, testAppName, []ginserver.VersionGroup{{Version: testVersion}})
 	Register(groups.MustGetGroup(testVersion), fs)
 	return r
 }

@@ -6,58 +6,105 @@ import (
 
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/gutil"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 )
 
-// InjectTraceFields returns a new context with the current otel span context written
+// InjectTraceFields returns a new context with the current span context written
 // into plain gconstant keys (gconstant.KeyTraceID/KeySpanID/KeyTraceFlags). It is the
-// single otel-related write point that bridges a span to plain context keys; downstream
-// consumers only read these plain keys and stay decoupled from otel.
+// single trace-field write point that bridges a span to plain context keys; downstream
+// consumers (e.g. glog) only read these plain keys and stay decoupled from any
+// concrete tracing implementation.
 func InjectTraceFields(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	sc := trace.SpanContextFromContext(ctx)
-	ctx = context.WithValue(ctx, gconstant.KeyTraceID, sc.TraceID().String())
-	ctx = context.WithValue(ctx, gconstant.KeySpanID, sc.SpanID().String())
-	ctx = context.WithValue(ctx, gconstant.KeyTraceFlags, sc.TraceFlags().String())
+	sc, ok := SpanContextFromContext(ctx)
+	ctx = context.WithValue(ctx, gconstant.KeyTraceID, traceOrEmpty(sc, ok))
+	ctx = context.WithValue(ctx, gconstant.KeySpanID, spanOrEmpty(sc, ok))
+	ctx = context.WithValue(ctx, gconstant.KeyTraceFlags, flagsOrEmpty(sc, ok))
 	return ctx
 }
 
+func traceOrEmpty(sc SpanContext, ok bool) string {
+	if ok && sc.Valid {
+		return sc.TraceID
+	}
+	return ""
+}
+
+func spanOrEmpty(sc SpanContext, ok bool) string {
+	if ok && sc.Valid {
+		return sc.SpanID
+	}
+	return ""
+}
+
+func flagsOrEmpty(sc SpanContext, ok bool) string {
+	if !ok || !sc.Valid {
+		return ""
+	}
+	if sc.Sampled {
+		return "01"
+	}
+	return "00"
+}
+
 // InjectHTTPResponseTrace injects the current (sampled) span context into an HTTP response
-// header as the W3C traceparent (and tracestate) so the caller / frontend can link to the
-// trace recorded by this request.
+// header as the W3C traceparent so the caller / frontend can link to the trace of this request.
 //
 // It returns false and leaves the header untouched when there is no valid, sampled span —
-// i.e. when otel is disabled or the request was rejected by the sampler — to avoid
+// i.e. when tracing is disabled or the request was rejected by the sampler — to avoid
 // misreporting an un-recorded request as sampled.
-//
-// It uses an explicit W3C propagator (the same one configured by Init) so the behaviour
-// does not depend on the process-wide global propagator being set.
 func InjectHTTPResponseTrace(ctx context.Context, h http.Header) bool {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	sc := trace.SpanContextFromContext(ctx)
-	if !sc.IsValid() || !sc.IsSampled() {
+	sc, ok := SpanContextFromContext(ctx)
+	if !ok || !sc.Valid || !sc.Sampled {
 		return false
 	}
-	propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(h))
+	T().Inject(ctx, httpHeaderCarrier{h})
 	return true
 }
 
-// traceHeaderPropagator is the explicit W3C propagator used by InjectTraceAndRequestID.
-// It mirrors the default composite configured by Init (TraceContext + Baggage) without
-// depending on the process-wide global propagator being set, so the injector also works
-// when gtrace was not initialised.
-var traceHeaderPropagator = propagation.NewCompositeTextMapPropagator(
-	propagation.TraceContext{},
-	propagation.Baggage{},
-)
+// httpHeaderCarrier adapts an http.Header to a TextMapCarrier.
+type httpHeaderCarrier struct{ h http.Header }
 
-// InjectTraceAndRequestID injects the current span context (as W3C traceparent/tracestate
-// and baggage) and the request id into an HTTP header, returning the header.
+func (c httpHeaderCarrier) Get(key string) string {
+	if c.h == nil {
+		return ""
+	}
+	return c.h.Get(key)
+}
+
+func (c httpHeaderCarrier) Set(key string, value string) {
+	c.h.Set(key, value)
+}
+
+func (c httpHeaderCarrier) Keys() []string {
+	if c.h == nil {
+		return nil
+	}
+	out := make([]string, 0, len(c.h))
+	for k := range c.h {
+		out = append(out, k)
+	}
+	return out
+}
+
+// InjectToCarrier injects the span context carried by ctx into a generic TextMapCarrier
+// (HTTP header, asynq task headers, ...). It is a thin wrapper over T().Inject.
+func InjectToCarrier(ctx context.Context, carrier TextMapCarrier) {
+	T().Inject(ctx, carrier)
+}
+
+// ExtractFromCarrier extracts a span context from a generic TextMapCarrier into ctx,
+// wrapping T().Extract.
+func ExtractFromCarrier(ctx context.Context, carrier TextMapCarrier) context.Context {
+	return T().Extract(ctx, carrier)
+}
+
+// InjectTraceAndRequestID injects the current span context (as W3C traceparent) and the
+// request id into an HTTP header, returning the header.
 //
 // The request id is taken from the app request id stored on the context when present;
 // otherwise a new id is generated and written when the header has none yet.
@@ -69,7 +116,7 @@ func InjectTraceAndRequestID(ctx context.Context, header http.Header) http.Heade
 		header = make(http.Header)
 	}
 
-	traceHeaderPropagator.Inject(ctx, propagation.HeaderCarrier(header))
+	T().Inject(ctx, httpHeaderCarrier{header})
 
 	requestID := gutil.GetRequestID(ctx)
 	if requestID != "" {
