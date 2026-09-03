@@ -1,4 +1,4 @@
-package gtrace
+package otel
 
 import (
 	"go.opentelemetry.io/otel/propagation"

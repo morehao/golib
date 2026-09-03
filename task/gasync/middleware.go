@@ -8,11 +8,7 @@ import (
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/gtrace"
 	"github.com/morehao/golib/gutil"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/trace"
 )
-
-const tracerName = "github.com/morehao/golib/task/gasync"
 
 // 落库字段长度上限，避免大 payload / 超长错误信息撑大执行记录表。
 const (
@@ -57,15 +53,14 @@ func (s *Server) logMiddleware(next asynq.Handler) asynq.Handler {
 func (s *Server) traceMiddleware(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) error {
 		carrier := headerCarrier(task.Headers())
-		ctx = otel.GetTextMapPropagator().Extract(ctx, carrier)
+		ctx = gtrace.T().Extract(ctx, carrier)
 
 		// 透传生产端 request id（与 Enqueue 侧注入对应）
 		if reqID := carrier.Get(gconstant.HeaderRequestID); reqID != "" {
 			ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, reqID)
 		}
 
-		tracer := otel.Tracer(tracerName)
-		ctx, span := tracer.Start(ctx, task.Type(), trace.WithSpanKind(trace.SpanKindConsumer))
+		ctx, span := gtrace.T().Start(ctx, task.Type(), gtrace.SpanKindConsumer)
 		defer span.End()
 
 		ctx = gtrace.InjectTraceFields(ctx)

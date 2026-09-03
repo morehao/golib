@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/morehao/golib/gtrace"
-	"github.com/morehao/golib/gtrace/internal/exporterutil"
+	"github.com/morehao/golib/gtrace/otel"
+	"github.com/morehao/golib/gtrace/otel/internal/exporterutil"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-func NewExporterFactory(cfg Config) gtrace.ExporterFactory {
+func NewExporterFactory(cfg Config) otel.ExporterFactory {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = DefaultConfig().Timeout
 	}

@@ -1,11 +1,11 @@
-package otlptracehttp
+package otlptracegrpc
 
 import (
 	"context"
 	"errors"
 	"testing"
 
-	"github.com/morehao/golib/gtrace/internal/exporterutil"
+	"github.com/morehao/golib/gtrace/otel/internal/exporterutil"
 	"github.com/stretchr/testify/assert"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -14,7 +14,6 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	assert.False(t, cfg.Insecure)
 	assert.NotZero(t, cfg.Timeout)
-	assert.Equal(t, DefaultURLPath, cfg.URLPath)
 }
 
 func TestFactoryEmptyEndpoint(t *testing.T) {
@@ -24,20 +23,8 @@ func TestFactoryEmptyEndpoint(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func TestFactoryInvalidCompression(t *testing.T) {
-	factory := NewExporterFactory(Config{
-		Endpoint:    "127.0.0.1:4318",
-		Insecure:    true,
-		Compression: "br",
-	})
-
-	exporter, err := factory(context.Background())
-	assert.Nil(t, exporter)
-	assert.Error(t, err)
-}
-
 func TestFactoryType(t *testing.T) {
-	factory := NewExporterFactory(Config{Endpoint: "127.0.0.1:4318", Insecure: true})
+	factory := NewExporterFactory(Config{Endpoint: "127.0.0.1:4317", Insecure: true})
 	assert.NotNil(t, factory)
 
 	var _ func(context.Context) (sdktrace.SpanExporter, error) = factory

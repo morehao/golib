@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/morehao/golib/gconstant"
+	"github.com/morehao/golib/gtrace"
 	"github.com/morehao/golib/gutil"
 	_ "github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // newHTTPBinHandler 构造一个模拟 httpbin.gets/get/post 行为的服务，返回其 URL。
@@ -251,12 +251,7 @@ func TestGetInjectsOTelTraceAndRequestID(t *testing.T) {
 	}
 	client := NewClient(cfg)
 
-	tp := sdktrace.NewTracerProvider()
-	defer func() {
-		_ = tp.Shutdown(context.Background())
-	}()
-
-	ctx, span := tp.Tracer("ghttp-test").Start(context.Background(), "outbound")
+	ctx, span := gtrace.T().Start(context.Background(), "outbound", gtrace.SpanKindClient)
 	defer span.End()
 	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
 
