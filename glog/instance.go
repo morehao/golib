@@ -52,9 +52,17 @@ func GetDefaultLogger() Logger {
 	return ensureLogger()
 }
 
+// GetLoggerConfig 返回当前全局 logger 的生效配置。
+//
+// 全局 logger 未初始化时返回内置默认配置（GetDefaultLogConfig），而不是 nil：
+// 此时 ensureLogger 返回的是 nopLogger，其 GetConfig 为 nil，若直接透出会让
+// 各包装层（dbgorm/dbredis/dbes 等）在 AppendExtraKeys 上触发空指针。
+// 返回值与 NewLogger(nil) 使用的配置保持一致，即“未初始化 → 用默认配置”。
 func GetLoggerConfig() *LogConfig {
-	log := ensureLogger()
-	return log.GetConfig()
+	if cfg := ensureLogger().GetConfig(); cfg != nil {
+		return cfg
+	}
+	return GetDefaultLogConfig()
 }
 
 // 以下包级函数均内联了 CallerOffsetLogger 断言与兜底逻辑，使函数体超过 Go 内联器
