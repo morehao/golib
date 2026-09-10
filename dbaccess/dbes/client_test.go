@@ -87,3 +87,11 @@ func TestNewSimpleES(t *testing.T) {
 	glog.Infof(ctx, "search result: %s", gutil.ToJsonString(res))
 	t.Log(gutil.ToJsonString(res))
 }
+
+// 回归：显式传入 nil 日志配置时不应 panic（曾因 AppendExtraKeys 收到 nil 而空指针）。
+// elasticsearch.NewClient 不做即时连接，因此本用例无需真实 ES。
+func TestNewWithNilLogConfig(t *testing.T) {
+	assert.NotPanics(t, func() {
+		_, _, _ = New(&ESConfig{Service: "es", Addr: "http://127.0.0.1:1"}, WithLogConfig(nil))
+	})
+}

@@ -5,7 +5,7 @@ Go 数据库访问统一封装库，提供对多种数据库（GORM、Redis、El
 ## 概述
 
 `dbaccess` 是一个数据库访问层的统一封装，集成了三种主流数据库客户端：
-- **dbgorm**: GORM 数据库客户端（支持 MySQL、PostgreSQL）
+- **dbgorm**: GORM 数据库客户端（支持 MySQL、PostgreSQL、SQLite）
 - **dbredis**: Redis 客户端
 - **dbes**: Elasticsearch 客户端
 
@@ -98,6 +98,44 @@ type GormConfig struct {
 // 或
 "postgresql://user:password@host:port/database?sslmode=disable"
 ```
+
+**SQLite：**
+```go
+"sqlite://:memory:"                  // 内存库，连接池内共享同一个库
+"sqlite:///abs/path/app.db"          // 绝对路径
+"sqlite://./data/app.db"             // 相对路径
+"sqlite://data/app.db?mode=ro"       // 附带 SQLite URI 连接参数
+```
+
+SQLite 的 URL 处理遵循以下约定：
+
+- scheme 大小写不敏感，`sqlite://` 与 `SQLITE://` 等价。
+- 查询参数按 SQLite URI 参数解析，因此 `mode`、`cache`、`immutable`、`_pragma` 等都会真正生效。
+- 文件库默认注入 `_txlock=immediate`（事务以 `BEGIN IMMEDIATE` 开始）。SQLite 默认的
+  `BEGIN DEFERRED` 在读写锁升级时不会被 `busy_timeout` 重试，会直接报
+  `database is locked`；如需改回，显式传入 `_txlock=deferred` 覆盖即可。
+- 内存库统一使用 `file::memory:?cache=shared`。直接用 `:memory:` 时连接池中每条连接
+  都是独立的空库，容易报 `no such table`。
+- 日志中的 `database` 字段为文件路径，建议显式设置 `Config.Service` 以获得可读的服务名。
+
+> **并发提示**：SQLite 是单写入者模型。文件库已通过 `_txlock=immediate` 规避锁升级失败；
+> 内存库在并发事务下仍可能返回 `database table is locked`，此时请将 `MaxOpenConns` 设为 `1`。
+> 需要更高读写并发时，可显式追加 `_journal_mode=WAL`。
+
+#### 驱动注册
+
+dialector 通过 `init()` 自注册，**必须显式空导入**对应驱动包，否则 `dbgorm.New` 会报
+`no registered dialector matches url`：
+
+```go
+import (
+    _ "github.com/morehao/golib/dbaccess/dbgorm/driver/mysql"
+    _ "github.com/morehao/golib/dbaccess/dbgorm/driver/postgres"
+    _ "github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
+)
+```
+
+按需导入即可，只使用 SQLite 时无需引入 MySQL/PostgreSQL 驱动。
 
 #### 使用示例
 
@@ -403,6 +441,7 @@ simpleClient, typedClient, err := dbes.New(cfg, dbes.WithLogConfig(customLogCfg)
 `dbgorm` 仅支持 URI 格式的数据库连接：
 - MySQL：必须以 `mysql://` 开头
 - PostgreSQL：必须以 `postgres://` 或 `postgresql://` 开头
+- SQLite：必须以 `sqlite://` 开头（大小写不敏感）
 
 ### 上下文传递
 
@@ -427,6 +466,12 @@ client.Get(ctx, "key")
 - `gorm.io/gorm` - GORM ORM
 - `gorm.io/driver/mysql` - MySQL 驱动
 - `gorm.io/driver/postgres` - PostgreSQL 驱动
+- `gorm.io/driver/sqlite` - SQLite 驱动
 - `github.com/redis/go-redis/v9` - Redis 客户端
 - `github.com/elastic/go-elasticsearch/v8` - Elasticsearch 客户端
 - `github.com/morehao/golib/glog` - 日志库
+
+> **SQLite 与 CGO**：`gorm.io/driver/sqlite` 依赖 `github.com/mattn/go-sqlite3`，需要 CGO。
+> `CGO_ENABLED=0` 时仍能编译通过，但会在打开连接时报
+> `Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to work`，
+> 请确保构建 SQLite 版程序时开启 CGO。

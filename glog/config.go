@@ -74,7 +74,12 @@ func (wc *WriterConfig) EffectiveRotateConfig() (maxSize, maxBackups, maxAge int
 	return
 }
 
+// AppendExtraKeys 去重追加日志字段。
+// cfg 为 nil 时直接返回，避免各包装层在配置缺失时触发空指针。
 func AppendExtraKeys(cfg *LogConfig, keys ...string) {
+	if cfg == nil {
+		return
+	}
 	for _, key := range keys {
 		exists := false
 		for _, ek := range cfg.ExtraKeys {

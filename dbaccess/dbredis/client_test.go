@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/internal/testutil"
@@ -142,4 +143,16 @@ func TestSetNX(t *testing.T) {
 	ok1, setErr1 := redisClient.SetNX(context.Background(), key, "value123", time.Second*2).Result()
 	assert.Nil(t, setErr1)
 	assert.True(t, ok1)
+}
+
+// 回归：显式传入 nil 日志配置时不应 panic（曾因 AppendExtraKeys 收到 nil 而空指针）。
+func TestNewWithNilLogConfig(t *testing.T) {
+	mr := miniredis.RunT(t)
+	assert.NotPanics(t, func() {
+		rdb, err := New(&RedisConfig{Service: "test", Addr: mr.Addr()}, WithLogConfig(nil))
+		assert.NoError(t, err)
+		if rdb != nil {
+			assert.NoError(t, rdb.Close())
+		}
+	})
 }
