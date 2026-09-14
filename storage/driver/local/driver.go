@@ -10,11 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/morehao/golib/storage"
@@ -65,9 +66,29 @@ func New(cfg storage.Config) (storage.Storage, error) {
 		baseURL:    cfg.BaseURL,
 		signSecret: cfg.SignSecret,
 		keys:       newKeyLocks(),
-		mp:         newMultipartStore(cfg.BaseDir),
+		mp:         newMultipartStore(cfg.BaseDir, multipartTTL(cfg)),
 		pb:         pb,
 	}, nil
+}
+
+// multipartTTL 解析分片会话存活时间：Config.MultipartTTL 优先，
+// 未配置用默认值；显式配置为负值表示关闭自动回收。
+func multipartTTL(cfg storage.Config) time.Duration {
+	if cfg.MultipartTTL < 0 {
+		return -1
+	}
+	if cfg.MultipartTTL == 0 {
+		return defaultMultipartTTL
+	}
+	return cfg.MultipartTTL
+}
+
+// CleanupExpiredMultipart 回收过期分片会话（storage.MultipartCleaner）。
+func (d *driver) CleanupExpiredMultipart(ctx context.Context, ttl time.Duration) (int, error) {
+	if ttl == 0 {
+		ttl = d.mp.ttl
+	}
+	return d.mp.CleanupExpired(ttl)
 }
 
 func (d *driver) dataPath(bucket, key string) string {
@@ -109,8 +130,8 @@ func (d *driver) PutObject(ctx context.Context, bucket, key string, body io.Read
 	}
 
 	lockKey := bucket + ":" + key
-	d.keys.lock(lockKey)
-	defer d.keys.unlock(lockKey)
+	unlock := d.keys.Lock(lockKey)
+	defer unlock()
 
 	dataP := d.dataPath(bucket, key)
 
@@ -163,7 +184,7 @@ func (d *driver) PutObject(ctx context.Context, bucket, key string, body io.Read
 		LastModified: time.Now().UTC(),
 		Metadata:     o.Metadata,
 		DataMtime:    fi.ModTime(),
-		DataSize:     written,
+		DataSize:     fi.Size(),
 	}
 	if meta.ContentType == "" {
 		meta.ContentType = "application/octet-stream"
@@ -199,8 +220,8 @@ func (d *driver) GetObject(ctx context.Context, bucket, key string, opts ...stor
 	}
 
 	lockKey := bucket + ":" + key
-	d.keys.rlock(lockKey)
-	defer d.keys.runlock(lockKey)
+	unlock := d.keys.RLock(lockKey)
+	defer unlock()
 
 	dataP := d.dataPath(bucket, key)
 	meta, err := syncMeta(d.baseDir, bucket, key, dataP, "", nil)
@@ -239,8 +260,8 @@ func (d *driver) DeleteObject(ctx context.Context, bucket, key string) error {
 		return err
 	}
 	lockKey := bucket + ":" + key
-	d.keys.lock(lockKey)
-	defer d.keys.unlock(lockKey)
+	unlock := d.keys.Lock(lockKey)
+	defer unlock()
 
 	dataP := d.dataPath(bucket, key)
 	metaP := metaPath(d.baseDir, bucket, key)
@@ -286,8 +307,8 @@ func (d *driver) ListObjects(ctx context.Context, bucket, prefix string, opts ..
 		opt(o)
 	}
 	lockKey := bucket + ":"
-	d.keys.rlock(lockKey)
-	defer d.keys.runlock(lockKey)
+	unlock := d.keys.RLock(lockKey)
+	defer unlock()
 
 	prefixDir := filepath.Join(d.baseDir, "data", bucket)
 	if _, err := os.Stat(prefixDir); err != nil {
@@ -297,120 +318,126 @@ func (d *driver) ListObjects(ctx context.Context, bucket, prefix string, opts ..
 		return nil, err
 	}
 
-	type listEntry struct {
-		key  string
-		meta *metaFile
-	}
-
-	entries := make([]listEntry, 0)
-	common := make([]string, 0)
-	commonSet := map[string]struct{}{}
-
 	useDelimiter := !o.Recursive
 	marker := o.StartAfter
 	if o.ContinuationToken != "" {
 		marker = o.ContinuationToken
 	}
+	// MaxKeys 缺省时给一个上界，避免无界遍历把整个 bucket 装进内存（S3 默认 1000）。
+	maxKeys := o.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = defaultListMaxKeys
+	}
 
-	err := filepath.Walk(prefixDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
+	out := &storage.ListObjectsOutput{
+		Contents:       make([]storage.ObjectInfo, 0),
+		CommonPrefixes: make([]string, 0),
+	}
+	commonSet := map[string]struct{}{}
+	pageFull := false
+	truncated := false
+
+	// filepath.WalkDir 按字典序遍历，因此：
+	//  1) 结果天然有序，无需全量收集后再排序（内存上界 = MaxKeys）；
+	//  2) 收满 MaxKeys 即可提前终止遍历，不必走完整个 bucket。
+	stop := errors.New("list: page full")
+	err := filepath.WalkDir(prefixDir, func(p string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
 				return nil
 			}
-			return err
+			return walkErr
 		}
-		if info.IsDir() {
+		if entry.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(prefixDir, p)
-		if err != nil {
-			return nil
+		rel, relErr := filepath.Rel(prefixDir, p)
+		if relErr != nil {
+			return relErr
 		}
 		relSlash := filepath.ToSlash(rel)
 		if prefix != "" && !strings.HasPrefix(relSlash, prefix) {
 			return nil
 		}
-		if marker != "" && relSlash <= marker {
-			return nil
-		}
-
+		// 先判定本条目是否是「新的一项」（内容对象或新的公共前缀）
+		var itemKey, itemPrefix string
 		if useDelimiter {
 			rest := relSlash[len(prefix):]
-			sepIdx := strings.IndexByte(rest, '/')
-			if sepIdx >= 0 {
-				commonPrefix := prefix + rest[:sepIdx+1]
-				if _, exists := commonSet[commonPrefix]; !exists {
-					commonSet[commonPrefix] = struct{}{}
-					common = append(common, commonPrefix)
+			if sepIdx := strings.IndexByte(rest, '/'); sepIdx >= 0 {
+				cp := prefix + rest[:sepIdx+1]
+				if _, exists := commonSet[cp]; exists {
+					return nil
 				}
-				return nil
+				itemPrefix = cp
+			} else {
+				itemKey = relSlash
 			}
+		} else {
+			itemKey = relSlash
 		}
 
-		meta, err := readMeta(d.baseDir, bucket, relSlash)
-		if err != nil {
+		// 游标必须按「项」比较而不是按文件路径：折叠后的公共前缀 c1/ 对应的
+		// 文件路径是 c1/x.txt > c1/，若按路径比较会把已返回的 c1/ 再返回一次。
+		item := itemKey
+		if itemPrefix != "" {
+			item = itemPrefix
+		}
+		if marker != "" && item <= marker {
 			return nil
 		}
-		entries = append(entries, listEntry{key: relSlash, meta: meta})
+
+		// 本页已满且确实还有下一项：标记截断并停止遍历
+		//（仅当还有下一项时才置 IsTruncated，避免多一次空页往返）
+		if pageFull {
+			truncated = true
+			return stop
+		}
+
+		if itemPrefix != "" {
+			commonSet[itemPrefix] = struct{}{}
+			out.CommonPrefixes = append(out.CommonPrefixes, itemPrefix)
+		} else {
+			// meta 只是缓存：丢失/损坏时按数据文件重建，绝不静默跳过
+			//（静默跳过会让对象在列表里凭空消失）；数据文件本身读不到才跳过。
+			meta, metaErr := syncMeta(d.baseDir, bucket, itemKey, d.dataPath(bucket, itemKey), "", nil)
+			if metaErr != nil {
+				if errors.Is(metaErr, os.ErrNotExist) {
+					return nil
+				}
+				return fmt.Errorf("list objects: %s: %w", itemKey, metaErr)
+			}
+			out.Contents = append(out.Contents, storage.ObjectInfo{
+				Path:         d.newPath(bucket, itemKey),
+				Size:         meta.Size,
+				ETag:         meta.ETag,
+				ContentType:  meta.ContentType,
+				LastModified: meta.LastModified,
+				Metadata:     meta.Metadata,
+			})
+		}
+
+		if int64(len(out.Contents)+len(out.CommonPrefixes)) >= maxKeys {
+			pageFull = true
+		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, stop) {
 		return nil, err
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].key < entries[j].key
-	})
-	sort.Strings(common)
-
-	items := make([]string, 0, len(entries)+len(common))
-	itemKind := make(map[string]bool, len(entries)+len(common))
-	entryByKey := make(map[string]listEntry, len(entries))
-	for _, entry := range entries {
-		items = append(items, entry.key)
-		itemKind[entry.key] = true
-		entryByKey[entry.key] = entry
-	}
-	for _, prefix := range common {
-		items = append(items, prefix)
-	}
-	sort.Strings(items)
-
-	limit := len(items)
-	truncated := false
-	if o.MaxKeys > 0 && int64(limit) > o.MaxKeys {
-		limit = int(o.MaxKeys)
-		truncated = true
-	}
-	selected := items[:limit]
-
-	contents := make([]storage.ObjectInfo, 0, len(selected))
-	commonPrefixes := make([]string, 0, len(selected))
-	for _, item := range selected {
-		if itemKind[item] {
-			entry := entryByKey[item]
-			contents = append(contents, storage.ObjectInfo{
-				Path:         d.newPath(bucket, entry.key),
-				Size:         entry.meta.Size,
-				ETag:         entry.meta.ETag,
-				ContentType:  entry.meta.ContentType,
-				LastModified: entry.meta.LastModified,
-				Metadata:     entry.meta.Metadata,
-			})
-			continue
-		}
-		commonPrefixes = append(commonPrefixes, item)
-	}
-
-	out := &storage.ListObjectsOutput{
-		Contents:       contents,
-		CommonPrefixes: commonPrefixes,
-	}
+	out.IsTruncated = truncated
 	if truncated {
-		out.IsTruncated = true
-		if len(selected) > 0 {
-			out.NextContinuationToken = selected[len(selected)-1]
+		// 续传游标取本页最后一项（内容 key 或公共前缀）
+		last := ""
+		if len(out.CommonPrefixes) > 0 {
+			last = out.CommonPrefixes[len(out.CommonPrefixes)-1]
 		}
+		if len(out.Contents) > 0 {
+			if key := out.Contents[len(out.Contents)-1].Path.Key(); key > last {
+				last = key
+			}
+		}
+		out.NextContinuationToken = last
 	}
 	return out, nil
 }
@@ -425,8 +452,8 @@ func (d *driver) CreateMultipartUpload(ctx context.Context, bucket, key string, 
 		return "", err
 	}
 	lockKey := bucket + ":" + key
-	d.keys.lock(lockKey)
-	defer d.keys.unlock(lockKey)
+	unlock := d.keys.Lock(lockKey)
+	defer unlock()
 
 	o := &storage.PutOptions{}
 	for _, opt := range opts {
@@ -443,16 +470,20 @@ func (d *driver) UploadPart(ctx context.Context, bucket, key, uploadID string, p
 		return nil, err
 	}
 	lockKey := bucket + ":" + key
-	d.keys.lock(lockKey)
-	defer d.keys.unlock(lockKey)
+	unlock := d.keys.Lock(lockKey)
+	defer unlock()
 
 	if _, err := d.mp.Validate(uploadID, bucket, key); err != nil {
 		return nil, err
 	}
-	if err := d.mp.WritePart(uploadID, partNumber, body, 0); err != nil {
+	if partNumber <= 0 {
+		return nil, fmt.Errorf("%w: part number must be positive", storage.ErrInvalidArgument)
+	}
+	etag, err := d.mp.WritePart(uploadID, partNumber, body, 0)
+	if err != nil {
 		return nil, err
 	}
-	return &storage.CompletedPart{PartNumber: partNumber, ETag: fmt.Sprintf("part-%d", partNumber)}, nil
+	return &storage.CompletedPart{PartNumber: partNumber, ETag: etag}, nil
 }
 
 func (d *driver) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []storage.CompletedPart) error {
@@ -463,8 +494,8 @@ func (d *driver) CompleteMultipartUpload(ctx context.Context, bucket, key, uploa
 		return err
 	}
 	lockKey := bucket + ":" + key
-	d.keys.lock(lockKey)
-	defer d.keys.unlock(lockKey)
+	unlock := d.keys.Lock(lockKey)
+	defer unlock()
 
 	um, err := d.mp.Validate(uploadID, bucket, key)
 	if err != nil {
@@ -486,6 +517,11 @@ func (d *driver) CompleteMultipartUpload(ctx context.Context, bucket, key, uploa
 		return err
 	}
 	if err := os.Rename(mergeDst, dataP); err != nil {
+		return err
+	}
+	// 对象已发布成功，此时才清理分片目录与上传状态：
+	// 若 rename 失败，分片数据仍然完整，客户端可以重试 complete。
+	if err := d.mp.Cleanup(uploadID); err != nil {
 		return err
 	}
 
@@ -514,8 +550,8 @@ func (d *driver) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID
 		return err
 	}
 	lockKey := bucket + ":" + key
-	d.keys.lock(lockKey)
-	defer d.keys.unlock(lockKey)
+	unlock := d.keys.Lock(lockKey)
+	defer unlock()
 	if _, err := d.mp.Validate(uploadID, bucket, key); err != nil {
 		return err
 	}
@@ -532,8 +568,8 @@ func (d *driver) HeadObject(ctx context.Context, bucket, key string) (*storage.O
 		return nil, err
 	}
 	lockKey := bucket + ":" + key
-	d.keys.rlock(lockKey)
-	defer d.keys.runlock(lockKey)
+	unlock := d.keys.RLock(lockKey)
+	defer unlock()
 
 	dataP := d.dataPath(bucket, key)
 	meta, err := syncMeta(d.baseDir, bucket, key, dataP, "", nil)
@@ -570,11 +606,11 @@ func (d *driver) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, d
 	a := srcBucket + ":" + srcKey
 	b := dstBucket + ":" + dstKey
 	first, second := sortLocks(a, b)
-	d.keys.lock(first)
-	defer d.keys.unlock(first)
+	unlockFirst := d.keys.Lock(first)
+	defer unlockFirst()
 	if first != second {
-		d.keys.lock(second)
-		defer d.keys.unlock(second)
+		unlockSecond := d.keys.Lock(second)
+		defer unlockSecond()
 	}
 
 	srcP := d.dataPath(srcBucket, srcKey)
@@ -593,31 +629,30 @@ func (d *driver) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, d
 		return err
 	}
 	if srcBucket == dstBucket {
+		// 同 bucket 优先硬链接（内容去重不占额外空间）；跨挂载点（EXDEV）回退为流式拷贝，
+		// 否则同一 bucket 落在不同文件系统时 Copy 会直接失败。
 		_ = os.Remove(dstP)
 		if err := os.Link(srcP, dstP); err != nil {
-			return err
+			if !errors.Is(err, syscall.EXDEV) && !errors.Is(err, syscall.EPERM) {
+				return err
+			}
+			if err := copyFile(srcP, dstP); err != nil {
+				return err
+			}
 		}
-	} else {
-		in, err := os.Open(srcP)
+	} else if err := copyFile(srcP, dstP); err != nil {
+		return err
+	}
+
+	meta, err := readMeta(d.baseDir, srcBucket, srcKey)
+	if err != nil {
+		// 源对象没有 meta（例如 meta 被清理过）：按数据文件现算一份，而不是让 Copy 失败
+		meta, err = syncMeta(d.baseDir, srcBucket, srcKey, srcP, "", nil)
 		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(dstP, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			out.Close()
-			os.Remove(dstP)
-			return err
-		}
-		if err := out.Close(); err != nil {
-			os.Remove(dstP)
 			return err
 		}
 	}
-	meta, err := readMeta(d.baseDir, srcBucket, srcKey)
+	dstFi, err := os.Stat(dstP)
 	if err != nil {
 		return err
 	}
@@ -628,34 +663,102 @@ func (d *driver) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, d
 		ContentType:  meta.ContentType,
 		LastModified: time.Now().UTC(),
 		Metadata:     meta.Metadata,
+		// 必须记录数据文件的 mtime/size，否则下次 GetObject 会判定缓存过期并重建 meta
+		DataMtime: dstFi.ModTime(),
+		DataSize:  dstFi.Size(),
 	}
 	return writeMeta(d.baseDir, dstBucket, dstKey, dstMeta)
 }
 
+// copyFile 流式拷贝文件内容（同机不同挂载点、跨 bucket 的场景使用）。
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(dst)
+		return err
+	}
+	return nil
+}
+
+// defaultListMaxKeys 未指定 MaxKeys 时的单页上界，对齐 S3 ListObjectsV2 默认值。
+const defaultListMaxKeys = 1000
+
 // ---------- keyLocks ----------
 
 // keyLocks 按 key 粒度的读写锁映射表。
+//
+// 锁对象采用引用计数回收：没有人持有时从表中摘除，避免长期运行下按对象数量
+// 无限增长（对象可达百万级，只增不减的 map 是稳定的内存泄漏）。
 type keyLocks struct {
-	mu sync.Mutex               // 保护 m 的互斥锁
-	m  map[string]*sync.RWMutex // key -> 读写锁映射
+	mu sync.Mutex          // 保护 m 的互斥锁
+	m  map[string]*keyLock // key -> 读写锁映射
 }
 
-func newKeyLocks() *keyLocks { return &keyLocks{m: map[string]*sync.RWMutex{}} }
+type keyLock struct {
+	mu   sync.RWMutex // 该 key 的读写锁
+	refs int          // 持锁者数量（含等待者），归零后从表中摘除
+}
 
-func (k *keyLocks) get(key string) *sync.RWMutex {
+func newKeyLocks() *keyLocks { return &keyLocks{m: map[string]*keyLock{}} }
+
+// acquire 取出 key 的锁并增加引用计数；返回的锁必须交回 release。
+func (k *keyLocks) acquire(key string) *keyLock {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	l, ok := k.m[key]
 	if !ok {
-		l = &sync.RWMutex{}
+		l = &keyLock{}
 		k.m[key] = l
 	}
+	l.refs++
 	return l
 }
-func (k *keyLocks) lock(key string)    { k.get(key).Lock() }
-func (k *keyLocks) unlock(key string)  { k.get(key).Unlock() }
-func (k *keyLocks) rlock(key string)   { k.get(key).RLock() }
-func (k *keyLocks) runlock(key string) { k.get(key).RUnlock() }
+
+// release 解锁（unlock 为对应的 Unlock/RUnlock）并递减引用计数；归零时摘除表项。
+// 先解锁再操作计数：k.mu 与 l.mu 从不被同时持有，不会形成锁序环。
+func (k *keyLocks) release(key string, l *keyLock, unlock func()) {
+	unlock()
+	k.mu.Lock()
+	l.refs--
+	if l.refs <= 0 {
+		delete(k.m, key)
+	}
+	k.mu.Unlock()
+}
+
+// Lock 获取写锁，返回解锁函数：defer d.keys.Lock(key)()
+func (k *keyLocks) Lock(key string) func() {
+	l := k.acquire(key)
+	l.mu.Lock()
+	return func() { k.release(key, l, l.mu.Unlock) }
+}
+
+// RLock 获取读锁，返回解锁函数：defer d.keys.RLock(key)()
+func (k *keyLocks) RLock(key string) func() {
+	l := k.acquire(key)
+	l.mu.RLock()
+	return func() { k.release(key, l, l.mu.RUnlock) }
+}
+
+// size 当前表内锁对象数量，仅测试使用。
+func (k *keyLocks) size() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return len(k.m)
+}
 
 // ---------- helpers ----------
 
@@ -682,14 +785,26 @@ type rangeReader struct {
 }
 
 func newRangeReader(rc io.ReadCloser, start, end, totalSize int64) io.ReadCloser {
+	if start < 0 {
+		start = 0
+	}
 	if end >= totalSize {
 		end = totalSize - 1
 	}
-	if start > end {
+	// 越界/空区间：必须关闭底层 reader，否则每次越界 Range 请求都会泄漏一个 fd。
+	if start > end || totalSize <= 0 || start >= totalSize {
+		_ = rc.Close()
 		return io.NopCloser(bytes.NewReader(nil))
 	}
 	if s, ok := rc.(io.Seeker); ok {
-		s.Seek(start, io.SeekStart)
+		if _, err := s.Seek(start, io.SeekStart); err != nil {
+			_ = rc.Close()
+			return io.NopCloser(bytes.NewReader(nil))
+		}
+	} else if _, err := io.CopyN(io.Discard, rc, start); err != nil {
+		// 不可 seek 的底层 reader：丢弃前 start 字节
+		_ = rc.Close()
+		return io.NopCloser(bytes.NewReader(nil))
 	}
 	return &rangeReader{rc: rc, pos: start, end: end, start: start}
 }

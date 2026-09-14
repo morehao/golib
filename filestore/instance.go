@@ -63,6 +63,22 @@ func UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileDeta
 	return Get().UploadAndRecord(ctx, req)
 }
 
+func MaxUploadBytes() int64 {
+	return Get().MaxUploadBytes()
+}
+
+func StageObject(ctx context.Context, r io.Reader, opts ...storage.PutOption) (*StagedObject, error) {
+	return Get().StageObject(ctx, r, opts...)
+}
+
+func DiscardObject(ctx context.Context, path string) error {
+	return Get().DiscardObject(ctx, path)
+}
+
+func CommitStagedObject(ctx context.Context, req CommitStagedObjectRequest) (*FileDetail, error) {
+	return Get().CommitStagedObject(ctx, req)
+}
+
 func GetFile(ctx context.Context, id string) (*FileDetail, error) {
 	return Get().GetFile(ctx, id)
 }
@@ -99,6 +115,16 @@ func HandlePresignedPut(ctx context.Context, bucket, key string, body io.Reader,
 	return Get().HandlePresignedPut(ctx, bucket, key, body, contentType)
 }
 
+// HandlePresignedUploadPart 处理预签名分片 PUT：body 作为分片流式写入。
+func HandlePresignedUploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, body io.Reader) (*storage.CompletedPart, error) {
+	return Get().HandlePresignedUploadPart(ctx, bucket, key, uploadID, partNumber, body)
+}
+
 func HandlePresignedGet(ctx context.Context, bucket, key string) (*storage.GetObjectResult, error) {
 	return Get().HandlePresignedGet(ctx, bucket, key)
+}
+
+// CleanupStagedObjects 清理残留暂存对象（stage/ 前缀），返回清理数量。
+func CleanupStagedObjects(ctx context.Context, olderThan time.Duration) (int, error) {
+	return Get().CleanupStagedObjects(ctx, olderThan)
 }

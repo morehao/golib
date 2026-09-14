@@ -1,16 +1,20 @@
 package ginupload
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gcontext/gincontext"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/storage"
 )
+
+// maxFormFieldBytes 单个非文件表单字段的最大字节数，防止恶意构造的超大字段占用内存。
+const maxFormFieldBytes = 1 << 20 // 1MB
 
 // @Tags 文件
 // @Summary 上传文件
@@ -20,45 +24,142 @@ import (
 // @Param content_hash formData string false "内容哈希(SHA256)，用于去重"
 // @Success 200 {object} gincontext.DtoRender{data=fileRecordResponse}
 // @Router /files [post]
+//
+// 大文件直传说明：本实现用 multipart.Reader 边读边写，不经过 c.FormFile 的
+// 整包临时文件落盘，也不把文件读进内存，内存占用与文件体积无关（仅保留固定大小
+// 缓冲区 + 元数据）。请求体上限由 filestore.WithMaxUploadBytes 控制。
 func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req uploadRequest
-		if err := c.ShouldBind(&req); err != nil {
-			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
-			return
+		ctx := c.Request.Context()
+
+		// 给整个请求体一个硬上限，避免无边界占用磁盘/带宽（流式读写本身内存恒定）
+		if limit := fs.MaxUploadBytes(); limit > 0 {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		}
 
-		fh, err := c.FormFile("file")
+		mr, err := c.Request.MultipartReader()
 		if err != nil {
-			gincontext.Fail(c, fmt.Errorf("file is required: %w", err))
+			gincontext.Fail(c, fmt.Errorf("invalid multipart request: %w", err))
 			return
 		}
 
-		f, err := fh.Open()
-		if err != nil {
-			gincontext.Fail(c, fmt.Errorf("open file: %w", err))
+		// content_hash 允许出现在表单字段或 query 中（兼容历史行为）
+		contentHash := strings.TrimSpace(c.Query("content_hash"))
+		var (
+			fileName string
+			mimeType string
+			staged   *filestore.StagedObject
+		)
+		// 提前返回（字段缺失、重复文件、读取失败等）时清理已落盘的暂存对象
+		defer func() {
+			if staged != nil {
+				_ = fs.DiscardObject(ctx, staged.Path)
+			}
+		}()
+
+		for {
+			part, partErr := mr.NextPart()
+			if errors.Is(partErr, io.EOF) {
+				break
+			}
+			if partErr != nil {
+				failUpload(c, partErr)
+				return
+			}
+
+			// 文件部分：直接流式写入暂存对象，不在内存/临时文件里攒整包
+			if part.FileName() != "" {
+				if staged != nil {
+					_ = part.Close()
+					gincontext.Fail(c, fmt.Errorf("only one file part is allowed"))
+					return
+				}
+				fileName = part.FileName()
+				mimeType = part.Header.Get("Content-Type")
+
+				var stageOpts []storage.PutOption
+				if mimeType != "" {
+					// 暂存时写入 Content-Type，提升为最终对象时由底层 Copy 继承
+					stageOpts = append(stageOpts, storage.WithContentType(mimeType))
+				}
+				s, stageErr := fs.StageObject(ctx, part, stageOpts...)
+				_ = part.Close()
+				if stageErr != nil {
+					failUpload(c, stageErr)
+					return
+				}
+				staged = s
+				continue
+			}
+
+			// 普通字段：限制单字段大小
+			if part.FormName() == "content_hash" {
+				v, fieldErr := readSmallField(part)
+				_ = part.Close()
+				if fieldErr != nil {
+					gincontext.Fail(c, fmt.Errorf("invalid content_hash: %w", fieldErr))
+					return
+				}
+				if v != "" {
+					contentHash = v
+				}
+				continue
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(part, maxFormFieldBytes))
+			_ = part.Close()
+		}
+
+		if staged == nil {
+			gincontext.Fail(c, fmt.Errorf("file is required"))
 			return
 		}
-		defer f.Close()
+		if contentHash == "" {
+			gincontext.Fail(c, fmt.Errorf("content_hash is required"))
+			return
+		}
 
-		h := sha256.New()
-		reader := io.TeeReader(f, h)
-
-		detail, err := fs.UploadAndRecord(c.Request.Context(), filestore.UploadAndRecordRequest{
-			ContentHash: req.ContentHash,
-			Name:        fh.Filename,
-			Size:        fh.Size,
-			MimeType:    fh.Header.Get("Content-Type"),
-			Reader:      reader,
-			StoragePath: hex.EncodeToString(h.Sum(nil)),
+		// CommitStagedObject 内部负责暂存对象生命周期（成功/失败都会清理）。
+		// 这里传入的 path/hash 均已非空，落在「提交方接管清理」的契约内，
+		// 因此置空 staged 避免 defer 重复删除。
+		detail, commitErr := fs.CommitStagedObject(ctx, filestore.CommitStagedObjectRequest{
+			ContentHash: contentHash,
+			Name:        fileName,
+			MimeType:    mimeType,
+			StoragePath: staged.Path,
+			Size:        staged.Size,
+			SHA256:      staged.SHA256,
 		})
-		if err != nil {
-			gincontext.Fail(c, fmt.Errorf("upload: %w", err))
+		staged = nil
+		if commitErr != nil {
+			gincontext.Fail(c, fmt.Errorf("upload: %w", commitErr))
 			return
 		}
 
 		gincontext.Success(c, toFileRecordResp(detail))
 	}
+}
+
+// readSmallField 读取小体积表单字段，超过上限直接报错而不是截断，
+// 避免把超长字段当成合法输入。
+func readSmallField(r io.Reader) (string, error) {
+	buf, err := io.ReadAll(io.LimitReader(r, maxFormFieldBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(buf) > maxFormFieldBytes {
+		return "", fmt.Errorf("form field too large")
+	}
+	return strings.TrimSpace(string(buf)), nil
+}
+
+// failUpload 区分「请求体超限」与其他读取错误，给出可定位的报错。
+func failUpload(c *gin.Context, err error) {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		gincontext.Fail(c, fmt.Errorf("upload exceeds max size %d bytes", maxErr.Limit))
+		return
+	}
+	gincontext.Fail(c, fmt.Errorf("upload failed: %w", err))
 }
 
 // @Tags 文件

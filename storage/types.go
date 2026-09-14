@@ -13,10 +13,19 @@ var (
 	ErrNotSupported     = errors.New("storage: operation not supported")
 	ErrInvalidPath      = errors.New("storage: invalid storage path")
 	ErrInvalidConfig    = errors.New("storage: invalid config")
+	ErrInvalidArgument  = errors.New("storage: invalid argument")
 	ErrPermission       = errors.New("storage: permission denied")
 	ErrQuotaExceeded    = errors.New("storage: quota exceeded")
 	ErrCrossBackend     = errors.New("storage: cross-backend copy is not supported")
 	ErrMultipartAborted = errors.New("storage: multipart upload was aborted")
+
+	// 预签名 token 相关错误，由 PresignToken 编解码统一返回（见 presign_token.go）。
+	// filestore 与 local 驱动的同名错误变量都别名到这里，保证 errors.Is 跨包可用。
+	ErrPresignInvalidToken = errors.New("storage: presign token invalid")
+	ErrPresignExpired      = errors.New("storage: presign token expired")
+	ErrPresignKeyMismatch  = errors.New("storage: presign token key mismatch")
+	ErrPresignOpMismatch   = errors.New("storage: presign token operation mismatch")
+	ErrPresignNoSecret     = errors.New("storage: presign sign secret not configured")
 )
 
 // PutObjectResult 单次上传结果。

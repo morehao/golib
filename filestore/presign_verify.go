@@ -2,78 +2,55 @@ package filestore
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
 	"io"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/morehao/golib/storage"
 )
 
-type presignPayload struct {
-	Key string `json:"key"`
-	Op  string `json:"op"`
-	Exp int64  `json:"exp"`
-}
-
-var (
-	ErrPresignExpired      = errors.New("presigned url expired")
-	ErrPresignOpMismatch   = errors.New("presigned url operation mismatch")
-	ErrPresignKeyMismatch  = errors.New("presigned url key mismatch")
-	ErrPresignInvalidToken = errors.New("presigned url invalid token")
+// 预签名 token 的协议与编解码由 storage 包统一实现（storage/presign_token.go），
+// local 驱动生成、filestore 消费，两侧共用同一份代码，不再各自维护一套。
+const (
+	PresignOpGet     = storage.PresignOpGet
+	PresignOpPut     = storage.PresignOpPut
+	PresignOpPutPart = storage.PresignOpPutPart
 )
 
-// VerifyPresignedToken 验证预签名 URL 中的 token 是否合法。signSecret 必须与生成预签名 URL 时使用的密钥一致。
+// PresignPayload 校验通过后的 token 载荷（含 Key/Exp 等完整字段）。
+type PresignPayload = storage.PresignTokenPayload
+
+// 校验错误统一别名到 storage 包，errors.Is 在跨包场景同样成立。
+var (
+	ErrPresignExpired      = storage.ErrPresignExpired
+	ErrPresignOpMismatch   = storage.ErrPresignOpMismatch
+	ErrPresignKeyMismatch  = storage.ErrPresignKeyMismatch
+	ErrPresignInvalidToken = storage.ErrPresignInvalidToken
+)
+
+// VerifyPresignedToken 验证预签名 URL 中的 token 是否合法，并要求 op 与调用方一致。
+// signSecret 必须与生成预签名 URL 时使用的密钥一致。
 func VerifyPresignedToken(signSecret, bucket, key, op, tokenStr, expiresStr string) error {
-	if signSecret == "" {
-		return errors.New("sign secret not configured")
-	}
-	parts := strings.SplitN(tokenStr, ".", 2)
-	if len(parts) != 2 {
-		return ErrPresignInvalidToken
-	}
-	payloadB64, sigB64 := parts[0], parts[1]
-
-	data, err := base64.URLEncoding.DecodeString(payloadB64)
+	payload, err := ParsePresignedToken(signSecret, bucket, key, tokenStr, expiresStr)
 	if err != nil {
-		return ErrPresignInvalidToken
-	}
-	var payload presignPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return ErrPresignInvalidToken
-	}
-
-	expectedKey := bucket + "/" + key
-	if payload.Key != expectedKey {
-		return ErrPresignKeyMismatch
+		return err
 	}
 	if payload.Op != op {
 		return ErrPresignOpMismatch
 	}
-	exp, err := strconv.ParseInt(expiresStr, 10, 64)
-	if err != nil {
-		return ErrPresignInvalidToken
-	}
-	if payload.Exp != exp {
-		return ErrPresignInvalidToken
-	}
-	if time.Now().UTC().Unix() >= payload.Exp {
-		return ErrPresignExpired
-	}
-
-	mac := hmac.New(sha256.New, []byte(signSecret))
-	mac.Write([]byte(payloadB64))
-	expectedSig := base64.URLEncoding.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(sigB64), []byte(expectedSig)) != 1 {
-		return ErrPresignInvalidToken
-	}
 	return nil
+}
+
+// ParsePresignedToken 校验 token 的签名、有效期与目标 key，并返回其载荷；
+// op 由调用方按端点语义自行判定（同一个 URL 端点可承载整体 PUT 与分片 PUT）。
+func ParsePresignedToken(signSecret, bucket, key, tokenStr, expiresStr string) (*PresignPayload, error) {
+	payload, err := storage.DecodePresignToken(signSecret, tokenStr, expiresStr)
+	if err != nil {
+		return nil, err
+	}
+	// token 与 bucket/key 绑定：换 key 或换 bucket 都必须拒绝
+	if payload.Key != storage.PresignTokenKey(bucket, key) {
+		return nil, ErrPresignKeyMismatch
+	}
+	return payload, nil
 }
 
 // HandlePresignedPut 处理预签名 PUT 请求，将请求 body 写入 storage。
@@ -83,6 +60,12 @@ func (s *FileStore) HandlePresignedPut(ctx context.Context, bucket, key string, 
 		opts = append(opts, storage.WithContentType(contentType))
 	}
 	return s.st.PutObject(ctx, bucket, key, body, opts...)
+}
+
+// HandlePresignedUploadPart 处理预签名分片 PUT 请求：请求体作为指定分片写入，
+// 流式透传，不缓存整个分片。
+func (s *FileStore) HandlePresignedUploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, body io.Reader) (*storage.CompletedPart, error) {
+	return s.st.UploadPart(ctx, bucket, key, uploadID, partNumber, body)
 }
 
 // HandlePresignedGet 处理预签名 GET 请求，从 storage 读取并返回数据。

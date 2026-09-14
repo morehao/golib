@@ -33,6 +33,9 @@ type fileRecordResponse struct {
 
 // --- upload ---
 
+// uploadRequest 描述 /files 的 multipart 表单字段契约。
+// handler 采用流式解析（multipart.Reader）而非 ShouldBind，此结构体仅作文档用途，
+// 与 swagger 注解保持一致。
 type uploadRequest struct {
 	ContentHash string `form:"content_hash" binding:"required"` // 内容哈希
 }
@@ -97,4 +100,9 @@ type fileDetailResponse struct {
 
 type presignedPutResponse struct {
 	URI string `json:"uri"` // 存储 URI
+}
+
+type presignedPartResponse struct {
+	PartNumber int    `json:"part_number"` // 分片编号
+	ETag       string `json:"etag"`        // 分片 ETag（内容 MD5），complete 时回传
 }

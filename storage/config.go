@@ -27,10 +27,13 @@ type Config struct {
 	// 本地磁盘后端
 	BaseDir    string `yaml:"base_dir"`    // 本地存储根目录
 	SignSecret string `yaml:"sign_secret"` // 预签名 HMAC-SHA256 密钥，仅 local driver 使用
+	// MultipartTTL 分片上传会话存活时间，仅 local driver 使用（其余后端由对象存储自身
+	// 的生命周期规则负责）。0 表示用默认值 24h，负值表示关闭自动回收。
+	MultipartTTL time.Duration `yaml:"multipart_ttl"`
 
 	// 通用
-	BaseURL      string            `yaml:"base_url"`     // 对外公共访问基础 URL
-	MaxRetries   int               `yaml:"max_retries"`  // 最大重试次数
-	Timeout      time.Duration     `yaml:"timeout"`      // 请求超时时间
+	BaseURL      string            `yaml:"base_url"`      // 对外公共访问基础 URL
+	MaxRetries   int               `yaml:"max_retries"`   // 最大重试次数
+	Timeout      time.Duration     `yaml:"timeout"`       // 请求超时时间
 	ExtraOptions map[string]string `yaml:"extra_options"` // 驱动额外选项
 }
