@@ -1,4 +1,4 @@
-package cos
+package s3base
 
 import (
 	"bytes"
@@ -11,15 +11,15 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-func TestCosContentMD5Middleware_ID(t *testing.T) {
-	m := cosContentMD5Middleware{}
-	if id := m.ID(); id != "CosContentMD5" {
-		t.Fatalf("expected 'CosContentMD5', got %q", id)
+func TestContentMD5Middleware_ID(t *testing.T) {
+	m := contentMD5Middleware{}
+	if id := m.ID(); id != "S3CompatContentMD5" {
+		t.Fatalf("expected 'S3CompatContentMD5', got %q", id)
 	}
 }
 
-func TestCosContentMD5Middleware_HandleFinalize_NonDeleteObjects(t *testing.T) {
-	m := cosContentMD5Middleware{}
+func TestContentMD5Middleware_HandleFinalize_NonDeleteObjects(t *testing.T) {
+	m := contentMD5Middleware{}
 	ctx := middleware.WithOperationName(context.Background(), "PutObject")
 	next := &mockFinalizeHandler{}
 
@@ -32,8 +32,8 @@ func TestCosContentMD5Middleware_HandleFinalize_NonDeleteObjects(t *testing.T) {
 	}
 }
 
-func TestCosContentMD5Middleware_HandleFinalize_DeleteObjects(t *testing.T) {
-	m := cosContentMD5Middleware{}
+func TestContentMD5Middleware_HandleFinalize_DeleteObjects(t *testing.T) {
+	m := contentMD5Middleware{}
 	ctx := middleware.WithOperationName(context.Background(), "DeleteObjects")
 
 	body := `<Delete><Object><Key>foo</Key></Object></Delete>`
@@ -62,8 +62,8 @@ func TestCosContentMD5Middleware_HandleFinalize_DeleteObjects(t *testing.T) {
 	}
 }
 
-func TestCosContentMD5Middleware_HandleFinalize_NoStream(t *testing.T) {
-	m := cosContentMD5Middleware{}
+func TestContentMD5Middleware_HandleFinalize_NoStream(t *testing.T) {
+	m := contentMD5Middleware{}
 	ctx := middleware.WithOperationName(context.Background(), "DeleteObjects")
 
 	next := &mockFinalizeHandler{}
@@ -76,8 +76,8 @@ func TestCosContentMD5Middleware_HandleFinalize_NoStream(t *testing.T) {
 	}
 }
 
-func TestCosContentMD5Middleware_HandleDeserialize(t *testing.T) {
-	m := cosContentMD5Middleware{}
+func TestContentMD5Middleware_HandleDeserialize(t *testing.T) {
+	m := contentMD5Middleware{}
 	next := &mockDeserializeHandler{}
 	_, _, err := m.HandleDeserialize(context.Background(), middleware.DeserializeInput{}, next)
 	if err != nil {
@@ -106,8 +106,8 @@ func (h *mockDeserializeHandler) HandleDeserialize(ctx context.Context, in middl
 	return middleware.DeserializeOutput{}, middleware.Metadata{}, nil
 }
 
-func TestCosContentMD5Middleware_HandleFinalize_EmptyBody(t *testing.T) {
-	m := cosContentMD5Middleware{}
+func TestContentMD5Middleware_HandleFinalize_EmptyBody(t *testing.T) {
+	m := contentMD5Middleware{}
 	ctx := middleware.WithOperationName(context.Background(), "DeleteObjects")
 
 	emptyBody := ""

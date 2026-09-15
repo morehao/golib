@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/morehao/golib/storage"
+	"github.com/morehao/golib/storage/driver/s3base"
 )
 
 func TestContract(t *testing.T) {
@@ -27,5 +28,15 @@ func TestProfile(t *testing.T) {
 	}
 	if profile.Name != string(storage.DriverCOS) {
 		t.Errorf("Name = %q, want %q", profile.Name, storage.DriverCOS)
+	}
+	// 分块下限实测为 1 MiB（二进制），不是文档字面的 1e6 字节。
+	if profile.Limits.MinPartSize != 1<<20 {
+		t.Errorf("MinPartSize = %d, want %d（1 MiB：1,000,000 字节实测被 EntityTooSmall 拒绝）",
+			profile.Limits.MinPartSize, 1<<20)
+	}
+	want := s3base.S3Limits
+	want.MinPartSize = profile.Limits.MinPartSize
+	if profile.Limits != want {
+		t.Errorf("Limits = %+v, want %+v（除 MinPartSize 外应与 s3base.S3Limits 一致）", profile.Limits, want)
 	}
 }

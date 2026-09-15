@@ -235,9 +235,13 @@ func (f *FakeS3) handlePut(w http.ResponseWriter, r *http.Request, bucket, key s
 			return
 		}
 		if strings.EqualFold(r.Header.Get("x-cos-forbid-overwrite"), "true") {
-			// 与真实 COS 一致：用 304 NotModified 表达 forbid-overwrite 冲突，
-			// 而不是 S3 标准的 412。
-			f.writeErr(w, http.StatusNotModified, "NotModified", "Not Modified")
+			// 与真实 COS / OSS 一致：用 409 FileAlreadyExists 表达 forbid-overwrite
+			// 冲突，而不是 S3 标准的 412 PreconditionFailed。
+			// （2026-09-15 实测：COS 与 OSS 冲突时都回 409 FileAlreadyExists。
+			// 旧桩按"COS 回 304"建模，那是两个条件头同时下发时的产物，并非
+			// 私有头单独触发的结果。）
+			f.writeErr(w, http.StatusConflict, "FileAlreadyExists",
+				"The object you specified already exists and can not be overwritten.")
 			return
 		}
 	}

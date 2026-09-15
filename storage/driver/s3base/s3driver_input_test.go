@@ -21,7 +21,7 @@ func TestPutObjectInput_PropagatesOptions(t *testing.T) {
 		Metadata:     map[string]string{"k": "v"},
 		StorageClass: "STANDARD_IA",
 	}
-	in := putObjectInput("b", "k", o)
+	in := putObjectInput("b", "k", o, storage.ConditionalWriteNativeIfNoneMatch)
 
 	if got := deref(in.Bucket); got != "b" {
 		t.Errorf("Bucket = %q", got)
@@ -47,14 +47,24 @@ func TestPutObjectInput_PropagatesOptions(t *testing.T) {
 }
 
 func TestPutObjectInput_IfNotExistsSetsIfNoneMatch(t *testing.T) {
-	in := putObjectInput("b", "k", &storage.PutOptions{IfNotExists: true})
+	in := putObjectInput("b", "k", &storage.PutOptions{IfNotExists: true}, storage.ConditionalWriteNativeIfNoneMatch)
 	if got := deref(in.IfNoneMatch); got != "*" {
 		t.Fatalf("IfNoneMatch = %q, want *", got)
 	}
 }
 
+// 回归：真实 OSS 实测（bucket sh-local-test）对带 If-None-Match:* 的 PutObject
+// 直接回 400 NotImplemented，连无条件写都会一起失败。条件语义由供应商私有头
+// 表达，此时不得再下发 S3 原生的 If-None-Match。
+func TestPutObjectInput_VendorHeaderDoesNotSendIfNoneMatch(t *testing.T) {
+	in := putObjectInput("b", "k", &storage.PutOptions{IfNotExists: true}, storage.ConditionalWriteVendorHeader)
+	if in.IfNoneMatch != nil {
+		t.Fatalf("VendorHeader 模式不得下发 IfNoneMatch, got %q", deref(in.IfNoneMatch))
+	}
+}
+
 func TestPutObjectInput_EmptyOptionalFieldsAreNil(t *testing.T) {
-	in := putObjectInput("b", "k", &storage.PutOptions{})
+	in := putObjectInput("b", "k", &storage.PutOptions{}, storage.ConditionalWriteNativeIfNoneMatch)
 	if in.ContentType != nil {
 		t.Error("empty ContentType must map to nil, not an empty string pointer")
 	}

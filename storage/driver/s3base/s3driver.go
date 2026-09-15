@@ -141,6 +141,11 @@ func New(cfg storage.Config, pb storage.PathBuilder, opts ...Option) (storage.St
 		for _, apiOpt := range profile.APIOptions {
 			c.APIOptions = append(c.APIOptions, apiOpt)
 		}
+		// 供应商固有的 s3.Options 差异先于调用方/测试的覆盖应用，
+		// 保证调用方仍可在此基础上做一次性调优。
+		for _, s3OptFn := range profile.S3Options {
+			s3OptFn(c)
+		}
 		for _, s3OptFn := range o.s3Opts {
 			s3OptFn(c)
 		}
@@ -215,7 +220,7 @@ func (d *Driver) wrapErr(op, bucket, key string, err error) error {
 
 // ---------- 请求构造（抽为纯函数，便于零网络单测参数构造） ----------
 
-func putObjectInput(bucket, key string, o *storage.PutOptions) *s3.PutObjectInput {
+func putObjectInput(bucket, key string, o *storage.PutOptions, mode storage.ConditionalWriteMode) *s3.PutObjectInput {
 	input := &s3.PutObjectInput{
 		Bucket:       aws.String(bucket),
 		Key:          aws.String(key),
@@ -224,9 +229,13 @@ func putObjectInput(bucket, key string, o *storage.PutOptions) *s3.PutObjectInpu
 		Metadata:     o.Metadata,
 		StorageClass: types.StorageClass(o.StorageClass),
 	}
-	if o.IfNotExists {
-		// 条件写：S3 原生的 If-None-Match:* 由后端原子保证。
-		// 不支持该语义的后端必须显式降级，不能静默退化成覆盖写。
+	// 条件写：S3 原生的 If-None-Match:* 由后端原子保证。
+	// 不支持该语义的后端必须显式降级，不能静默退化成覆盖写。
+	//
+	// 仅声明 NativeIfNoneMatch 的后端才下发这个头：VendorHeader 后端（COS/OSS）
+	// 用各自的私有头表达同一语义，且对 If-None-Match:* 的反应是**拒绝整个请求**
+	// —— OSS 实测回 400 NotImplemented，无条件写也会一起失败。
+	if o.IfNotExists && mode == storage.ConditionalWriteNativeIfNoneMatch {
 		input.IfNoneMatch = aws.String("*")
 	}
 	return input
@@ -372,7 +381,7 @@ func (d *Driver) PutObject(ctx context.Context, bucket, key string, body io.Read
 		return nil, fmt.Errorf("%w: driver %s cannot guarantee conditional write", storage.ErrNotSupported, d.name)
 	}
 	countingBody, written := newCountingBody(body)
-	input := putObjectInput(bucket, key, o)
+	input := putObjectInput(bucket, key, o, d.profile.ConditionalWrite)
 	input.Body = countingBody
 
 	putOpts := make([]func(*s3.Options), 0, 1)

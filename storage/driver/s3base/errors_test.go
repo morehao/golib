@@ -117,8 +117,8 @@ func TestInspectS3Err_NoSubstringMatching(t *testing.T) {
 }
 
 // 基类错误码表刻意不把 304 归为"已存在"：304 是条件 GET 的正常响应。
-// COS 用 304 表达条件写冲突属于供应商私有行为，必须由它自己的 profile
-// 通过 ErrorCodeKind 覆盖声明 —— 这条测试守住"基类不越界"。
+// 某个供应商若用 304 表达条件写冲突，属于供应商私有行为，必须由它自己的
+// profile 通过 ErrorCodeKind 覆盖声明 —— 这条测试守住"基类不越界"。
 func TestInspectS3Err_NotModifiedIsNotAlreadyExistsInBaseTable(t *testing.T) {
 	err := &smithyhttp.ResponseError{
 		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusNotModified}},

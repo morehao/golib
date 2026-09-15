@@ -34,8 +34,15 @@ type ProviderProfile struct {
 	ConditionalWrite storage.ConditionalWriteMode
 	// ConditionalWriteOption 在 ConditionalWrite 为 VendorHeader 时注入供应商私有头。
 	ConditionalWriteOption func(*s3.Options)
+	// S3Options 在构建 S3 client 时应用供应商私有的 s3.Options 覆盖。
+	//
+	// 与 WithS3Options 的区别是用途：WithS3Options 是调用方/测试的一次性调优，
+	// 本字段是**该供应商固有的协议差异**，所有使用方都必须带上，因此属于 profile。
+	// 例：OSS 不支持 SDK 默认开启的 aws-chunked 流式校验和。
+	S3Options []func(*s3.Options)
 	// ErrorCodeKind 覆盖基类的错误码分类表，用于表达供应商私有错误码，
-	// 优先于基类表。例：COS 用 304 NotModified 表达条件写冲突。
+	// 优先于基类表。例：COS/OSS 用 409 FileAlreadyExists 表达条件写冲突，
+	// 该码不在基类表里。
 	ErrorCodeKind map[string]storage.Kind
 	// APIOptions 为供应商私有中间件（如 COS 的 DeleteObjects Content-MD5）。
 	APIOptions []func(*middleware.Stack) error

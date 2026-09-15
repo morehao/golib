@@ -396,9 +396,9 @@ func TestStubRegression_ConditionalWriteRefusedWhenUnsupported(t *testing.T) {
 	}
 }
 
-// 供应商私有错误码覆盖的端到端验证：COS 形状的 profile 打桩 ——
-// 条件写走 vendor header，冲突时返回 304 NotModified（真实 COS 的行为），
-// 必须仍被识别为"已存在"，否则上层并发去重会静默失效。
+// 供应商私有错误码覆盖的端到端验证：条件写走 vendor header，冲突时桩返回
+// 409 FileAlreadyExists —— 该码不在基类表里，必须由 profile 的 ErrorCodeKind
+// 显式声明才能落到"已存在"，否则上层并发去重会静默失效。
 func TestStubRegression_VendorHeaderConflictUsesProviderErrorCode(t *testing.T) {
 	f := testutil.NewFakeS3()
 	defer f.Close()
@@ -413,7 +413,7 @@ func TestStubRegression_VendorHeaderConflictUsesProviderErrorCode(t *testing.T) 
 			ForcePathStyle:         true,
 			ConditionalWrite:       storage.ConditionalWriteVendorHeader,
 			ConditionalWriteOption: cwOpt,
-			ErrorCodeKind:          map[string]storage.Kind{"NotModified": storage.KindPreconditionFailed},
+			ErrorCodeKind:          map[string]storage.Kind{"FileAlreadyExists": storage.KindPreconditionFailed},
 		}))
 	if err != nil {
 		t.Fatal(err)
@@ -425,7 +425,7 @@ func TestStubRegression_VendorHeaderConflictUsesProviderErrorCode(t *testing.T) 
 	}
 	_, err = s.PutObject(ctx, stubBucket, "cw-vendor", bytes.NewReader([]byte("second-longer")), storage.WithIfNotExists())
 	if !errors.Is(err, storage.ErrAlreadyExists) {
-		t.Fatalf("err = %v, want ErrAlreadyExists（304 没有被供应商覆盖表映射）", err)
+		t.Fatalf("err = %v, want ErrAlreadyExists（FileAlreadyExists 没有被供应商覆盖表映射）", err)
 	}
 	if !errors.Is(err, storage.ErrPreconditionFailed) {
 		t.Errorf("应同时满足更细的 ErrPreconditionFailed, got %v", err)

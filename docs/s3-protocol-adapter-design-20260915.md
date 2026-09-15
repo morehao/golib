@@ -391,6 +391,7 @@ type ProviderProfile struct {
     ForcePathStyle    bool
     ConditionalWrite  ConditionalWriteMode
     ConditionalWriteOption func(*s3.Options)             // VendorHeader 模式注入，如 COS 的 forbid-overwrite
+    S3Options         []func(*s3.Options)                 // 供应商固有的 client 级覆盖，如 OSS 的 RequestChecksumCalculation
     Limits            storage.Limits
     APIOptions        []func(*middleware.Stack) error     // 供应商私有中间件
 }
@@ -402,18 +403,36 @@ type ProviderProfile struct {
 
 | 能力 | MinIO | OSS | COS | TOS | local |
 |---|---|---|---|---|---|
-| 路径风格（`ForcePathStyle`） | PathStyle | PathStyle | VirtualHosted | PathStyle | n/a |
-| 条件写模式（`ConditionalWrite`） | 待验证（声明 NativeIfNoneMatch） | 待验证（声明 NativeIfNoneMatch） | **VendorHeader，已实测**（`x-cos-forbid-overwrite`） | 待验证（声明 NativeIfNoneMatch） | 进程内锁（原生保证） |
-| 条件写冲突的错误码映射（`ErrorCodeKind`） | 不需要 | 不需要 | **已实测**：`NotModified`→`ErrPreconditionFailed`（COS 返回 304 而非 S3 的 412） | 不需要 | 不需要 |
-| `MaxDeleteBatch` | 1000 | 1000 | 1000 | 1000 | 0（无限制） |
+| 路径风格（`ForcePathStyle`） | PathStyle | **VirtualHosted，已实测**（path-style 回 403 `SecondLevelDomainForbidden`） | VirtualHosted | PathStyle | n/a |
+| 条件写模式（`ConditionalWrite`） | 待验证（声明 NativeIfNoneMatch） | **VendorHeader，已实测**（`x-oss-forbid-overwrite`；`If-None-Match:*` 回 400 `NotImplemented`） | **VendorHeader，已实测**（`x-cos-forbid-overwrite`） | 待验证（声明 NativeIfNoneMatch） | 进程内锁（原生保证） |
+| 条件写冲突的错误码映射（`ErrorCodeKind`） | 不需要 | **已实测**：`FileAlreadyExists`→`ErrAlreadyExists`（409） | **已实测**：`FileAlreadyExists`→`ErrAlreadyExists`（409） | 不需要 | 不需要 |
+| 请求校验和（`RequestChecksumCalculation`） | 待验证 | **已实测不支持 aws-chunked**，须降为 `when_required`（否则 PutObject 回 400 `NotImplemented`） | **已实测兼容**（沿用 SDK 默认 `when_supported`，aws-chunked 可用） | 待验证 | n/a |
+| `DeleteObjects` 前置校验和 | 不需要 | **已实测需要 `Content-MD5`**（否则回 400 `MissingArgument`） | **已实测需要 `Content-MD5`** | 待验证 | 不需要 |
+| `MinPartSize` | 5 MiB（未实测） | **100 KB，已实测**（OSS 非末分片下限即 100 KB） | **1 MiB，已实测**（文档写"1MB"，但 1,000,000 字节被 `EntityTooSmall` 拒绝，1,048,576 通过） | 5 MiB（未实测） | 0（无限制） |
+| `MaxDeleteBatch` | 1000 | 1000（**已实测**：1001 个 key 的分批删除通过） | 1000（**已实测**：1001 个 key 的分批删除通过，85.8s） | 1000 | 0（无限制） |
+| 预签名 GET/PUT 回环 | 未实测 | **已实测通过** | **已实测通过**（COS 接受 SigV4 预签名，而非自有的 q-sign） | 未实测 | 进程内 HMAC |
 | 虚拟托管域名模板 / region 策略 | 不纳入本期 | 不纳入本期 | 不纳入本期 | 不纳入本期 | n/a |
 | SSE | 本期不实现 | 本期不实现 | 本期不实现 | 本期不实现 | n/a |
 
-"待验证"项的处置规则已写进代码注释：三个后端的 `profile` 各自注明"本仓库尚无可用端点实测，该声明由契约套件的条件写用例证伪；若实测不支持，把 `ConditionalWrite` 改为 `None`"。**声明值与证伪手段成对出现**，不留无法检验的断言。
+"待验证"项的处置规则已写进代码注释：尚未实测的后端在 `profile` 里注明"该声明由契约套件的条件写用例证伪"。OSS 已经走完这条证伪路径：原声明 `PathStyle` + `NativeIfNoneMatch` 在真实端点上是**全量 403/400**（不是"部分功能不可用"，而是所有请求都被拒），实测后改为 `VirtualHosted` + `VendorHeader`。**声明值与证伪手段成对出现**，不留无法检验的断言。
+
+**COS 条件写：一次"看起来已实测"的错误结论。** 原 profile 声明 `x-cos-forbid-overwrite` 冲突时 COS 返回 304 NotModified，并据此写了 `ErrorCodeKind`。实测（2026-09-15）发现这个结论是把两个头叠加后的产物误记成了私有头的功劳：
+
+| 下发的头 | COS 的响应 |
+|---|---|
+| 只发 `x-cos-forbid-overwrite` | 409 `FileAlreadyExists`（`ErrAlreadyExists`） |
+| 只发 `If-None-Match:*` | **请求成功，对象被静默覆盖** |
+| 两个都发（修复前的实际请求） | 304 `NotModified` |
+
+真正的危险在第二行：COS 对 `If-None-Match:*` **既不报错也不生效**，这正是本仓库反复强调要避免的"静默退化为覆盖写"。而修复前共享层对**所有**后端无条件下发该头，于是 COS 的条件写恰好靠"私有头 + 原生头同时在场"这种未定义组合才成立 —— 一旦哪个环节去掉原生头，条件写就会无声地退化成覆盖写，且没有任何测试会变红（契约套件只断言最终未覆盖，而它当时确实没被覆盖）。现在原生头只对声明 `NativeIfNoneMatch` 的后端下发，由 `s3base` 的零网络单测钉住。这个案例说明：**"已实测"必须记录被测的确切输入**，否则测出来的结论无法复用。
+
+供应商差异的表达能力在实测后补了一项：`S3Options []func(*s3.Options)`。原先"供应商差异只走 `APIOptions`/`ConditionalWriteOption`"覆盖不到"客户端级配置差异"，而 OSS 的 `RequestChecksumCalculation` 恰好是这一类 —— 它不是某个操作的中间件，而是整个 client 的签名/编码行为。`S3Options` 只放**该供应商固有的**覆盖，调用方的一次性调优仍走 `WithS3Options`，两者在 `s3base.New` 里按"先固有、后调优"的顺序应用。
 
 设计收益（**均已落地**）：`storage` 包不再出现 `myqcloud`（原先 `storage/path.go` 在通用包里硬编码 COS 域名，该代码已随死 URL API 一并删除）；`s3base` 不再出现供应商分支；`cos/driver.go` 里重复的那份 `usePathStyle` 已删除。
 
-**关于"四后端编译通过"这条判据的诚实说明**：本条只要求编译通过，实测仅覆盖 COS 与 local 两个端点（另有 in-process 桩覆盖 `s3base` 的协议路径）。MinIO/OSS/TOS 的 profile 声明**未经真机验证**，能力矩阵中相应格已标"待验证"而非填实测值 —— 不得把它们当作已验证结论使用。
+**关于"四后端编译通过"这条判据的诚实说明**：本条只要求编译通过。实测覆盖 OSS（2026-09-15，`oss-cn-beijing`，bucket `sh-local-test`）与 COS（同批次，`ap-beijing`，bucket `test-ccnerf-1251908240`）两个真实端点，均跑完整契约套件 + 预签名 GET/PUT 回环，且都开了 `STORAGE_SUITE_BULK=1` 验证 1001 个 key 的分批删除。加上 local，实测覆盖三个端点（另有 in-process 桩覆盖 `s3base` 的协议路径）。MinIO（本机 9000 未起服务）与 TOS 的 profile 声明**未经真机验证**，能力矩阵中相应格仍标"待验证"而非填实测值 —— 不得把它们当作已验证结论使用。
+
+OSS 与 COS 的实测同时说明：**未实测的声明可以错得很彻底**。OSS 的寻址风格与条件写两项声明在真机上会让 100% 的请求失败；两家的 `MinPartSize` 都照抄了 S3 的 5 MiB，而真实值分别是 100 KB 与 1 MiB，导致分片上传这条路径从未在真实端点上跑过（被套件按"体积过大"跳过）。COS 这一格尤其值得记：官方文档写的是"1MB"，实测边界却是 1 MiB（1,000,000 字节被拒），**按文档字面填会放过必然失败的请求**。因此 MinIO/TOS 接入前必须先跑一次同一套契约套件，且分片下限要按实测而非文档填。
 
 ### 关键逻辑与边界条件
 
