@@ -11,6 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// cronWaitTimeout 是"等 1 秒粒度的 cron 触发一次"的上限。
+//
+// 设为 15s 而不是 3s：这些用例断言的是 last_run_at 的写入顺序、任务并发度上限等
+// **调度语义**，而不是调度延迟本身。并行跑全量测试时 CPU 饱和，1 秒粒度的触发
+// 可能被显著推迟，3s 余量不足会误报（实测：全量并行时
+// TestLastRunAtWrittenAfterCompletion 以 "handler did not start" 失败）。
+// 放宽上限不削弱检测力：调度器若真的不触发，这些用例仍会失败。
+const cronWaitTimeout = 15 * time.Second
+
 // fakeLock / fakeLockFactory 用于在单测中模拟分布式锁，避免依赖真实 Redis。
 type fakeLock struct{}
 
@@ -146,7 +155,7 @@ func TestOverlapGuard(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(cronWaitTimeout):
 		t.Fatal("handler did not start")
 	}
 
@@ -157,7 +166,7 @@ func TestOverlapGuard(t *testing.T) {
 	close(release)
 
 	// 防重叠的核心不变量：任意时刻最多一个 handler 在运行
-	require.Eventually(t, func() bool { return maxRunning.Load() == 1 }, 3*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return maxRunning.Load() == 1 }, cronWaitTimeout, 20*time.Millisecond)
 	require.Equal(t, int32(1), maxRunning.Load())
 
 	// 停止调度并等待在途任务结束
@@ -201,7 +210,7 @@ func TestLastRunAtWrittenAfterCompletion(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(cronWaitTimeout):
 		t.Fatal("handler did not start")
 	}
 
@@ -214,7 +223,7 @@ func TestLastRunAtWrittenAfterCompletion(t *testing.T) {
 	require.Eventually(t, func() bool {
 		row, err := s.GetStore().GetTaskByID(context.Background(), "lastrun")
 		return err == nil && row.LastRunAt != nil
-	}, 3*time.Second, 50*time.Millisecond)
+	}, cronWaitTimeout, 50*time.Millisecond)
 }
 
 // TestTaskTimeout 验证单次执行超时会取消 handler 的 ctx。

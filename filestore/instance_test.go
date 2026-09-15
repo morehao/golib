@@ -3,6 +3,7 @@ package filestore
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -29,11 +30,11 @@ func TestSingleton_InitAndUse(t *testing.T) {
 	fs := Get()
 	require.NotNil(t, fs)
 
-	detail, err := RecordUpload(context.Background(), RecordUploadRequest{
+	detail, err := UploadAndRecord(context.Background(), UploadAndRecordRequest{
 		ContentHash: "singleton-hash",
 		Name:        "a.txt",
 		Size:        10,
-		StoragePath: "a.txt",
+		Reader:      strings.NewReader("singleton"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, "singleton-hash", detail.ContentHash)

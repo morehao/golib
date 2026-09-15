@@ -32,8 +32,26 @@ type Config struct {
 	MultipartTTL time.Duration `yaml:"multipart_ttl"`
 
 	// 通用
-	BaseURL      string            `yaml:"base_url"`      // 对外公共访问基础 URL
-	MaxRetries   int               `yaml:"max_retries"`   // 最大重试次数
-	Timeout      time.Duration     `yaml:"timeout"`       // 请求超时时间
-	ExtraOptions map[string]string `yaml:"extra_options"` // 驱动额外选项
+	// BaseURL 是对外公共访问基础 URL，由 local driver 用于拼预签名 URL
+	// （见 local/presign.go；为空时报 ErrInvalidConfig）。注意它与
+	// PathBuilder 无关 —— PathBuilder 只负责标识对象，不负责对外 URL。
+	BaseURL string `yaml:"base_url"` // 对外公共访问基础 URL
+	// Retry 控制 SDK 重试。零值表示用 SDK 默认（3 次尝试）。
+	//
+	// 说明：原先的 MaxRetries / Timeout / ExtraOptions 三个字段已删除 —— 全仓
+	// grep 证明零消费方，运维把它们写进配置只会得到"看起来生效实则被忽略"的
+	// 假契约。Retry 则按 ADR-6 保留并**真实生效**（见 s3base 的 loadAWSConfig）。
+	// 需要新配置项时，请连同消费方与测试一起加。
+	Retry RetryConfig `yaml:"retry"`
+}
+
+// RetryConfig SDK 重试配置。
+type RetryConfig struct {
+	// MaxAttempts 单次调用的最大**尝试次数**。
+	//
+	// 注意语义：SDK v2 的 MaxAttempts 是尝试次数，而 v1 的 maxRetries 是重试
+	// 次数，v1 的 maxRetries=3 等于 v2 的 MaxAttempts=4。沿用 v1 的名字会让
+	// 运维把次数填少一次，因此这里用 MaxAttempts 这个名字把语义写进类型。
+	// <=0 表示不设置，由 SDK 用默认值（3 次尝试）。
+	MaxAttempts int `yaml:"max_attempts"`
 }

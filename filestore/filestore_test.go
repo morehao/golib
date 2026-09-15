@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -20,22 +21,17 @@ func (m *mockPathBuilder) Build(bucket, key string) storage.StoragePath {
 	return &mockStoragePath{bucket: bucket, key: key}
 }
 
-func (m *mockPathBuilder) ParsePublicURL(rawURL string, opts ...storage.ParseURLOption) (storage.StoragePath, error) {
-	return nil, nil
-}
-
 type mockStoragePath struct {
 	bucket string
 	key    string
 }
 
-func (m *mockStoragePath) URI() string       { return "s3://" + m.bucket + "/" + m.key }
-func (m *mockStoragePath) Path() string      { return m.bucket + "/" + m.key }
-func (m *mockStoragePath) PublicURL() string { return "" }
-func (m *mockStoragePath) Scheme() string    { return "mock" }
-func (m *mockStoragePath) IsLocal() bool     { return false }
-func (m *mockStoragePath) Bucket() string    { return m.bucket }
-func (m *mockStoragePath) Key() string       { return m.key }
+func (m *mockStoragePath) URI() string    { return "s3://" + m.bucket + "/" + m.key }
+func (m *mockStoragePath) Path() string   { return m.bucket + "/" + m.key }
+func (m *mockStoragePath) Scheme() string { return "mock" }
+func (m *mockStoragePath) IsLocal() bool  { return false }
+func (m *mockStoragePath) Bucket() string { return m.bucket }
+func (m *mockStoragePath) Key() string    { return m.key }
 
 type mockStorage struct {
 	storage.Storage
@@ -44,11 +40,21 @@ type mockStorage struct {
 	lastKey             string
 	putFail             bool
 	multipartCalled     bool
+	multipartCalls      int
+	multipartFail       bool
 	lastUploadID        string
-	lastPartNumber      int
+	lastPartNumber      int32
 	lastPartBody        string
 	presignGetURLCalled bool
 	presignGetURLFail   bool
+	// completeSize 是 CompleteMultipart 返回的"服务端实测大小"，0 表示不返回大小。
+	completeSize int64
+	// caps 是 Caps() 的返回值，用于构造具备/不具备某项能力的驱动。
+	caps storage.Caps
+	// listPartsOut 是 ListParts 的返回值。
+	listPartsOut *storage.ListPartsOutput
+	// lastListPartsRef 记录 ListParts 收到的会话引用。
+	lastListPartsRef storage.MultipartRef
 }
 
 func (m *mockStorage) PutObject(ctx context.Context, bucket, key string, reader io.Reader, opts ...storage.PutOption) (*storage.PutObjectResult, error) {
@@ -66,18 +72,22 @@ func (m *mockStorage) DeleteObject(ctx context.Context, bucket, key string) erro
 	return nil
 }
 
-func (m *mockStorage) CreateMultipartUpload(_ context.Context, bucket, key string, _ ...storage.PutOption) (string, error) {
+func (m *mockStorage) CreateMultipart(_ context.Context, bucket, key string, _ storage.CreateMultipartInput) (string, error) {
 	m.multipartCalled = true
+	m.multipartCalls++
 	m.lastKey = key
+	if m.multipartFail {
+		return "", io.ErrUnexpectedEOF
+	}
 	m.lastUploadID = "mock-upload-id-123"
 	return m.lastUploadID, nil
 }
 
 // UploadPart 记录分片参数与内容，供「分片直传链路」断言使用（嵌入接口默认会 panic）。
-func (m *mockStorage) UploadPart(_ context.Context, _, _ string, uploadID string, partNumber int, body io.Reader) (*storage.CompletedPart, error) {
+func (m *mockStorage) UploadPart(_ context.Context, ref storage.MultipartRef, number int32, body io.Reader) (*storage.PartInfo, error) {
 	m.multipartCalled = true
-	m.lastUploadID = uploadID
-	m.lastPartNumber = partNumber
+	m.lastUploadID = ref.UploadID
+	m.lastPartNumber = number
 	if body != nil {
 		b, err := io.ReadAll(body)
 		if err != nil {
@@ -85,37 +95,60 @@ func (m *mockStorage) UploadPart(_ context.Context, _, _ string, uploadID string
 		}
 		m.lastPartBody = string(b)
 	}
-	return &storage.CompletedPart{PartNumber: partNumber, ETag: "mock-part-etag"}, nil
+	return &storage.PartInfo{PartNumber: number, ETag: "mock-part-etag"}, nil
 }
 
-func (m *mockStorage) CompleteMultipartUpload(_ context.Context, bucket, key, uploadID string, _ []storage.CompletedPart) error {
+func (m *mockStorage) ListParts(_ context.Context, ref storage.MultipartRef, _ ...storage.ListPartsOption) (*storage.ListPartsOutput, error) {
+	m.lastListPartsRef = ref
+	if m.listPartsOut != nil {
+		return m.listPartsOut, nil
+	}
+	return &storage.ListPartsOutput{}, nil
+}
+
+func (m *mockStorage) CompleteMultipart(_ context.Context, ref storage.MultipartRef, _ []storage.PartInfo) (*storage.ObjectInfo, error) {
+	return &storage.ObjectInfo{Bucket: ref.Bucket, Key: ref.Key, Size: m.completeSize}, nil
+}
+
+func (m *mockStorage) AbortMultipart(_ context.Context, _ storage.MultipartRef) error {
 	return nil
 }
 
-func (m *mockStorage) AbortMultipartUpload(_ context.Context, bucket, key, uploadID string) error {
-	return nil
-}
-
-func (m *mockStorage) PresignGetObject(_ context.Context, bucket, key string, expires time.Duration, _ ...storage.GetOption) (string, error) {
+func (m *mockStorage) PresignGetObject(_ context.Context, bucket, key string, expires time.Duration, _ ...storage.GetOption) (*storage.PresignedRequest, error) {
 	m.presignGetURLCalled = true
 	m.lastKey = key
 	if m.presignGetURLFail {
-		return "", io.ErrUnexpectedEOF
+		return nil, io.ErrUnexpectedEOF
 	}
-	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
+	return &storage.PresignedRequest{
+		Method:  http.MethodGet,
+		URL:     fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires),
+		Headers: http.Header{"X-Amz-Meta-Origin": {"filestore-test"}},
+	}, nil
 }
 
-func (m *mockStorage) PresignPutObject(_ context.Context, bucket, key string, expires time.Duration, _ ...storage.PutOption) (string, error) {
-	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
+func (m *mockStorage) PresignPutObject(_ context.Context, bucket, key string, expires time.Duration, _ ...storage.PutOption) (*storage.PresignedRequest, error) {
+	return &storage.PresignedRequest{
+		Method:  http.MethodPut,
+		URL:     fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires),
+		Headers: http.Header{"X-Amz-Meta-Origin": {"filestore-test"}},
+	}, nil
 }
 
-func (m *mockStorage) PresignUploadPartObject(_ context.Context, _ string, key, uploadID string, partNumber int, expires time.Duration, _ ...storage.PutOption) (string, error) {
-	return fmt.Sprintf("https://presign.example.com/%s?upload_id=%s&part_number=%d&expires=%s", key, uploadID, partNumber, expires), nil
+func (m *mockStorage) PresignUploadPartObject(_ context.Context, ref storage.MultipartRef, number int32, expires time.Duration, _ ...storage.PutOption) (*storage.PresignedRequest, error) {
+	return &storage.PresignedRequest{
+		Method: http.MethodPut,
+		URL: fmt.Sprintf("https://presign.example.com/%s?upload_id=%s&part_number=%d&expires=%s",
+			ref.Key, ref.UploadID, number, expires),
+		Headers: http.Header{"X-Amz-Meta-Origin": {"filestore-test"}},
+	}, nil
 }
 
 func (m *mockStorage) PathBuilder() storage.PathBuilder {
 	return &mockPathBuilder{}
 }
+
+func (m *mockStorage) Caps() storage.Caps { return m.caps }
 
 func newTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -144,19 +177,26 @@ func TestCheckExist_NotFound(t *testing.T) {
 	require.Nil(t, detail)
 }
 
+// seedUpload 用 UploadAndRecord 造一条已完成的上传记录，供前置数据使用。
+// mockStorage 不消费 reader，因此 Size 取声明值。
+func seedUpload(t *testing.T, fs *FileStore, hash, name string, size int64) *FileDetail {
+	t.Helper()
+	detail, err := fs.UploadAndRecord(context.Background(), UploadAndRecordRequest{
+		ContentHash: hash,
+		Name:        name,
+		Size:        size,
+		Reader:      strings.NewReader(name),
+	})
+	require.NoError(t, err)
+	return detail
+}
+
 func TestCheckExist_Found(t *testing.T) {
 	db := newTestDB(t)
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "abc123",
-		Name:        "test.txt",
-		Size:        100,
-		MimeType:    "text/plain",
-		StoragePath: "test.txt",
-	})
-	require.NoError(t, err)
+	detail := seedUpload(t, fs, "abc123", "test.txt", 100)
 	require.NotNil(t, detail)
 
 	found, hit, err := fs.CheckExist(context.Background(), "abc123")
@@ -165,36 +205,17 @@ func TestCheckExist_Found(t *testing.T) {
 	require.Equal(t, "abc123", found.ContentHash)
 }
 
-func TestRecordUpload_InvalidArgs(t *testing.T) {
+// TestUploadAndRecord_SameContentHash_DifferentName 同 content_hash 不同 name：
+// 复用同一条物理文件记录，但产生各自的上传记录。
+func TestUploadAndRecord_SameContentHash_DifferentName(t *testing.T) {
 	db := newTestDB(t)
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	_, err = fs.RecordUpload(context.Background(), RecordUploadRequest{})
-	require.ErrorIs(t, err, ErrInvalidArgument)
-}
-
-func TestRecordUpload_SameContentHash_DifferentName(t *testing.T) {
-	db := newTestDB(t)
-	fs, err := New(db, &mockStorage{}, "test-bucket")
-	require.NoError(t, err)
-
-	detail1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "dup-fp",
-		Name:        "a.txt",
-		Size:        10,
-		StoragePath: "a.txt",
-	})
-	require.NoError(t, err)
+	detail1 := seedUpload(t, fs, "dup-fp", "a.txt", 10)
 	require.Equal(t, "a.txt", detail1.Name)
 
-	detail2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "dup-fp",
-		Name:        "b.txt",
-		Size:        10,
-		StoragePath: "a.txt",
-	})
-	require.NoError(t, err)
+	detail2 := seedUpload(t, fs, "dup-fp", "b.txt", 10)
 	require.Equal(t, "b.txt", detail2.Name)
 	require.NotEqual(t, detail1.FileUploadID, detail2.FileUploadID)
 	require.Equal(t, detail1.FileID, detail2.FileID)
@@ -212,13 +233,13 @@ func TestUploadAndRecord_Success(t *testing.T) {
 		Size:        1024,
 		MimeType:    "image/jpeg",
 		Reader:      strings.NewReader("fake-image-data"),
-		StoragePath: "images/photo.jpg",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, detail)
 	require.True(t, mock.putCalled)
-	require.Equal(t, "images/photo.jpg", mock.lastKey)
-	require.Equal(t, "s3://test-bucket/images/photo.jpg", detail.StorageURI)
+	require.True(t, strings.HasPrefix(mock.lastKey, objectKeyPrefix), "key 必须由服务端生成: %s", mock.lastKey)
+	require.NotContains(t, mock.lastKey, "images/photo.jpg", "客户端字符串不得出现在 key 中")
+	require.Equal(t, "s3://test-bucket/"+mock.lastKey, detail.StorageURI)
 }
 
 func TestUploadAndRecord_Dedup_SameContentHash(t *testing.T) {
@@ -232,7 +253,6 @@ func TestUploadAndRecord_Dedup_SameContentHash(t *testing.T) {
 		Name:        "same.txt",
 		Size:        100,
 		Reader:      strings.NewReader("data"),
-		StoragePath: "files/same.txt",
 	}
 
 	first, err := fs.UploadAndRecord(context.Background(), req1)
@@ -246,7 +266,6 @@ func TestUploadAndRecord_Dedup_SameContentHash(t *testing.T) {
 		Name:        "other.txt",
 		Size:        100,
 		Reader:      strings.NewReader("data"),
-		StoragePath: "files/same.txt",
 	}
 
 	second, err := fs.UploadAndRecord(context.Background(), req2)
@@ -268,7 +287,6 @@ func TestUploadAndRecord_PutObjectError(t *testing.T) {
 		Name:        "fail.txt",
 		Size:        100,
 		Reader:      strings.NewReader("data"),
-		StoragePath: "fail.txt",
 	})
 	require.Error(t, err)
 }
@@ -278,18 +296,13 @@ func TestGetFile(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	created, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "gettest",
-		Name:        "get.txt",
-		Size:        1,
-		StoragePath: "get.txt",
-	})
-	require.NoError(t, err)
+	created := seedUpload(t, fs, "gettest", "get.txt", 1)
 
 	found, err := fs.GetFile(context.Background(), created.FileUploadID)
 	require.NoError(t, err)
 	require.Equal(t, created.FileUploadID, found.FileUploadID)
-	require.Equal(t, "s3://test-bucket/get.txt", found.StorageURI)
+	require.Equal(t, created.StorageURI, found.StorageURI)
+	require.True(t, strings.HasPrefix(found.StorageURI, "s3://test-bucket/"+objectKeyPrefix), found.StorageURI)
 }
 
 func TestGetFile_NotFound(t *testing.T) {
@@ -307,19 +320,14 @@ func TestPresignGetFileURL_Success(t *testing.T) {
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
 
-	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "url-test",
-		Name:        "test.txt",
-		Size:        100,
-		MimeType:    "text/plain",
-		StoragePath: "files/test.txt",
-	})
-	require.NoError(t, err)
+	detail := seedUpload(t, fs, "url-test", "test.txt", 100)
 
-	url, err := fs.PresignGetFileURL(context.Background(), detail.FileUploadID, WithExpires(time.Hour))
+	presigned, err := fs.PresignGetFileURL(context.Background(), detail.FileUploadID, WithExpires(time.Hour))
 	require.NoError(t, err)
 	require.True(t, mock.presignGetURLCalled)
-	require.Contains(t, url, "presign.example.com")
+	require.Contains(t, presigned.URL, "presign.example.com")
+	require.NotEmpty(t, presigned.Method)
+	require.NotNil(t, presigned.Headers)
 }
 
 func TestPresignGetFileURL_NotFound(t *testing.T) {
@@ -336,13 +344,7 @@ func TestDeleteFile(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	created, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "deltest",
-		Name:        "del.txt",
-		Size:        1,
-		StoragePath: "del.txt",
-	})
-	require.NoError(t, err)
+	created := seedUpload(t, fs, "deltest", "del.txt", 1)
 
 	err = fs.DeleteFile(context.Background(), created.FileUploadID)
 	require.NoError(t, err)
@@ -362,15 +364,15 @@ func TestInitMultipartUpload_Success(t *testing.T) {
 		Name:        "large.mp4",
 		Size:        10485760,
 		MimeType:    "video/mp4",
-		StoragePath: "videos/large.mp4",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, detail)
 	require.True(t, mock.multipartCalled)
-	require.Equal(t, "videos/large.mp4", mock.lastKey)
+	require.True(t, strings.HasPrefix(mock.lastKey, objectKeyPrefix), "key 必须由服务端生成: %s", mock.lastKey)
+	require.NotContains(t, mock.lastKey, "videos/large.mp4", "客户端字符串不得出现在 key 中")
 	require.Equal(t, "mock-upload-id-123", detail.UploadID)
 	require.Equal(t, FileStatusUploading, detail.Status)
-	require.Equal(t, "s3://test-bucket/videos/large.mp4", detail.StorageURI)
+	require.Equal(t, "s3://test-bucket/"+mock.lastKey, detail.StorageURI)
 }
 
 func TestInitMultipartUpload_InvalidArgs(t *testing.T) {
@@ -391,23 +393,25 @@ func TestPresignUploadPartURL_Success(t *testing.T) {
 		ContentHash: "presign-test",
 		Name:        "test.mp4",
 		Size:        1000,
-		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
-	url, err := fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 1, WithExpires(time.Hour))
+	part1, err := fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 1, WithExpires(time.Hour))
 	require.NoError(t, err)
-	require.Contains(t, url, "presign.example.com")
-	require.Contains(t, url, "1h0m0s")
+	require.Contains(t, part1.URL, "presign.example.com")
+	require.Contains(t, part1.URL, "1h0m0s")
 	// 回归：分片 URL 必须携带该次分片会话的 upload_id 与请求的 part_number，
 	// 否则 PUT 会把分片整体写到最终对象，complete 永远缺片。
-	require.Contains(t, url, "upload_id="+detail.UploadID)
-	require.Contains(t, url, "part_number=1")
+	require.Contains(t, part1.URL, "upload_id="+detail.UploadID)
+	require.Contains(t, part1.URL, "part_number=1")
+	// 回归：签名覆盖的 Headers 必须一并返回，HTTP 层丢弃它会让客户端直传 403。
+	require.NotEmpty(t, part1.Method)
+	require.NotNil(t, part1.Headers)
 
 	part2, err := fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 2, WithExpires(time.Hour))
 	require.NoError(t, err)
-	require.Contains(t, part2, "part_number=2")
-	require.NotEqual(t, url, part2, "不同分片的预签名 URL 不能相同")
+	require.Contains(t, part2.URL, "part_number=2")
+	require.NotEqual(t, part1.URL, part2.URL, "不同分片的预签名 URL 不能相同")
 
 	_, err = fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 0, WithExpires(time.Hour))
 	require.ErrorIs(t, err, ErrInvalidArgument)
@@ -418,13 +422,7 @@ func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "non-mp",
-		Name:        "small.txt",
-		Size:        100,
-		StoragePath: "small.txt",
-	})
-	require.NoError(t, err)
+	detail := seedUpload(t, fs, "non-mp", "small.txt", 100)
 
 	_, err = fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 1, WithExpires(time.Hour))
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
@@ -445,19 +443,12 @@ func TestPresignGetFileURL_DefaultExpiry(t *testing.T) {
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
 
-	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "default-expiry",
-		Name:        "test.txt",
-		Size:        100,
-		MimeType:    "text/plain",
-		StoragePath: "files/test.txt",
-	})
-	require.NoError(t, err)
+	detail := seedUpload(t, fs, "default-expiry", "test.txt", 100)
 
-	url, err := fs.PresignGetFileURL(context.Background(), detail.FileUploadID)
+	presigned, err := fs.PresignGetFileURL(context.Background(), detail.FileUploadID)
 	require.NoError(t, err)
 	require.True(t, mock.presignGetURLCalled)
-	require.Contains(t, url, defaultPresignExpiry.String())
+	require.Contains(t, presigned.URL, defaultPresignExpiry.String())
 }
 
 func TestPresignUploadPartURL_WithExpires(t *testing.T) {
@@ -469,13 +460,12 @@ func TestPresignUploadPartURL_WithExpires(t *testing.T) {
 		ContentHash: "presign-expires-test",
 		Name:        "test.mp4",
 		Size:        1000,
-		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
-	url, err := fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 1, WithExpires(5*time.Minute))
+	presigned, err := fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 1, WithExpires(5*time.Minute))
 	require.NoError(t, err)
-	require.Contains(t, url, "5m0s")
+	require.Contains(t, presigned.URL, "5m0s")
 }
 
 func TestCompleteMultipartUpload_Success(t *testing.T) {
@@ -487,11 +477,10 @@ func TestCompleteMultipartUpload_Success(t *testing.T) {
 		ContentHash: "complete-test",
 		Name:        "test.mp4",
 		Size:        1000,
-		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
-	parts := []storage.CompletedPart{
+	parts := []storage.PartInfo{
 		{PartNumber: 1, ETag: "etag-1"},
 		{PartNumber: 2, ETag: "etag-2"},
 	}
@@ -509,13 +498,7 @@ func TestCompleteMultipartUpload_NotMultipart(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "complete-non-mp",
-		Name:        "small.txt",
-		Size:        100,
-		StoragePath: "small.txt",
-	})
-	require.NoError(t, err)
+	detail := seedUpload(t, fs, "complete-non-mp", "small.txt", 100)
 
 	_, err = fs.CompleteMultipartUpload(context.Background(), CompleteMultipartUploadRequest{ID: detail.FileUploadID})
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
@@ -530,7 +513,6 @@ func TestAbortMultipartUpload_Success(t *testing.T) {
 		ContentHash: "abort-test",
 		Name:        "test.mp4",
 		Size:        1000,
-		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
@@ -547,13 +529,7 @@ func TestAbortMultipartUpload_NotMultipart(t *testing.T) {
 	fs, err := New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
 
-	detail, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
-		ContentHash: "abort-non-mp",
-		Name:        "small.txt",
-		Size:        100,
-		StoragePath: "small.txt",
-	})
-	require.NoError(t, err)
+	detail := seedUpload(t, fs, "abort-non-mp", "small.txt", 100)
 
 	err = fs.AbortMultipartUpload(context.Background(), detail.FileUploadID)
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
@@ -569,13 +545,7 @@ func TestDeleteFileRecord_ReclaimsUnreferencedObject(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	detail1, err := fs.RecordUpload(ctx, RecordUploadRequest{
-		ContentHash: "hash-persist",
-		Name:        "first.txt",
-		Size:        100,
-		StoragePath: "first.txt",
-	})
-	require.NoError(t, err)
+	detail1 := seedUpload(t, fs, "hash-persist", "first.txt", 100)
 
 	require.NoError(t, fs.DeleteFile(ctx, detail1.FileUploadID))
 
@@ -583,15 +553,11 @@ func TestDeleteFileRecord_ReclaimsUnreferencedObject(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, fh, "最后一条引用删除后物理文件行应被回收")
 	require.True(t, mock.deleteCalled, "存储对象应被删除")
-	require.Equal(t, "first.txt", mock.lastKey, "删除的应是该记录对应的存储对象 key")
+	_, _, deletedKey, parseErr := fs.parseStorageURI(detail1.StorageURI)
+	require.NoError(t, parseErr)
+	require.Equal(t, deletedKey, mock.lastKey, "删除的应是该记录对应的存储对象 key")
 
-	detail2, err := fs.RecordUpload(ctx, RecordUploadRequest{
-		ContentHash: "hash-persist",
-		Name:        "second.txt",
-		Size:        100,
-		StoragePath: "first.txt",
-	})
-	require.NoError(t, err)
+	detail2 := seedUpload(t, fs, "hash-persist", "second.txt", 100)
 	require.Equal(t, "second.txt", detail2.Name)
 	require.NotEqual(t, detail1.FileUploadID, detail2.FileUploadID)
 	require.NotEmpty(t, detail2.FileID, "重新上传应重建文件行")
@@ -606,14 +572,8 @@ func TestDeleteFile_RefcountKeepsSharedObject(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	first, err := fs.RecordUpload(ctx, RecordUploadRequest{
-		ContentHash: "shared-hash", Name: "a.txt", Size: 10, StoragePath: "shared.bin",
-	})
-	require.NoError(t, err)
-	second, err := fs.RecordUpload(ctx, RecordUploadRequest{
-		ContentHash: "shared-hash", Name: "b.txt", Size: 10, StoragePath: "shared.bin",
-	})
-	require.NoError(t, err)
+	first := seedUpload(t, fs, "shared-hash", "a.txt", 10)
+	second := seedUpload(t, fs, "shared-hash", "b.txt", 10)
 	require.Equal(t, first.FileID, second.FileID)
 
 	require.NoError(t, fs.DeleteFile(ctx, first.FileUploadID))

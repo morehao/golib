@@ -59,15 +59,14 @@ func handlePresignedPut(fs *filestore.FileStore) gin.HandlerFunc {
 		switch payload.Op {
 		case filestore.PresignOpPut:
 			contentType := c.GetHeader("Content-Type")
-			result, putErr := fs.HandlePresignedPut(ctx, bucket, key, c.Request.Body, contentType)
-			if putErr != nil {
+			if _, putErr := fs.HandlePresignedPut(ctx, bucket, key, c.Request.Body, contentType); putErr != nil {
 				writeStorageError(c, putErr)
 				return
 			}
-			gincontext.Success(c, presignedPutResponse{URI: result.Path.URI()})
+			gincontext.Success(c, presignedPutResponse{URI: fs.PathBuilder().Build(bucket, key).URI()})
 
 		case filestore.PresignOpPutPart:
-			part, partErr := fs.HandlePresignedUploadPart(ctx, bucket, key, payload.UploadID, payload.PartNumber, c.Request.Body)
+			part, partErr := fs.HandlePresignedUploadPart(ctx, bucket, key, payload.UploadID, int32(payload.PartNumber), c.Request.Body)
 			if partErr != nil {
 				writeStorageError(c, partErr)
 				return
@@ -75,7 +74,7 @@ func handlePresignedPut(fs *filestore.FileStore) gin.HandlerFunc {
 			// 分片 ETag 同时放在响应头（S3/浏览器 SDK 读取的位置）与 body 中，
 			// 客户端 complete 时需要原样回传。
 			c.Header("ETag", `"`+part.ETag+`"`)
-			gincontext.Success(c, presignedPartResponse{PartNumber: part.PartNumber, ETag: part.ETag})
+			gincontext.Success(c, presignedPartResponse{PartNumber: int(part.PartNumber), ETag: part.ETag})
 
 		default:
 			c.String(http.StatusForbidden, "operation mismatch")
@@ -125,12 +124,12 @@ func handlePresignedGet(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 		defer result.Body.Close()
 
-		if result.ContentType != "" {
-			c.Header("Content-Type", result.ContentType)
+		if result.Info.ContentType != "" {
+			c.Header("Content-Type", result.Info.ContentType)
 		}
 		c.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, key))
-		if result.Size > 0 {
-			c.Header("Content-Length", fmt.Sprintf("%d", result.Size))
+		if result.Info.Size > 0 {
+			c.Header("Content-Length", fmt.Sprintf("%d", result.Info.Size))
 		}
 		c.Status(http.StatusOK)
 		if _, err := io.Copy(c.Writer, result.Body); err != nil {

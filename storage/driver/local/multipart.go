@@ -158,42 +158,36 @@ func (m *multipartStore) Validate(uploadID, bucket, key string) (*uploadMeta, er
 	return um, nil
 }
 
-// WritePart 写入分片并返回该分片内容的 MD5（hex，不带引号），作为分片 ETag。
-// 边写边算，不额外读取一遍数据；分片 ETag 记入会话并落盘。
-func (m *multipartStore) WritePart(uploadID string, partNum int, r io.Reader, size int64) (string, error) {
+// WritePart 写入分片，返回该分片内容的 MD5（hex，不带引号）作为分片 ETag
+// 以及实际写入的字节数。边写边算，不额外读取一遍数据；分片 ETag 记入会话并落盘。
+// 返回的字节数由 io.Copy 计数得出，是 ObjectInfo/PartInfo.Size 的唯一来源
+// （不采信任何响应，因为上传分片的响应里本就没有大小）。
+//
+// 这里没有"调用方声明大小"参数：Multipart.UploadPart 契约不携带它，传进来的
+// 恒为 0，那个分支既不可达也测不到。声明的 Size 改在 checkParts 里与实际
+// 文件大小对账 —— 那才是 size 真正已知且真正有用的时点。
+func (m *multipartStore) WritePart(uploadID string, partNum int, r io.Reader) (string, int64, error) {
 	p := filepath.Join(m.uploadDir(uploadID), partFileName(partNum))
 	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	h := md5.New()
-	reader := io.TeeReader(r, h)
-	if size > 0 {
-		written, cpErr := io.CopyN(f, reader, size)
-		if cpErr != nil {
-			f.Close()
-			_ = os.Remove(p) // 不留下半截分片，避免被误认为已上传
-			return "", fmt.Errorf("write part %d: %w", partNum, cpErr)
-		}
-		if written != size {
-			f.Close()
-			_ = os.Remove(p)
-			return "", fmt.Errorf("write part %d: expected %d bytes, wrote %d", partNum, size, written)
-		}
-	} else if _, err := io.Copy(f, reader); err != nil {
+	written, cpErr := io.Copy(f, io.TeeReader(r, h))
+	if cpErr != nil {
 		f.Close()
-		_ = os.Remove(p)
-		return "", err
+		_ = os.Remove(p) // 不留下半截分片，避免被误认为已上传
+		return "", 0, fmt.Errorf("write part %d: %w", partNum, cpErr)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(p)
-		return "", err
+		return "", 0, err
 	}
 
 	etag := hex.EncodeToString(h.Sum(nil))
 	um := m.UploadMeta(uploadID)
 	if um == nil {
-		return "", storage.ErrMultipartAborted
+		return "", 0, storage.ErrMultipartAborted
 	}
 	m.mu.Lock()
 	if um.Parts == nil {
@@ -202,14 +196,14 @@ func (m *multipartStore) WritePart(uploadID string, partNum int, r io.Reader, si
 	um.Parts[partNum] = etag
 	m.mu.Unlock()
 	if err := m.saveSession(uploadID, um); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return etag, nil
+	return etag, written, nil
 }
 
 // checkParts 校验待合并分片列表：必须升序、去重、已上传，且客户端声明的 ETag
 // （如有）与上传时记录的一致。
-func (m *multipartStore) checkParts(uploadID string, parts []storage.CompletedPart) (*uploadMeta, error) {
+func (m *multipartStore) checkParts(uploadID string, parts []storage.PartInfo) (*uploadMeta, error) {
 	um := m.UploadMeta(uploadID)
 	if um == nil {
 		return nil, storage.ErrMultipartAborted
@@ -217,18 +211,32 @@ func (m *multipartStore) checkParts(uploadID string, parts []storage.CompletedPa
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("%w: no parts to complete", storage.ErrInvalidArgument)
 	}
-	prev := 0
+	prev := int32(0)
 	for _, part := range parts {
 		if part.PartNumber <= prev {
 			return nil, fmt.Errorf("%w: parts must be ascending and unique (part %d)", storage.ErrInvalidArgument, part.PartNumber)
 		}
 		prev = part.PartNumber
-		recorded, ok := um.Parts[part.PartNumber]
+		recorded, ok := um.Parts[int(part.PartNumber)]
 		if !ok {
 			return nil, fmt.Errorf("missing multipart part %d", part.PartNumber)
 		}
 		if declared := strings.Trim(part.ETag, `"`); declared != "" && !strings.EqualFold(declared, recorded) {
 			return nil, fmt.Errorf("%w: part %d etag mismatch", storage.ErrInvalidArgument, part.PartNumber)
+		}
+		// local 比 S3 多一个便宜的能力：分片就在本地磁盘上，可以把调用方声明的
+		// Size 与实际文件大小对账。CompleteMultipart 返回的 ObjectInfo.Size 是
+		// Σ parts[i].Size 求和得出的，不校验就等于采信调用方声明值。
+		// Size == 0 表示调用方未声明，跳过（S3 路径同样无法校验）。
+		if part.Size > 0 {
+			fi, statErr := os.Stat(filepath.Join(m.uploadDir(uploadID), partFileName(int(part.PartNumber))))
+			if statErr != nil {
+				return nil, fmt.Errorf("%w: stat part %d: %v", storage.ErrInvalidArgument, part.PartNumber, statErr)
+			}
+			if fi.Size() != part.Size {
+				return nil, fmt.Errorf("%w: part %d declared size %d but actual size is %d",
+					storage.ErrInvalidArgument, part.PartNumber, part.Size, fi.Size())
+			}
 		}
 	}
 	return um, nil
@@ -237,7 +245,7 @@ func (m *multipartStore) checkParts(uploadID string, parts []storage.CompletedPa
 // Merge 按 parts 顺序合并分片到 dst（同目录下的临时文件 + rename，保证原子性）。
 // 注意：本方法不删除分片目录与上传状态——发布（rename 到最终对象）成功后再调用
 // Cleanup，避免发布失败时把唯一的分片数据提前删掉。
-func (m *multipartStore) Merge(uploadID, dst string, parts []storage.CompletedPart) error {
+func (m *multipartStore) Merge(uploadID, dst string, parts []storage.PartInfo) error {
 	if _, err := m.checkParts(uploadID, parts); err != nil {
 		return err
 	}
@@ -248,7 +256,7 @@ func (m *multipartStore) Merge(uploadID, dst string, parts []storage.CompletedPa
 		return err
 	}
 	for _, part := range parts {
-		in, err := os.Open(filepath.Join(m.uploadDir(uploadID), partFileName(part.PartNumber)))
+		in, err := os.Open(filepath.Join(m.uploadDir(uploadID), partFileName(int(part.PartNumber))))
 		if err != nil {
 			out.Close()
 			os.Remove(tmp)
@@ -270,6 +278,32 @@ func (m *multipartStore) Merge(uploadID, dst string, parts []storage.CompletedPa
 		return err
 	}
 	return os.Rename(tmp, dst)
+}
+
+// ListParts 返回会话中已上传的分片（按分片号升序）。
+// 大小与时间取自分片文件本身：会话元数据只记录 ETag，若在此处凭空填 0，
+// 上层就无法用它做"分片是否达到 MinPartSize"的判断。
+func (m *multipartStore) ListParts(uploadID string) ([]storage.PartInfo, error) {
+	um := m.UploadMeta(uploadID)
+	if um == nil {
+		return nil, storage.ErrMultipartAborted
+	}
+	dir := m.uploadDir(uploadID)
+	nums := make([]int, 0, len(um.Parts))
+	for n := range um.Parts {
+		nums = append(nums, n)
+	}
+	sort.Ints(nums)
+	out := make([]storage.PartInfo, 0, len(nums))
+	for _, n := range nums {
+		pi := storage.PartInfo{PartNumber: int32(n), ETag: um.Parts[n]}
+		if fi, err := os.Stat(filepath.Join(dir, partFileName(n))); err == nil {
+			pi.Size = fi.Size()
+			pi.LastModified = fi.ModTime().UTC()
+		}
+		out = append(out, pi)
+	}
+	return out, nil
 }
 
 // PartNumbers 返回已上传的分片号（升序），用于诊断与补传。

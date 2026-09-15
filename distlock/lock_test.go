@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -406,8 +405,15 @@ func TestRedisLockIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	time.Sleep(900 * time.Millisecond) // 超过 TTL/2，若无续期锁已过期
-	ttlFacade, _ := client.TTL(ctx, key+":facade").Result()
-	assert.Greater(t, ttlFacade, 500*time.Millisecond)
+	// 用轮询断言"续期确实把 TTL 刷回去了"，而不是在固定时刻断言 TTL 的绝对值。
+	// 原因：续期由后台协程驱动，在 t=900ms 这一刻要求剩余 TTL > 500ms 只剩约
+	// 100ms 余量，并行跑全量测试时续期协程一旦被调度延迟就会误报失败
+	// （实测：全量并行时出现 `"0s" is not greater than "500ms"`）。
+	// 轮询不削弱检测力：若续期真的失效，锁会直接过期，TTL 变负，永远无法满足条件。
+	require.Eventually(t, func() bool {
+		ttlFacade, err := client.TTL(ctx, key+":facade").Result()
+		return err == nil && ttlFacade > 200*time.Millisecond
+	}, 3*time.Second, 50*time.Millisecond, "自动续期应持续刷新 TTL")
 	ok, err = facade.Unlock(ctx)
 	require.NoError(t, err)
 	require.True(t, ok)

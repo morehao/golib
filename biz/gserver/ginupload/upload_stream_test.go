@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -72,9 +71,10 @@ func parseUploadResp(t *testing.T, w *httptest.ResponseRecorder) (code int, file
 	return resp.Code, resp.Data.FileID, resp.Msg
 }
 
-// TestHandleUpload_ContentAddressed 回归 e3b0c442 缺陷：
-// 每个上传都必须落到「自己内容的 SHA256」key 上，不同内容不能互相覆盖。
-func TestHandleUpload_ContentAddressed(t *testing.T) {
+// TestHandleUpload_ServerGeneratedKey 回归「客户端可指定对象落点」缺陷：
+// key 必须由服务端生成（files/ 前缀），客户端提供的 content_hash 不得进入 key，
+// 不同内容必须落到不同 key。
+func TestHandleUpload_ServerGeneratedKey(t *testing.T) {
 	fs := newLocalFileStore(t, t.TempDir())
 	router := setupRouter(fs)
 
@@ -87,7 +87,9 @@ func TestHandleUpload_ContentAddressed(t *testing.T) {
 
 		detail, err := fs.GetFile(context.Background(), fileID)
 		require.NoError(t, err)
-		require.Equal(t, "file:///"+streamTestBucket+"/"+sha256Hex(content), detail.StorageURI)
+		require.True(t, strings.HasPrefix(detail.StorageURI, "file:///"+streamTestBucket+"/files/"),
+			"key 必须由服务端生成: %s", detail.StorageURI)
+		require.NotContains(t, detail.StorageURI, "hash-"+content, "客户端哈希不得进入 key")
 		require.EqualValues(t, len(content), detail.Size)
 
 		// 对象内容必须与本次上传一致，不能被后一次上传覆盖
@@ -128,11 +130,12 @@ func TestHandleUpload_FieldOrderIndependent(t *testing.T) {
 
 	detail, err := fs.GetFile(context.Background(), fileID)
 	require.NoError(t, err)
-	require.Equal(t, "file:///"+streamTestBucket+"/"+sha256Hex("hello"), detail.StorageURI)
+	require.True(t, strings.HasPrefix(detail.StorageURI, "file:///"+streamTestBucket+"/files/"), detail.StorageURI)
+	require.EqualValues(t, len("hello"), detail.Size)
 }
 
 // TestHandleUpload_ContentHashMismatch 声明了 SHA256 却与服务端实算不一致时，
-// 必须拒绝并清理暂存对象，不能让内容被错误登记。
+// 必须拒绝，不能让错误内容以他人哈希登记（否则会污染去重表）。
 func TestHandleUpload_ContentHashMismatch(t *testing.T) {
 	dir := t.TempDir()
 	fs := newLocalFileStore(t, dir)
@@ -145,9 +148,6 @@ func TestHandleUpload_ContentHashMismatch(t *testing.T) {
 	code, _, msg := parseUploadResp(t, w)
 	require.NotEqual(t, 0, code)
 	require.Contains(t, msg, "content hash mismatch")
-
-	// 暂存目录必须被清理干净
-	require.Empty(t, listStagedKeys(t, dir), "暂存对象未清理")
 }
 
 // TestHandleUpload_ExceedsMaxBytes 超过配置上限的请求必须被拒绝。
@@ -163,7 +163,6 @@ func TestHandleUpload_ExceedsMaxBytes(t *testing.T) {
 	code, _, msg := parseUploadResp(t, w)
 	require.NotEqual(t, 0, code)
 	require.Contains(t, msg, "exceeds max size")
-	require.Empty(t, listStagedKeys(t, dir), "超限请求不能留下暂存对象")
 }
 
 // streamReader 生成指定字节数但不占用内存。
@@ -235,24 +234,6 @@ func TestHandleUpload_LargeFileMemoryBounded(t *testing.T) {
 	}
 }
 
-// listStagedKeys 列出暂存目录下残留的对象 key。
-func listStagedKeys(t *testing.T, baseDir string) []string {
-	t.Helper()
-	var keys []string
-	root := filepath.Join(baseDir, "data", streamTestBucket, "stage")
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, p)
-		if relErr == nil {
-			keys = append(keys, rel)
-		}
-		return nil
-	})
-	return keys
-}
-
 // TestHandlePresignedPut_ExceedsMaxBytes 预签名直传同样受上传体积上限约束。
 func TestHandlePresignedPut_ExceedsMaxBytes(t *testing.T) {
 	fs := newLocalFileStore(t, t.TempDir(), filestore.WithMaxUploadBytes(1024))
@@ -297,13 +278,11 @@ func TestMultipartDirectUpload_E2E(t *testing.T) {
 	content := part1 + part2
 
 	// 1. 创建分片会话
-	const finalKey = "e2e/big.bin"
 	initW := postJSON(router, testAPIPrefix+"/files/multipart", createMultipartRequest{
 		ContentHash: "e2e-multipart-hash",
 		Name:        "big.bin",
 		Size:        int64(len(content)),
 		MimeType:    "application/octet-stream",
-		StoragePath: finalKey,
 	})
 	var initResp struct {
 		Code int                     `json:"code"`
@@ -314,6 +293,14 @@ func TestMultipartDirectUpload_E2E(t *testing.T) {
 	require.Equal(t, 0, initResp.Code, initResp.Msg)
 	require.NotEmpty(t, initResp.Data.UploadID)
 	fileID := initResp.Data.FileID
+
+	// key 由服务端生成，客户端无法指定：从文件详情读取实际 key。
+	detail, err := fs.GetFile(context.Background(), fileID)
+	require.NoError(t, err)
+	_, _, key, err := storage.ParseURI(detail.StorageURI)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(key, "files/"), "key 必须由服务端生成: %s", key)
+	finalPath := filepath.Join(dir, "data", streamTestBucket, filepath.FromSlash(key))
 
 	// 2. 逐片取预签名 URL 并直传
 	var completed []uploadPart
@@ -329,6 +316,11 @@ func TestMultipartDirectUpload_E2E(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &presignResp))
 		require.Equal(t, 0, presignResp.Code, presignResp.Msg)
 		require.NotEmpty(t, presignResp.Data.URL)
+
+		// 回归：预签名响应必须同时给出 Method 与 Headers（local 后端不覆盖请求头，
+		// 因此 Headers 是空表而非 nil；S3 后端会带上 Content-Type/X-Amz-Meta-* 等）。
+		require.Equal(t, http.MethodPut, presignResp.Data.Method)
+		require.NotNil(t, presignResp.Data.Headers)
 
 		// 预签名 URL 必须指向本服务的对象端点，且每个分片编号各不相同
 		require.Contains(t, presignResp.Data.URL, "/objects/"+streamTestBucket+"/")
@@ -352,7 +344,6 @@ func TestMultipartDirectUpload_E2E(t *testing.T) {
 
 	// 3. 分片阶段不能产生最终对象（修复前分片 PUT 会整体写到最终 key，
 	//    于是 complete 时既没有分片、最终内容也已是被覆盖的半成品）
-	finalPath := filepath.Join(dir, "data", streamTestBucket, filepath.FromSlash(finalKey))
 	_, statErr := os.Stat(finalPath)
 	require.True(t, os.IsNotExist(statErr), "分片阶段不应产生最终对象")
 
@@ -382,7 +373,7 @@ func TestMultipartDirectUpload_CompleteValidatesParts(t *testing.T) {
 	router := setupRouter(fs)
 
 	initW := postJSON(router, testAPIPrefix+"/files/multipart", createMultipartRequest{
-		ContentHash: "validate-hash", Name: "v.bin", Size: 10, StoragePath: "e2e/v.bin",
+		ContentHash: "validate-hash", Name: "v.bin", Size: 10,
 	})
 	var initResp struct {
 		Code int                     `json:"code"`
@@ -393,7 +384,11 @@ func TestMultipartDirectUpload_CompleteValidatesParts(t *testing.T) {
 	require.Equal(t, 0, initResp.Code, initResp.Msg)
 	fileID := initResp.Data.FileID
 	require.NotEmpty(t, fileID)
-	finalPath := filepath.Join(dir, "data", streamTestBucket, "e2e", "v.bin")
+	detail, err := fs.GetFile(context.Background(), fileID)
+	require.NoError(t, err)
+	_, _, key, err := storage.ParseURI(detail.StorageURI)
+	require.NoError(t, err)
+	finalPath := filepath.Join(dir, "data", streamTestBucket, filepath.FromSlash(key))
 
 	// 只上传 part 1
 	presignW := postJSON(router, fmt.Sprintf("%s/files/multipart/%s/parts", testAPIPrefix, fileID),

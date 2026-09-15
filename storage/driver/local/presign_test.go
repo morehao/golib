@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,11 +52,11 @@ func TestGeneratePresignedURL_Success(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u == "" {
+	if u.URL == "" {
 		t.Fatal("expected non-empty URL")
 	}
-	if u[:7] != "http://" {
-		t.Fatalf("expected http:// prefix, got %q", u)
+	if u.URL[:7] != "http://" {
+		t.Fatalf("expected http:// prefix, got %q", u.URL)
 	}
 }
 
@@ -85,7 +87,7 @@ func TestVerifyPresignedToken_InvalidBase64(t *testing.T) {
 func TestVerifyPresignedToken_Valid(t *testing.T) {
 	d := newPresignDriver("mysecret", "http://localhost")
 	rawURL, _ := d.generatePresignedURL("bucket", "key.txt", presignOpGet, "", 0, time.Hour)
-	parsed, _ := url.Parse(rawURL)
+	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key.txt", presignOpGet, q.Get("token"), q.Get("expires"))
 	if err != nil {
@@ -96,7 +98,7 @@ func TestVerifyPresignedToken_Valid(t *testing.T) {
 func TestVerifyPresignedToken_KeyMismatch(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost")
 	rawURL, _ := d.generatePresignedURL("bucket", "key1", presignOpGet, "", 0, time.Hour)
-	parsed, _ := url.Parse(rawURL)
+	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key2", presignOpGet, q.Get("token"), q.Get("expires"))
 	if !errors.Is(err, ErrPresignKeyMismatch) {
@@ -107,7 +109,7 @@ func TestVerifyPresignedToken_KeyMismatch(t *testing.T) {
 func TestVerifyPresignedToken_OpMismatch(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost")
 	rawURL, _ := d.generatePresignedURL("bucket", "key", presignOpGet, "", 0, time.Hour)
-	parsed, _ := url.Parse(rawURL)
+	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key", presignOpPut, q.Get("token"), q.Get("expires"))
 	if !errors.Is(err, ErrPresignOpMismatch) {
@@ -118,7 +120,7 @@ func TestVerifyPresignedToken_OpMismatch(t *testing.T) {
 func TestVerifyPresignedToken_BadSignature(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost")
 	rawURL, _ := d.generatePresignedURL("bucket", "key", presignOpGet, "", 0, time.Hour)
-	parsed, _ := url.Parse(rawURL)
+	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 
 	wrongSecretDriver := newPresignDriver("wrongsecret", "http://localhost")
@@ -130,19 +132,56 @@ func TestVerifyPresignedToken_BadSignature(t *testing.T) {
 
 func TestVerifyPresignedToken_Expired(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost")
-	rawURL, _ := d.generatePresignedURL("bucket", "key", presignOpGet, "", 0, -time.Hour)
-	parsed, _ := url.Parse(rawURL)
-	q := parsed.Query()
-	err := d.VerifyPresignedToken("bucket", "key", presignOpGet, q.Get("token"), q.Get("expires"))
+	// 签发侧现在拒绝负 ttl（一律在签发前失败），因此这里直接构造一个已过期的
+	// token 来验证校验侧 —— 不能再靠签发接口产出过期 token 了。
+	past := time.Now().UTC().Add(-time.Hour).Unix()
+	token, err := storage.EncodePresignToken("secret", presignPayload{
+		Key: storage.PresignTokenKey("bucket", "key"),
+		Op:  presignOpGet,
+		Exp: past,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = d.VerifyPresignedToken("bucket", "key", presignOpGet, token, strconv.FormatInt(past, 10))
 	if !errors.Is(err, ErrPresignExpired) {
 		t.Fatalf("expected ErrPresignExpired, got %v", err)
+	}
+}
+
+// 预签名必须返回"请求"而非裸 URL，且 ttl=0 要落到统一默认值
+// （修复前 local 对 ttl=0 是"立即过期"，S3 是 900 秒，同一调用两个语义）。
+func TestGeneratePresignedURL_ReturnsRequestWithUnifiedTTL(t *testing.T) {
+	d := newPresignDriver("secret", "http://localhost:8080")
+	req, err := d.generatePresignedURL("bucket", "key", presignOpGet, "", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Method != http.MethodGet {
+		t.Errorf("Method = %q, want GET", req.Method)
+	}
+	if req.URL == "" {
+		t.Error("URL 为空")
+	}
+	if req.Headers == nil {
+		t.Error("Headers 必须非 nil，调用方需要无条件遍历它")
+	}
+	if until := time.Until(req.ExpiresAt); until < storage.PresignTTLDefault-time.Minute {
+		t.Errorf("ttl=0 的有效期 = %s, want 约 %s", until, storage.PresignTTLDefault)
+	}
+	// 超过协议上限必须在**签发前**拒绝，而不是等客户端使用 URL 时才发现。
+	if _, err := d.generatePresignedURL("bucket", "key", presignOpGet, "", 0, storage.PresignTTLMax+time.Hour); err == nil {
+		t.Error("超过 7 天的有效期必须在签发前报错")
+	}
+	if _, err := d.generatePresignedURL("bucket", "key", presignOpGet, "", 0, -time.Hour); err == nil {
+		t.Error("负有效期必须被拒绝")
 	}
 }
 
 func TestVerifyPresignedToken_InvalidExpiresStr(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost")
 	rawURL, _ := d.generatePresignedURL("bucket", "key", presignOpGet, "", 0, time.Hour)
-	parsed, _ := url.Parse(rawURL)
+	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key", presignOpGet, q.Get("token"), "not-a-number")
 	if !errors.Is(err, ErrPresignInvalidToken) {
@@ -153,7 +192,7 @@ func TestVerifyPresignedToken_InvalidExpiresStr(t *testing.T) {
 func TestVerifyPresignedToken_ExpiresMismatch(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost")
 	rawURL, _ := d.generatePresignedURL("bucket", "key", presignOpGet, "", 0, time.Hour)
-	parsed, _ := url.Parse(rawURL)
+	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key", presignOpGet, q.Get("token"), "9999999999")
 	if !errors.Is(err, ErrPresignInvalidToken) {
@@ -164,18 +203,18 @@ func TestVerifyPresignedToken_ExpiresMismatch(t *testing.T) {
 func TestPresignUploadPartObject_BindsSessionAndPart(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost:8080")
 
-	if _, err := d.PresignUploadPartObject(context.Background(), "bucket", "k.bin", "", 1, time.Hour); !errors.Is(err, storage.ErrInvalidArgument) {
+	if _, err := d.PresignUploadPartObject(context.Background(), storage.MultipartRef{Bucket: "bucket", Key: "k.bin"}, 1, time.Hour); !errors.Is(err, storage.ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for empty upload_id, got %v", err)
 	}
-	if _, err := d.PresignUploadPartObject(context.Background(), "bucket", "k.bin", "u1", 0, time.Hour); !errors.Is(err, storage.ErrInvalidArgument) {
+	if _, err := d.PresignUploadPartObject(context.Background(), storage.MultipartRef{Bucket: "bucket", Key: "k.bin", UploadID: "u1"}, 0, time.Hour); !errors.Is(err, storage.ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for zero part number, got %v", err)
 	}
 
-	rawURL, err := d.PresignUploadPartObject(context.Background(), "bucket", "k.bin", "u1", 2, time.Hour)
+	rawURL, err := d.PresignUploadPartObject(context.Background(), storage.MultipartRef{Bucket: "bucket", Key: "k.bin", UploadID: "u1"}, 2, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := url.Parse(rawURL)
+	parsed, err := url.Parse(rawURL.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +247,7 @@ func TestPresignUploadPartObject_BindsSessionAndPart(t *testing.T) {
 	}
 
 	// 不同分片必须得到不同 token
-	other, _ := d.PresignUploadPartObject(context.Background(), "bucket", "k.bin", "u1", 3, time.Hour)
+	other, _ := d.PresignUploadPartObject(context.Background(), storage.MultipartRef{Bucket: "bucket", Key: "k.bin", UploadID: "u1"}, 3, time.Hour)
 	if other == rawURL {
 		t.Fatal("different part numbers must produce different URLs")
 	}

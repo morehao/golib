@@ -7,6 +7,7 @@ import (
 
 	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -16,22 +17,45 @@ func init() {
 	testutil.Load()
 }
 
+// pingOrSkip 真正验证数据库可达后返回连接。
+//
+// gorm.Open 是**惰性**的：它只解析 DSN，不建立连接，数据库不可达时照样返回
+// (db, nil)。原先的 skip 守卫直接依赖 gorm.Open 的 error，因此从未生效 ——
+// 测试带着一个连不上的 db 继续往下跑，最终在首次查询处以 "table user not exist"
+// 失败，再被 assert.Nil 的非致命性放大成 nil 解引用 panic。
+func pingOrSkip(t *testing.T, db *gorm.DB, kind string, err error) *gorm.DB {
+	t.Helper()
+	if err != nil {
+		t.Skipf("skip %s-dependent test: %v", kind, err)
+	}
+	sqlDB, sqlErr := db.DB()
+	if sqlErr != nil {
+		t.Skipf("skip %s-dependent test: %v", kind, sqlErr)
+	}
+	if pingErr := sqlDB.Ping(); pingErr != nil {
+		t.Skipf("skip %s-dependent test: %v", kind, pingErr)
+	}
+	return db
+}
+
 func openMySQLForTest(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := testutil.GetEnv(testutil.MySQLDSN, "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True")
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Skipf("skip mysql-dependent test: %v", err)
-	}
-	return db
+	return pingOrSkip(t, db, "mysql", err)
 }
 
 func openPostgresForTest(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := testutil.GetEnv(testutil.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Skipf("skip postgres-dependent test: %v", err)
+	db = pingOrSkip(t, db, "postgres", err)
+	// 仓库里没有任何迁移/SQL 文件为 demo 库建表（已核实：无 *.sql、无 AutoMigrate），
+	// 这两个用例只是要拿一张真实表的元数据做解析。缺表时按"依赖未就绪"跳过并
+	// 说明缺什么，而不是报成语义不明的 "table user not exist" 失败 —— 后者看起来
+	// 像代码缺陷，实际是环境未预置。
+	if !db.Migrator().HasTable("user") {
+		t.Skip("skip postgres-dependent test: demo 库缺少 user 表（需手工建表，仓库未提供迁移）")
 	}
 	return db
 }
@@ -73,9 +97,9 @@ func TestGenModuleCode(t *testing.T) {
 	templateParam, getParamErr := autoCodeTool.AnalysisModuleTpl(db, cfg)
 	assert.Nil(t, getParamErr)
 	type Param struct {
-		PackageName         string
-		StructName          string
-		DBServiceName       string
+		PackageName          string
+		StructName           string
+		DBServiceName        string
 		ControllerImportPath string
 	}
 	var params []GenParamsItem
@@ -246,11 +270,11 @@ func TestGenModuleCodeWithPostgreSQL(t *testing.T) {
 	}
 	autoCodeTool := NewGenerator()
 	templateParam, getParamErr := autoCodeTool.AnalysisModuleTpl(db, cfg)
-	assert.Nil(t, getParamErr)
+	require.Nil(t, getParamErr)
 	type Param struct {
-		PackageName         string
-		StructName          string
-		DBServiceName       string
+		PackageName          string
+		StructName           string
+		DBServiceName        string
 		ControllerImportPath string
 	}
 	var params []GenParamsItem
@@ -305,7 +329,7 @@ func TestGenModelCodeWithPostgreSQL(t *testing.T) {
 	}
 	autoCodeTool := NewGenerator()
 	templateParam, getParamErr := autoCodeTool.AnalysisModuleTpl(db, cfg)
-	assert.Nil(t, getParamErr)
+	require.Nil(t, getParamErr)
 	type ModelFieldItem struct {
 		FieldName    string
 		ColumnName   string

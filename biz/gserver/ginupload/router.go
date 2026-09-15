@@ -18,6 +18,7 @@ func Register(group *gin.RouterGroup, fs *filestore.FileStore) {
 		f.POST("/:id/presign-url", handlePresignGetFileURL(fs)) // 获取下载预签名 URL
 		f.GET("/:id/redirect", handleRedirectByID(fs))          // 302 重定向到文件 URL
 		f.GET("/:id/serve", handleServeByID(fs))                // 直接输出文件内容
+		f.GET("/:id/parts", handleListParts(fs))                // 列出分片上传已上传的分片
 		// 兼容查询参数形式（无文件 ID，仅 storage_uri/file_id 场景）
 		f.GET("/redirect", handleRedirectByQuery(fs))
 		f.GET("/serve", handleServeByQuery(fs))
@@ -26,10 +27,10 @@ func Register(group *gin.RouterGroup, fs *filestore.FileStore) {
 	// multipart 分片上传子资源
 	m := group.Group("/files/multipart")
 	{
-		m.POST("", handleCreateMultipartUpload(fs))                      // 创建分片上传会话
-		m.POST("/:fileID/parts", handlePresignUploadPartURL(fs))         // 获取分片预签名 URL
-		m.POST("/:fileID/complete", handleCompleteMultipartUpload(fs))   // 完成分片上传
-		m.DELETE("/:fileID", handleAbortMultipartUpload(fs))             // 取消分片上传
+		m.POST("", handleCreateMultipartUpload(fs))                    // 创建分片上传会话
+		m.POST("/:fileID/parts", handlePresignUploadPartURL(fs))       // 获取分片预签名 URL
+		m.POST("/:fileID/complete", handleCompleteMultipartUpload(fs)) // 完成分片上传
+		m.DELETE("/:fileID", handleAbortMultipartUpload(fs))           // 取消分片上传
 	}
 
 	if fs.IsLocal() {

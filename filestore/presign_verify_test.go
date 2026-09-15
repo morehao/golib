@@ -101,8 +101,8 @@ func TestHandlePresignedUploadPart(t *testing.T) {
 
 	part, err := fs.HandlePresignedUploadPart(context.Background(), "test-bucket", "k.bin", "upload-1", 3, strings.NewReader("part-body"))
 	require.NoError(t, err)
-	require.Equal(t, 3, part.PartNumber)
+	require.Equal(t, int32(3), part.PartNumber)
 	require.Equal(t, "upload-1", st.lastUploadID)
-	require.Equal(t, 3, st.lastPartNumber)
+	require.Equal(t, int32(3), st.lastPartNumber)
 	require.Equal(t, "part-body", st.lastPartBody)
 }

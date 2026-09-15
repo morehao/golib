@@ -17,6 +17,9 @@ func TestIntegration(t *testing.T) {
 	cfg := storage.Config{
 		BaseDir: dir,
 		BaseURL: "http://localhost:8080/files",
+		// 配上密钥，让契约套件的预签名用例真正跑到 local 的 HMAC 签发路径上；
+		// 未配置时 Caps 会如实声明"不支持预签名"并跳过该用例。
+		SignSecret: "integration-test-secret",
 	}
 	s, err := New(cfg)
 	if err != nil {

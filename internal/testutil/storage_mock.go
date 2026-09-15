@@ -34,12 +34,23 @@ type storageMock struct {
 
 func storageMockKey(bucket, key string) string { return bucket + "/" + key }
 
-func (m *storageMock) newPath(bucket, key string) storage.StoragePath {
-	return m.pb.Build(bucket, key)
-}
-
 func (m *storageMock) PathBuilder() storage.PathBuilder {
 	return m.pb
+}
+
+// Caps 声明内存 mock 的能力：无外部限制，且不支持条件写 ——
+// mock 不模拟 If-None-Match，声明成支持会让上层测试得到错误的信心。
+func (m *storageMock) Caps() storage.Caps {
+	return storage.Caps{
+		ConditionalWrite: storage.ConditionalWriteNone,
+		Multipart:        true,
+		ListParts:        true,
+		ServerSideCopy:   true,
+		PresignPut:       false,
+		PresignPart:      false,
+		PresignGet:       false,
+		ByteRange:        false,
+	}
 }
 
 // ---------- Base ----------
@@ -91,11 +102,12 @@ func (m *storageMock) putObject(ctx context.Context, bucket, key string, body io
 	etag := fmt.Sprintf("%x", h)
 	return &storage.PutObjectResult{
 		ObjectInfo: storage.ObjectInfo{
-			Path:         m.newPath(bucket, key),
+			Bucket:       bucket,
+			Key:          key,
 			Size:         int64(len(data)),
 			ETag:         etag,
 			ContentType:  "application/octet-stream",
-			LastModified: time.Now(),
+			LastModified: time.Now().UTC(),
 		},
 	}, nil
 }
@@ -107,12 +119,13 @@ func (m *storageMock) getObject(ctx context.Context, bucket, key string) (*stora
 	}
 	return &storage.GetObjectResult{
 		Body: io.NopCloser(bytes.NewReader(data)),
-		ObjectInfo: storage.ObjectInfo{
-			Path:         m.newPath(bucket, key),
+		Info: storage.ObjectInfo{
+			Bucket:       bucket,
+			Key:          key,
 			Size:         int64(len(data)),
 			ETag:         fmt.Sprintf("%x", md5.Sum(data)),
 			ContentType:  "application/octet-stream",
-			LastModified: time.Now(),
+			LastModified: time.Now().UTC(),
 		},
 	}, nil
 }
@@ -128,10 +141,11 @@ func (m *storageMock) listObjects(ctx context.Context, bucket, prefix string, op
 			continue
 		}
 		contents = append(contents, storage.ObjectInfo{
-			Path:         m.newPath(bucket, mkKey),
+			Bucket:       bucket,
+			Key:          mkKey,
 			Size:         int64(len(v)),
 			ETag:         fmt.Sprintf("%x", md5.Sum(v)),
-			LastModified: time.Now(),
+			LastModified: time.Now().UTC(),
 		})
 	}
 	return &storage.ListObjectsOutput{
@@ -150,19 +164,23 @@ func parseStorageMockKey(k string) (bucket, key string) {
 
 // ---------- Multipart ----------
 
-func (m *storageMock) CreateMultipartUpload(ctx context.Context, bucket, key string, opts ...storage.PutOption) (string, error) {
+func (m *storageMock) CreateMultipart(ctx context.Context, bucket, key string, in storage.CreateMultipartInput) (string, error) {
 	return "mock-upload-id", nil
 }
 
-func (m *storageMock) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, body io.Reader) (*storage.CompletedPart, error) {
-	return &storage.CompletedPart{PartNumber: partNumber, ETag: "mock-etag"}, nil
+func (m *storageMock) UploadPart(ctx context.Context, ref storage.MultipartRef, number int32, body io.Reader) (*storage.PartInfo, error) {
+	return &storage.PartInfo{PartNumber: number, ETag: "mock-etag"}, nil
 }
 
-func (m *storageMock) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []storage.CompletedPart) error {
-	return nil
+func (m *storageMock) ListParts(ctx context.Context, ref storage.MultipartRef, opts ...storage.ListPartsOption) (*storage.ListPartsOutput, error) {
+	return &storage.ListPartsOutput{}, nil
 }
 
-func (m *storageMock) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
+func (m *storageMock) CompleteMultipart(ctx context.Context, ref storage.MultipartRef, parts []storage.PartInfo) (*storage.ObjectInfo, error) {
+	return &storage.ObjectInfo{Bucket: ref.Bucket, Key: ref.Key}, nil
+}
+
+func (m *storageMock) AbortMultipart(ctx context.Context, ref storage.MultipartRef) error {
 	return nil
 }
 
@@ -176,10 +194,12 @@ func (m *storageMock) HeadObject(ctx context.Context, bucket, key string) (*stor
 		return nil, fmt.Errorf("%w: %s", storage.ErrNotFound, key)
 	}
 	return &storage.ObjectInfo{
-		Path:        m.newPath(bucket, key),
-		Size:        int64(len(data)),
-		ETag:        fmt.Sprintf("%x", md5.Sum(data)),
-		ContentType: "application/octet-stream",
+		Bucket:       bucket,
+		Key:          key,
+		Size:         int64(len(data)),
+		ETag:         fmt.Sprintf("%x", md5.Sum(data)),
+		ContentType:  "application/octet-stream",
+		LastModified: time.Now().UTC(),
 	}, nil
 }
 
@@ -194,14 +214,14 @@ func (m *storageMock) CopyObject(ctx context.Context, srcBucket, srcKey, dstBuck
 	return nil
 }
 
-func (m *storageMock) PresignGetObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.GetOption) (string, error) {
-	return "", storage.ErrNotSupported
+func (m *storageMock) PresignGetObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.GetOption) (*storage.PresignedRequest, error) {
+	return nil, storage.ErrNotSupported
 }
 
-func (m *storageMock) PresignPutObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.PutOption) (string, error) {
-	return "", storage.ErrNotSupported
+func (m *storageMock) PresignPutObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.PutOption) (*storage.PresignedRequest, error) {
+	return nil, storage.ErrNotSupported
 }
 
-func (m *storageMock) PresignUploadPartObject(ctx context.Context, bucket, key, uploadID string, partNumber int, ttl time.Duration, opts ...storage.PutOption) (string, error) {
-	return "", storage.ErrNotSupported
+func (m *storageMock) PresignUploadPartObject(ctx context.Context, ref storage.MultipartRef, number int32, ttl time.Duration, opts ...storage.PutOption) (*storage.PresignedRequest, error) {
+	return nil, storage.ErrNotSupported
 }

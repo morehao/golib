@@ -67,8 +67,21 @@ out, err := st.ListObjects(ctx, "mybucket", "dir/", storage.WithMaxKeys(100))
 | `BaseURL` | 对外公共访问基础 URL，同时作为 local 预签名 URL 的前缀 |
 | `SignSecret` | 预签名 HMAC-SHA256 密钥；为空时 local 的 `Presign*` 返回 `ErrNotSupported` |
 | `MultipartTTL` | 分片会话存活时间（仅 local）；0 用默认 24h，负值关闭自动回收 |
-| `MaxRetries` / `Timeout` | 请求重试与超时 |
-| `ExtraOptions` | 透传给 SDK 的额外配置 |
+| `Retry.MaxAttempts` | SDK 最大**尝试次数**（非重试次数）；<=0 用 SDK 默认 3 |
+
+各驱动的端点约定：
+
+| 驱动 | `Endpoint` | `Region` |
+|---|---|---|
+| MinIO | `127.0.0.1:9000`（无 scheme 时按 `UseSSL` 补 http/https） | 任意，如 `us-east-1` |
+| 阿里云 OSS | `https://oss-cn-beijing.aliyuncs.com`（须与 bucket 所在地域一致） | 与 endpoint 同地域，如 `oss-cn-beijing` |
+| 腾讯云 COS | `https://cos.ap-beijing.myqcloud.com` | 如 `ap-beijing` |
+| 火山引擎 TOS | `https://tos-cn-beijing.volces.com` | 如 `cn-beijing` |
+
+端点与 bucket 地域不一致时，OSS/COS 会直接拒绝请求（OSS 报 `SecondLevelDomainForbidden`），
+因此 `Region` 必须与 `Endpoint` 所在地域一致。OSS 的寻址风格、条件写头、
+`DeleteObjects` 的 `Content-MD5`、请求校验和编码等差异全部收敛在
+`storage/driver/oss` 的 `ProviderProfile` 里，调用方无需感知。
 
 ## 核心接口
 
