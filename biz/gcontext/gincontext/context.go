@@ -86,6 +86,22 @@ func GetURLFull(ctx *gin.Context) string {
 	return ctx.GetString(gcontext.KeyUrlFull)
 }
 
+// SetAppError 把业务错误码与信息写入 gin.Context。
+//
+// 供响应渲染层（gincontext.Fail / Abort 等）在写出 envelope 时调用，让访问日志这类
+// 横切组件直接读到业务错误，而不必解析响应体 —— 响应体可能被压缩、可能因为采集上限
+// 被截断，截断后的 JSON 无法反序列化，恰好是最需要错误码的场景。
+func SetAppError(ctx *gin.Context, code int, msg string) {
+	ctx.Set(gcontext.KeyAppErrorCode, code)
+	ctx.Set(gcontext.KeyAppErrorMessage, msg)
+}
+
+// GetAppError 读取 SetAppError 写入的业务错误，未写入时返回 (0, "")。
+func GetAppError(ctx *gin.Context) (int, string) {
+	code := ctx.GetInt(gcontext.KeyAppErrorCode)
+	return code, ctx.GetString(gcontext.KeyAppErrorMessage)
+}
+
 func GetString(ctx *gin.Context, key string) string {
 	return ctx.GetString(key)
 }

@@ -63,13 +63,19 @@ func buildErrorResponse(ctx *gin.Context, err error) gcontext.ResponseRender {
 	r := gcontext.NewResponseRender()
 	r.SetRequestID(GetRequestID(ctx))
 	var gErr gerror.Error
+	code := -1
+	msg := ""
 	if errors.As(err, &gErr) {
-		r.SetCode(gErr.Code)
-		r.SetMsg(gErr.Msg)
+		code = gErr.Code
+		msg = gErr.Msg
 	} else {
-		r.SetCode(-1)
-		r.SetMsg(gerror.Cause(err).Error())
+		msg = gerror.Cause(err).Error()
 	}
+	// 业务错误同时写进 context：访问日志据此记录 app.error.code/message，不再依赖
+	// 解析响应体（响应体会被压缩或按采集上限截断）。
+	SetAppError(ctx, code, msg)
+	r.SetCode(code)
+	r.SetMsg(msg)
 	r.SetData(gin.H{})
 	return r
 }

@@ -70,6 +70,11 @@ const (
 	KeyErrorType              = "error.type"
 	KeyErrorMessage           = "error.message"
 
+	// 以下两个为扩展字段（OTel semconv 未定义）：body 内容因超过采集上限被截断。
+	// 只有同时输出了对应的 body 内容字段时才有意义。
+	KeyHttpRequestBodyTruncated  = "http.request.body.truncated"
+	KeyHttpResponseBodyTruncated = "http.response.body.truncated"
+
 	KeyEventName = "event.name"
 
 	ValueEventHTTPServerRequest    = "http.server.request"
