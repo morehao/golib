@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,18 @@ import (
 var suiteKeys = []string{
 	"k1", "hd1", "root.txt", "a/1.txt", "a/2.txt", "b/1.txt", "p1.txt",
 	"invariants-1", "conditional-1", "del-a", "del-b", "del-c",
-	"range-1", "mp-rt",
+	"range-1", "mp-rt", "part-presign",
+	"sp ace.txt", "plus+plus.txt", "plus plus.txt", "pct%25.txt",
+	"a&b=c.txt", "中文/键.txt", "copy src+plus.txt", "copy dst+plus.txt",
+}
+
+// keysOf 抽出对象列表里的 key，仅用于失败信息。
+func keysOf(objs []storage.ObjectInfo) []string {
+	keys := make([]string, 0, len(objs))
+	for _, o := range objs {
+		keys = append(keys, o.Key)
+	}
+	return keys
 }
 
 // RunStorageSuite 对一个 storage 实例跑通用一致性测试。
@@ -282,6 +294,18 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		}
 		ref := storage.MultipartRef{Bucket: bucket, Key: key, UploadID: uploadID}
 
+		// 会话没走到 complete 就失败时必须自己回收：未完成的分片上传在对象
+		// 列表里不可见，却真实占用存储，且 S3/MinIO 默认不会自动过期。
+		completed := false
+		t.Cleanup(func() {
+			if completed {
+				return
+			}
+			if err := s.AbortMultipart(ctx, ref); err != nil {
+				t.Logf("清理未完成的分片上传失败（不影响测试结论）: %v", err)
+			}
+		})
+
 		part1 := bytes.Repeat([]byte("a"), int(partSize))
 		part2 := []byte("tail")
 		p1, err := s.UploadPart(ctx, ref, 1, bytes.NewReader(part1))
@@ -329,6 +353,7 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		if err != nil {
 			t.Fatalf("CompleteMultipart = %v", err)
 		}
+		completed = true
 		// complete 响应里的 ETag 是后端白送的，不应丢弃。
 		if info == nil || info.ETag == "" {
 			t.Error("CompleteMultipart 未返回 ETag（S3 的 complete 响应本就带它）")
@@ -392,6 +417,182 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		}
 	})
 
+	// 分片预签名是"客户端直传大对象"的唯一路径，而它最容易出的错是**签名没有
+	// 绑定 uploadId/partNumber**：客户端拿到的 URL 实际指向整对象 PUT，直传的
+	// 分片会把最终对象整体覆盖，且整条链路都不报错。这里用"必须与整对象 PUT 的
+	// 签名结果不同"把这种退化成败钉死；真实端点是否接受该签名由各 provider 的
+	// RunPresignLiveRoundTrip 验证（local 的 URL 指向业务服务，套件里没有服务可打）。
+	t.Run("PresignPart", func(t *testing.T) {
+		caps := s.Caps()
+		if !caps.Multipart || !caps.PresignPart {
+			t.Skipf("driver 声明不支持分片预签名（multipart=%v presign_part=%v）", caps.Multipart, caps.PresignPart)
+		}
+		const key = "part-presign"
+		uploadID, err := s.CreateMultipart(ctx, bucket, key, storage.CreateMultipartInput{ContentType: "text/plain"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref := storage.MultipartRef{Bucket: bucket, Key: key, UploadID: uploadID}
+		aborted := false
+		t.Cleanup(func() {
+			if aborted {
+				return
+			}
+			if err := s.AbortMultipart(ctx, ref); err != nil {
+				t.Logf("清理分片会话失败（不影响测试结论）: %v", err)
+			}
+		})
+
+		// 会话与分片号是必填项：缺了就必须在签发前报错，而不是签出一个
+		// 指向别处的 URL 让客户端 403/覆盖对象。
+		if _, err := s.PresignUploadPartObject(ctx, ref, 0, time.Minute); !errors.Is(err, storage.ErrInvalidArgument) {
+			t.Errorf("part_number=0 的预签名 = %v, want ErrInvalidArgument", err)
+		}
+		if _, err := s.PresignUploadPartObject(ctx, storage.MultipartRef{Bucket: bucket, Key: key}, 1, time.Minute); !errors.Is(err, storage.ErrInvalidArgument) {
+			t.Errorf("缺少 upload_id 的预签名 = %v, want ErrInvalidArgument", err)
+		}
+
+		before := time.Now().UTC()
+		part, err := s.PresignUploadPartObject(ctx, ref, 1, 0)
+		if err != nil {
+			t.Fatalf("PresignUploadPartObject = %v", err)
+		}
+		if part.Method != http.MethodPut {
+			t.Errorf("分片预签名 Method = %q, want PUT", part.Method)
+		}
+		if part.URL == "" {
+			t.Error("分片预签名 URL 为空")
+		}
+		if part.Headers == nil {
+			t.Error("分片预签名 Headers 为 nil；调用方需要无条件遍历它")
+		}
+		if got := part.ExpiresAt.Sub(before); got < storage.PresignTTLDefault-time.Minute {
+			t.Errorf("ttl=0 的有效期 = %s, want 约 %s", got, storage.PresignTTLDefault)
+		}
+		if _, err := s.PresignUploadPartObject(ctx, ref, 1, storage.PresignTTLMax+time.Hour); err == nil {
+			t.Error("超过 7 天的有效期必须在签发前报错")
+		}
+		whole, err := s.PresignPutObject(ctx, bucket, key, 0)
+		if err != nil {
+			t.Fatalf("PresignPutObject = %v", err)
+		}
+		if whole.URL == part.URL {
+			t.Error("分片预签名与整对象 PUT 的签名结果完全相同：签名没有绑定 uploadId/partNumber，" +
+				"客户端直传的分片会静默覆盖整个对象")
+		}
+
+		if err := s.AbortMultipart(ctx, ref); err != nil {
+			t.Fatalf("AbortMultipart = %v", err)
+		}
+		aborted = true
+	})
+
+	// key 是字节串，不是 URL。这条子测试钉住"驱动不得对 key 做 URL 编解码之外的
+	// 改写"：'+' 与空格是经典陷阱（把 '+' 当空格解码会让两个不同的 key 撞在一起），
+	// '%' 是二次解码陷阱，中文则确认 UTF-8 不被破坏。
+	// 这些 key 同时是 CopyObject 的源 key 来源（见下一条）。
+	t.Run("SpecialCharKeys", func(t *testing.T) {
+		cases := []struct{ key, body string }{
+			{"sp ace.txt", "space"},
+			{"plus+plus.txt", "plus"},
+			{"plus plus.txt", "plus-space"},
+			{"pct%25.txt", "percent"},
+			{"a&b=c.txt", "amp-eq"},
+			{"中文/键.txt", "utf8"},
+		}
+		for _, c := range cases {
+			if _, err := s.PutObject(ctx, bucket, c.key, bytes.NewReader([]byte(c.body))); err != nil {
+				t.Errorf("PutObject(%q) = %v", c.key, err)
+				continue
+			}
+			got, err := s.GetObject(ctx, bucket, c.key)
+			if err != nil {
+				t.Errorf("GetObject(%q) = %v", c.key, err)
+				continue
+			}
+			data, _ := io.ReadAll(got.Body)
+			got.Body.Close()
+			if string(data) != c.body {
+				t.Errorf("GetObject(%q) body = %q, want %q", c.key, data, c.body)
+			}
+			if got.Info.Key != c.key {
+				t.Errorf("GetObject(%q) 回显 Key = %q（key 被改写了）", c.key, got.Info.Key)
+			}
+			head, err := s.HeadObject(ctx, bucket, c.key)
+			if err != nil {
+				t.Errorf("HeadObject(%q) = %v", c.key, err)
+				continue
+			}
+			if head.Size != int64(len(c.body)) {
+				t.Errorf("HeadObject(%q) Size = %d, want %d", c.key, head.Size, len(c.body))
+			}
+		}
+
+		// 交叉断言：只在 '+' 与空格上不同的两个 key 必须各自独立存在。
+		// 只用"各自读回自己的内容"是发现不了 '+' ↔ ' ' 折叠的 —— 两个 key 会
+		// 指向同一个对象，各自都"自洽"，只有对比才暴露。
+		out, err := s.ListObjects(ctx, bucket, "plus")
+		if err != nil {
+			t.Fatalf("ListObjects(prefix=plus) = %v", err)
+		}
+		found := make(map[string]string, len(out.Contents))
+		for _, obj := range out.Contents {
+			found[obj.Key] = obj.Key
+		}
+		for _, want := range []string{"plus+plus.txt", "plus plus.txt"} {
+			if _, ok := found[want]; !ok {
+				t.Errorf("ListObjects(prefix=plus) 未见 key %q（现有 %v）：'+' 与空格被折叠", want, keysOf(out.Contents))
+			}
+		}
+	})
+
+	// CopyObject 是唯一把源 key 放进请求头的路径（x-amz-copy-source），
+	// 它的转义规则与请求路径不同（'+' 在查询串里表示空格，因此必须编成 %2B）。
+	// 这里特意用带空格与 '+' 的源 key，并核对内容、元数据与"源对象仍在"。
+	t.Run("CopyObject", func(t *testing.T) {
+		if !s.Caps().ServerSideCopy {
+			t.Skip("driver 声明不支持服务端拷贝")
+		}
+		const (
+			src = "copy src+plus.txt"
+			dst = "copy dst+plus.txt"
+		)
+		payload := []byte("copy payload")
+		if _, err := s.PutObject(ctx, bucket, src, bytes.NewReader(payload), storage.WithContentType("text/plain")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CopyObject(ctx, bucket, src, bucket, dst); err != nil {
+			t.Fatalf("CopyObject = %v", err)
+		}
+		info, err := s.HeadObject(ctx, bucket, dst)
+		if err != nil {
+			t.Fatalf("HeadObject(%q) = %v", dst, err)
+		}
+		if info.Size != int64(len(payload)) {
+			t.Errorf("拷贝后 Size = %d, want %d", info.Size, len(payload))
+		}
+		if info.ContentType != "text/plain" {
+			t.Errorf("拷贝后 ContentType = %q, want text/plain（COPY 语义应保留元数据）", info.ContentType)
+		}
+		got, err := s.GetObject(ctx, bucket, dst)
+		if err != nil {
+			t.Fatalf("GetObject(%q) = %v", dst, err)
+		}
+		defer got.Body.Close()
+		data, _ := io.ReadAll(got.Body)
+		if !bytes.Equal(data, payload) {
+			t.Errorf("拷贝后内容 = %q, want %q", data, payload)
+		}
+		// COPY 不是 MOVE：源对象必须还在。
+		if _, err := s.HeadObject(ctx, bucket, src); err != nil {
+			t.Errorf("拷贝后源对象丢失: %v", err)
+		}
+		// 源不存在时必须是 ErrNotFound，而不是拷出一个空对象。
+		if err := s.CopyObject(ctx, bucket, "copy-missing-src", bucket, dst); !errors.Is(err, storage.ErrNotFound) {
+			t.Errorf("拷贝不存在的源 = %v, want ErrNotFound", err)
+		}
+	})
+
 	t.Run("DeleteObjects", func(t *testing.T) {
 		keys := []string{"del-a", "del-b", "del-c"}
 		for _, k := range keys {
@@ -428,6 +629,20 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		keys := make([]string, n)
 		for i := range keys {
 			keys[i] = fmt.Sprintf("bulk-%d", i)
+		}
+		// 收尾必须在第一次写入之前注册，并且用上面这个已全部定名的 keys：
+		// 中途 t.Fatal 时顶层的 suiteKeys（静态清单，不可能枚举这 n 个 key）
+		// 帮不上忙，真实桶里会永久残留已写入的那部分对象。
+		deleted := false
+		t.Cleanup(func() {
+			if deleted {
+				return
+			}
+			if err := s.DeleteObjects(ctx, bucket, keys); err != nil {
+				t.Logf("清理 bulk 对象失败（不影响测试结论）: %v", err)
+			}
+		})
+		for i := range keys {
 			if _, err := s.PutObject(ctx, bucket, keys[i], bytes.NewReader([]byte("x"))); err != nil {
 				t.Fatalf("准备第 %d 个对象失败: %v", i, err)
 			}
@@ -435,6 +650,7 @@ func RunStorageSuite(t *testing.T, s storage.Storage, bucket string) {
 		if err := s.DeleteObjects(ctx, bucket, keys); err != nil {
 			t.Fatalf("DeleteObjects(%d keys) = %v，分批实现可能有误", n, err)
 		}
+		deleted = true
 		if _, err := s.HeadObject(ctx, bucket, keys[n-1]); !errors.Is(err, storage.ErrNotFound) {
 			t.Errorf("末批对象未被删除: %v", err)
 		}

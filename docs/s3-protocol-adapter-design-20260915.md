@@ -403,14 +403,16 @@ type ProviderProfile struct {
 
 | 能力 | MinIO | OSS | COS | TOS | local |
 |---|---|---|---|---|---|
-| 路径风格（`ForcePathStyle`） | PathStyle | **VirtualHosted，已实测**（path-style 回 403 `SecondLevelDomainForbidden`） | VirtualHosted | PathStyle | n/a |
-| 条件写模式（`ConditionalWrite`） | 待验证（声明 NativeIfNoneMatch） | **VendorHeader，已实测**（`x-oss-forbid-overwrite`；`If-None-Match:*` 回 400 `NotImplemented`） | **VendorHeader，已实测**（`x-cos-forbid-overwrite`） | 待验证（声明 NativeIfNoneMatch） | 进程内锁（原生保证） |
-| 条件写冲突的错误码映射（`ErrorCodeKind`） | 不需要 | **已实测**：`FileAlreadyExists`→`ErrAlreadyExists`（409） | **已实测**：`FileAlreadyExists`→`ErrAlreadyExists`（409） | 不需要 | 不需要 |
-| 请求校验和（`RequestChecksumCalculation`） | 待验证 | **已实测不支持 aws-chunked**，须降为 `when_required`（否则 PutObject 回 400 `NotImplemented`） | **已实测兼容**（沿用 SDK 默认 `when_supported`，aws-chunked 可用） | 待验证 | n/a |
-| `DeleteObjects` 前置校验和 | 不需要 | **已实测需要 `Content-MD5`**（否则回 400 `MissingArgument`） | **已实测需要 `Content-MD5`** | 待验证 | 不需要 |
-| `MinPartSize` | 5 MiB（未实测） | **100 KB，已实测**（OSS 非末分片下限即 100 KB） | **1 MiB，已实测**（文档写"1MB"，但 1,000,000 字节被 `EntityTooSmall` 拒绝，1,048,576 通过） | 5 MiB（未实测） | 0（无限制） |
-| `MaxDeleteBatch` | 1000 | 1000（**已实测**：1001 个 key 的分批删除通过） | 1000（**已实测**：1001 个 key 的分批删除通过，85.8s） | 1000 | 0（无限制） |
-| 预签名 GET/PUT 回环 | 未实测 | **已实测通过** | **已实测通过**（COS 接受 SigV4 预签名，而非自有的 q-sign） | 未实测 | 进程内 HMAC |
+| 路径风格（`ForcePathStyle`） | **PathStyle，已实测**（真实端点 `s3.i.yygu.cn:58081` 上 15 项契约套件全绿） | **VirtualHosted，已实测**（path-style 回 403 `SecondLevelDomainForbidden`） | VirtualHosted | **VirtualHosted，已实测**（path-style 回 403 `InvalidPathAccess`；原声明 `PathStyle` 在真机上 100% 请求被拒） | n/a |
+| 条件写模式（`ConditionalWrite`） | **NativeIfNoneMatch，已实测**（`If-None-Match:*` 生效，套件条件写用例通过） | **VendorHeader，已实测**（`x-oss-forbid-overwrite`；`If-None-Match:*` 回 400 `NotImplemented`） | **VendorHeader，已实测**（`x-cos-forbid-overwrite`） | **NativeIfNoneMatch，已实测**（`If-None-Match:*` 生效，契约套件条件写用例通过） | 进程内锁（原生保证） |
+| 条件写冲突的错误码映射（`ErrorCodeKind`） | 不需要（**已实测**：`PreconditionFailed` 走基类表→`ErrAlreadyExists`） | **已实测**：`FileAlreadyExists`→`ErrAlreadyExists`（409） | **已实测**：`FileAlreadyExists`→`ErrAlreadyExists`（409） | 不需要（**已实测**：`PreconditionFailed` 走基类表→`ErrAlreadyExists`） | 不需要 |
+| 请求校验和（`RequestChecksumCalculation`） | **已实测兼容**（沿用 SDK 默认 `when_supported`，Put/Get/分片均成功） | **已实测不支持 aws-chunked**，须降为 `when_required`（否则 PutObject 回 400 `NotImplemented`） | **已实测兼容**（沿用 SDK 默认 `when_supported`，aws-chunked 可用） | **已实测兼容**（沿用 SDK 默认 `when_supported`，Put/Get/分片均成功） | n/a |
+| `DeleteObjects` 前置校验和 | 不需要（**已实测**：未加中间件，1001 key 分批删除通过） | **已实测需要 `Content-MD5`**（否则回 400 `MissingArgument`） | **已实测需要 `Content-MD5`** | 不需要（**已实测**：未加中间件，1001 key 分批删除通过） | 不需要 |
+| `MinPartSize` | 5 MiB（**已实测可上传**，下限边界未探） | **100 KB，已实测**（OSS 非末分片下限即 100 KB） | **1 MiB，已实测**（文档写"1MB"，但 1,000,000 字节被 `EntityTooSmall` 拒绝，1,048,576 通过） | **4 MiB，已实测**（4,194,303 字节被 `EntityTooSmall` 拒绝，4,194,304 通过；1/2/3 MiB 同样被拒） | 0（无限制） |
+| `MaxDeleteBatch` | 1000（**已实测**：1001 个 key 的分批删除通过） | 1000（**已实测**：1001 个 key 的分批删除通过） | 1000（**已实测**：1001 个 key 的分批删除通过，85.8s） | 1000（**已实测**：1001 个 key 的分批删除通过，41.3s） | 0（无限制） |
+| 预签名 GET/PUT 回环 | **已实测通过**（path-style + 带端口的 host，SigV4 签名被接受） | **已实测通过** | **已实测通过**（COS 接受 SigV4 预签名，而非自有的 q-sign） | **已实测通过**（SigV4 预签名 GET/PUT 回环，见 `tos/presign_live_test.go`） | 进程内 HMAC |
+| 预签名分片直传（`PresignPart`） | **已实测通过**（`STORAGE_SUITE_BULK=1` 下 5 MiB 分片：预签名 PUT → 参与 complete → 读回） | **已实测通过**（契约套件断言"分片签名 ≠ 整对象签名"，live 回环默认跑 100 KB 分片） | **已实测通过**（live 回环默认跑 1 MiB 分片） | **已实测通过**（`STORAGE_SUITE_BULK=1` 下跑 4 MiB 分片） | 仅签名形状（URL 指向业务服务，套件里无服务可打） |
+| 服务端拷贝（`CopyObject`） | **已实测通过**（契约套件新增用例，源 key 含空格与 `+`，验证 `x-amz-copy-source` 转义） | **已实测通过**（同上） | **已实测通过**（同上） | **已实测通过**（同上） | **已实测通过**（硬链接实现） |
 | 虚拟托管域名模板 / region 策略 | 不纳入本期 | 不纳入本期 | 不纳入本期 | 不纳入本期 | n/a |
 | SSE | 本期不实现 | 本期不实现 | 本期不实现 | 本期不实现 | n/a |
 
@@ -430,7 +432,17 @@ type ProviderProfile struct {
 
 设计收益（**均已落地**）：`storage` 包不再出现 `myqcloud`（原先 `storage/path.go` 在通用包里硬编码 COS 域名，该代码已随死 URL API 一并删除）；`s3base` 不再出现供应商分支；`cos/driver.go` 里重复的那份 `usePathStyle` 已删除。
 
-**关于"四后端编译通过"这条判据的诚实说明**：本条只要求编译通过。实测覆盖 OSS（2026-09-15，`oss-cn-beijing`，bucket `sh-local-test`）与 COS（同批次，`ap-beijing`，bucket `test-ccnerf-1251908240`）两个真实端点，均跑完整契约套件 + 预签名 GET/PUT 回环，且都开了 `STORAGE_SUITE_BULK=1` 验证 1001 个 key 的分批删除。加上 local，实测覆盖三个端点（另有 in-process 桩覆盖 `s3base` 的协议路径）。MinIO（本机 9000 未起服务）与 TOS 的 profile 声明**未经真机验证**，能力矩阵中相应格仍标"待验证"而非填实测值 —— 不得把它们当作已验证结论使用。
+**TOS 真机实测（2026-09-15，`tos-s3-cn-beijing.volces.com`，bucket `sh-local-test`）**：除寻址风格（path-style 全量 403 `InvalidPathAccess` → 改 virtual-hosted）与 `MinPartSize`（实测 4 MiB，而非照抄 S3 的 5 MiB）两处**声明被真机证伪并已修正**外，契约套件 15 个子测试（含 `STORAGE_SUITE_BULK=1` 的 4 MiB 分片回环与 1001 key 分批删除）、预签名 GET/PUT 回环、预签名**分片**直传回环、`CopyObject` 均通过。**诚实边界**：`MaxSinglePut`（5 GiB）与 `MaxParts`（10000）是沿用 `S3Limits` 的未探边界，不可能靠上传 5 GiB 来验证。原先"`CopyObject`/`PresignUploadPartObject` 只有一次性探针验证、套件无回归用例"的缺口已在同批次补上（见下"共享套件新增三条用例"）。
+
+**共享套件新增三条用例（2026-09-15）**：此前 `RunStorageSuite` 有 12 条，而 `Caps` 里的 `ServerSideCopy`/`PresignPart` 两项能力**声明了却没有断言**（只有桩与 local 的零散覆盖），特殊字符 key 也没有任何真机用例——这三处正是"声明了却没人守"的典型。补上后共 15 条：
+
+- `CopyObject`：源 key 故意含空格与 `+`（`x-amz-copy-source` 的转义规则与请求路径不同：`+` 在查询串语义里表示空格，必须编成 `%2B`），核对内容、`ContentType` 与"源对象仍在"，并要求源不存在时报 `ErrNotFound`，而不是拷出一个空对象；
+- `SpecialCharKeys`：空格、`+`、`%`、`&`/`=`、中文 key 的 Put/Get/Head 回环，外加一条**交叉断言**——只在 `+` 与空格上不同的两个 key 必须在列举里同时存在。只用"各自读回自己的内容"是发现不了 `+` ↔ 空格折叠的：两个 key 指向同一对象时各自都"自洽"；
+- `PresignPart`：会话号/分片号缺失必须报 `ErrInvalidArgument`、ttl 默认值与 7 天上限，以及**分片签名结果必须不等于整对象 PUT 的签名**——签名漏绑 `uploadId`/`partNumber` 时，客户端直传的分片会静默覆盖整个对象，且全链路不报错。
+
+三条在 local、进程内桩与真实 MinIO/OSS/COS/TOS 上全绿。`RunPresignLiveRoundTrip` 同步扩展到预签名**分片**，在 OSS（100 KB）、COS（1 MiB）、TOS（4 MiB）、MinIO（5 MiB，后两者需 `STORAGE_SUITE_BULK=1`）上验证了"预签名 PUT 分片 → 参与 `CompleteMultipart` → 读回校验"。
+
+**关于"四后端编译通过"这条判据的诚实说明**：本条只要求编译通过。实测覆盖 MinIO（`s3.i.yygu.cn:58081`，bucket `dotpen-api-test`）、OSS（`oss-cn-beijing`，bucket `sh-local-test`）、COS（`ap-beijing`，bucket `test-ccnerf-1251908240`）与 TOS（`tos-s3-cn-beijing.volces.com`，bucket `sh-local-test`，归属地域由 `GetBucketLocation` 实测确认）四个真实端点，均跑完整契约套件（15 项）+ 预签名 GET/PUT 回环，且都开了 `STORAGE_SUITE_BULK=1` 验证分片回环、预签名分片直传与 1001 个 key 的分批删除。加上 local，实测覆盖五个端点（另有 in-process 桩覆盖 `s3base` 的协议路径）。**仍未做真机验收的只剩真实 AWS S3**（本期只要求"可连通"，见上文后端范围）。
 
 OSS 与 COS 的实测同时说明：**未实测的声明可以错得很彻底**。OSS 的寻址风格与条件写两项声明在真机上会让 100% 的请求失败；两家的 `MinPartSize` 都照抄了 S3 的 5 MiB，而真实值分别是 100 KB 与 1 MiB，导致分片上传这条路径从未在真实端点上跑过（被套件按"体积过大"跳过）。COS 这一格尤其值得记：官方文档写的是"1MB"，实测边界却是 1 MiB（1,000,000 字节被拒），**按文档字面填会放过必然失败的请求**。因此 MinIO/TOS 接入前必须先跑一次同一套契约套件，且分片下限要按实测而非文档填。
 
@@ -697,9 +709,9 @@ func ResolvePresignTTL(ttl time.Duration) (time.Duration, error) // 0→默认�
 | 阶段 | 状态 | 证据 |
 |---|---|---|
 | 一、契约与错误模型 | 完成 | `storage` 包编译通过；`ValidateParts`/`ValidatePartCount`/`FromPutOptions`/`ResolvePresignTTL`/`RangeInfo.Len`/`DeleteObjectsChunked` 的零网络单测全绿 |
-| 二、契约套件 | 完成 | `internal/testutil.RunStorageSuite` 共 12 个子测试，在**三个端点**上全绿：`local`（真实磁盘）、真实 COS、进程内 S3 桩。`ByteRange`/`Multipart`/`Presign` 三条为本次新增的不变量 |
-| 三、`s3base` 纯协议化 | 完成 | 真实 COS 端点 `TestIntegration` 12 子测试全绿（含 5 MiB 分片完整回环 1.84s、1001 对象分批删除 74.6s）；桩上 `TestStubRegression_*` 与整份契约套件全绿 |
-| 四、provider 数据化 | 完成（受端点所限） | 四后端编译通过；COS 的 `VendorHeader` 条件写与 `NotModified→ErrPreconditionFailed` 映射经真实端点实测；**MinIO/OSS/TOS 的声明未实测**，矩阵中已标"待验证" |
+| 二、契约套件 | 完成 | `internal/testutil.RunStorageSuite` 现有 15 个子测试，在 `local`（真实磁盘）、真实 MinIO/OSS/COS/TOS 与进程内 S3 桩上全绿（后补的 `PresignPart`/`SpecialCharKeys`/`CopyObject` 见「共享套件新增三条用例」）。`ByteRange`/`Multipart`/`Presign` 三条为本次新增的不变量 |
+| 三、`s3base` 纯协议化 | 完成 | 真实 COS 端点 `TestIntegration` 全绿（当批次为 12 子测试，含 5 MiB 分片完整回环 1.84s、1001 对象分批删除 74.6s；现为 15 条）；桩上 `TestStubRegression_*` 与整份契约套件全绿 |
+| 四、provider 数据化 | 完成 | 四后端编译通过；四个 provider 的寻址风格、条件写、`MinPartSize`、批量删除、预签名（含分片）与服务端拷贝声明均经真实端点实测回填，矩阵中已无"待验证"格 |
 | 五、上层适配 | 完成 | `filestore` 与 `ginupload` 两个包测试全绿（`ok .../filestore`、`ok .../ginupload`）。四项落地：①**对象 key 完全由服务端生成**（`files/<前两位>/<UUIDv7>`），`UploadAndRecordRequest`/`InitMultipartUploadRequest`/`createMultipartRequest` 上的 `storage_path` 字段**已整体删除**；②**去重前置**：`InitMultipartUpload` 先查 `content_hash`，命中即返回 `ErrContentExists`，**不创建分片会话、不写任何字节**（回归测试用 mock 统计 `CreateMultipart` 调用次数必须为 0 来证伪）；③**Size 对账**：`complete` 时用 `Σ parts[i].Size` 与 init 声明值比对，不一致报 `ErrSizeMismatch`；④**预签名契约补全**：`presignURLResponse` 在保留 `url` 的同时新增 `method` 与 `headers`（客户端漏发签名覆盖的头会得到 `SignatureDoesNotMatch`），并新增 `GET /files/:id/parts` 分片查询端点（由 `Caps().ListParts` 门控） |
 | 六、下线与收尾 | 完成（CI 一项除外） | 死配置 `MaxRetries`/`Timeout`/`ExtraOptions` 与死 env 键删除；`Retry` 按 ADR-6 **真实生效**（行为测试：`MaxAttempts=3`→3 次请求、`=1`→1 次）；`storage/path.go` 的 `PublicURL`/`ParsePublicURL`/`URLStyle`/`WithBucket`/`ParseURLOptions` 整链删除，并连带清掉两条**只写不读**的死字段链（`S3PathBuilder` 四字段、`LocalPathBuilder.AbsDir`/`BaseURL`）。另**修掉四处既存 flaky/panic**（D-4/D-5/D-6/D-7，涉及 `gconc`/`distlock`/`gcron` 三个与本次重构无关的包），使"全仓测试全绿"从"看运气"变成**可复现**：最终 `go test -count=1 ./...` **连续三遍均为 48 个包 ok、0 FAIL** |
 
@@ -708,7 +720,7 @@ func ResolvePresignTTL(ttl time.Duration) (time.Duration, error) // 0→默认�
 **未做且需评审知情的三处**（都不是遗漏，是明确的取舍）：
 
 1. **`SSE`**：本期只透传配置，不做信封封装与密钥治理（原为开放问题 Q6 之外的范围外项）。
-2. **MinIO/OSS/TOS 真机验证**：本机只有 COS 凭据可用（`docker pull minio/minio` 与镜像站均被网络策略拒绝，`localhost:9000` 拒绝连接），因此三个后端的 profile 声明停留在"有证伪手段的假设"状态。
+2. **真机验证的边界**：MinIO/OSS/COS/TOS 四个端点均已实测回填（原先"本机无 MinIO 端点"的阻塞已被 `.env` 里的 `s3.i.yygu.cn:58081` 解除）。仍未做真机验收的是**真实 AWS S3**：按后端范围约定只要求"可连通"，不承诺 IRSA 与 SSE-KMS。另 `MaxSinglePut`(5 GiB)/`MaxParts`(10000) 是各 provider 沿用 `S3Limits` 的未探边界。
 3. **`ChecksumType=FULL_OBJECT`**：能让服务端真正校验客户端声明的 `content_hash`（见"客户端直传路径的对账"），本期不做，原因是后端支持面未知。当前只做 Size 对账。
 
 ### 如何复现本文结论
@@ -728,11 +740,16 @@ go test -count=1 ./...
 # 3) 契约套件在 local（真实磁盘）上
 go test -count=1 ./storage/driver/local/ -run TestIntegration -v
 
-# 4) 契约套件在真实 COS 上（需要 .env 里的 STORAGE_COS_* 凭据）
-go test -count=1 ./storage/driver/cos/ -run TestIntegration -v
+# 4) 契约套件 + 预签名回环在真实 MinIO / OSS / COS / TOS 上（需要 .env 里对应的 STORAGE_* 凭据）
+for d in minio oss cos tos; do
+  go test -count=1 ./storage/driver/$d/ -run 'TestIntegration|TestPresignLive' -v
+done
 
-# 5) 含大对象用例（5 MiB 真实分片 + 1001 对象分批删除，约 90 秒）
-STORAGE_SUITE_BULK=1 go test -count=1 ./storage/driver/cos/ -run TestIntegration -v -timeout 20m
+# 5) 含大对象用例（分片回环 + 预签名分片直传 + 1001 对象分批删除，约 1 分钟/后端）
+#    MinIO 5 MiB / TOS 4 MiB / COS 1 MiB / OSS 100 KB，按各自实测的 MinPartSize 构造数据
+for d in minio oss cos tos; do
+  STORAGE_SUITE_BULK=1 go test -count=1 ./storage/driver/$d/ -run 'TestIntegration|TestPresignLive' -v -timeout 20m
+done
 
 # 6) ADR-6 的行为验证（数实际请求次数，而不是看配置被读入）
 go test -count=1 ./storage/driver/s3base/ -run TestRetry_ -v
@@ -750,7 +767,7 @@ grep -rn "MaxRetries\|STORAGE_TIMEOUT\|ExtraOptions" --include=*.go --include=*.
 
 （最后一条的 `grep -vE ":[[:space:]]*//"` 用来排除 `storage/config.go` 里那句"这三个字段已删除"的注释说明 —— 它是文档而不是活引用。不加这个过滤会命中 1 行。）
 
-未实测项（MinIO/OSS/TOS 的真实条件写行为）**无法用上述命令验证** —— 本机没有可用端点。要验证需要：一个 `minio/minio` 服务容器，配上 `STORAGE_MINIO_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET`，然后跑第 5 条命令的同款测试并把结论回填能力矩阵。
+四个真实端点（MinIO/OSS/COS/TOS）的结论都由第 4/5 条命令产生，不需要额外环境：`.env` 里配好对应 `STORAGE_*` 凭据即可复现。仍未探到的边界只有 `MaxSinglePut`(5 GiB) 与 `MaxParts`(10000) —— 前者不可能靠上传 5 GiB 来验证，后者需要至少 10000 个分片；两者的零值会静默退化成"无限制"，因此宁可沿用 `S3Limits` 也不改。
 
 ### 落地方式与回滚
 
@@ -809,7 +826,7 @@ grep -rn "MaxRetries\|STORAGE_TIMEOUT\|ExtraOptions" --include=*.go --include=*.
 
 | # | 问题 | 确定方式 |
 |---|---|---|
-| Q3 | MinIO / OSS / TOS 各版本对 `If-None-Match` 条件写的真实支持情况 | 契约套件实测后回填能力矩阵。**当前阻塞**：本机无任何可用 MinIO/OSS/TOS 端点（`docker pull minio/minio` 被网络策略拒绝、`localhost:9000` 拒绝连接、无 OSS/TOS 凭据），故**仍未实测**，能力矩阵保持"待验证"。解封动作：任一环境的端点 + 凭据，跑 `STORAGE_SUITE_BULK=1 go test ./storage/driver/<driver>/ -run TestIntegration` |
+| Q3 | MinIO / OSS / TOS 各版本对 `If-None-Match` 条件写的真实支持情况 | **已全部实测回填**：OSS 不支持 `If-None-Match:*`（回 400 `NotImplemented`），改用 `x-oss-forbid-overwrite`；TOS 与 MinIO 原生支持（套件条件写用例通过，冲突映射为 `ErrAlreadyExists`）。复现命令：`STORAGE_SUITE_BULK=1 go test ./storage/driver/<minio|oss|tos>/ -run TestIntegration` |
 | Q4 | `manager.Uploader` 的 `PartSize`/`Concurrency` 在内网存储上的最优值 | **随 ADR-3 改判而失效**（本期不引入 `manager`，分片并发在前端）。若 ADR-3 的重启条件被触发，此问题重新生效 |
 | Q5 | 是否需要暴露"单次预签名直传"（`PresignPutObject`）给前端 | 当前 `filestore` 未暴露该能力；视前端是否要求免服务端中转而定。**若暴露，必须同时返回 `Headers`**。**实施期补充**：原先存在的 `filestore.RecordUpload`（"只登记不上传"，故必须由客户端提供 key）是该流程的登记半边，已按 ADR-1 删除（见 D-3）。若将来回答"要暴露"，正确形态是 `init`（服务端生成 key）→ `PresignPutObject` → `complete`，**不得**重新引入客户端指定路径的登记接口 |
 | Q6 | 路径二（客户端直传）下服务端无法实测哈希，是否接受"仅靠 Size 对账" | 倾向接受 + 保留 `checksum` 字段以便后续用 `ChecksumType: FULL_OBJECT` 加强。**实施期已核实可行性**：SDK v1.101.0 的 `CompleteMultipartUploadInput` 有 `ChecksumType`（枚举含 `FULL_OBJECT`），`CompleteMultipartUploadOutput` 有 `ChecksumSHA256`/`ChecksumType`，即该加强方案在 SDK 层可用；受阻点是后端支持面（S3 兼容实现未必实现）与客户端需按片附带校验和。**同时须纠正预期**：Size 对账只能发现"两处声明不一致"，**不能**替代哈希校验 |
