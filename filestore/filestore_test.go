@@ -45,6 +45,8 @@ type mockStorage struct {
 	putFail             bool
 	multipartCalled     bool
 	lastUploadID        string
+	lastPartNumber      int
+	lastPartBody        string
 	presignGetURLCalled bool
 	presignGetURLFail   bool
 }
@@ -71,6 +73,21 @@ func (m *mockStorage) CreateMultipartUpload(_ context.Context, bucket, key strin
 	return m.lastUploadID, nil
 }
 
+// UploadPart 记录分片参数与内容，供「分片直传链路」断言使用（嵌入接口默认会 panic）。
+func (m *mockStorage) UploadPart(_ context.Context, _, _ string, uploadID string, partNumber int, body io.Reader) (*storage.CompletedPart, error) {
+	m.multipartCalled = true
+	m.lastUploadID = uploadID
+	m.lastPartNumber = partNumber
+	if body != nil {
+		b, err := io.ReadAll(body)
+		if err != nil {
+			return nil, err
+		}
+		m.lastPartBody = string(b)
+	}
+	return &storage.CompletedPart{PartNumber: partNumber, ETag: "mock-part-etag"}, nil
+}
+
 func (m *mockStorage) CompleteMultipartUpload(_ context.Context, bucket, key, uploadID string, _ []storage.CompletedPart) error {
 	return nil
 }
@@ -90,6 +107,10 @@ func (m *mockStorage) PresignGetObject(_ context.Context, bucket, key string, ex
 
 func (m *mockStorage) PresignPutObject(_ context.Context, bucket, key string, expires time.Duration, _ ...storage.PutOption) (string, error) {
 	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
+}
+
+func (m *mockStorage) PresignUploadPartObject(_ context.Context, _ string, key, uploadID string, partNumber int, expires time.Duration, _ ...storage.PutOption) (string, error) {
+	return fmt.Sprintf("https://presign.example.com/%s?upload_id=%s&part_number=%d&expires=%s", key, uploadID, partNumber, expires), nil
 }
 
 func (m *mockStorage) PathBuilder() storage.PathBuilder {
@@ -378,6 +399,18 @@ func TestPresignUploadPartURL_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, url, "presign.example.com")
 	require.Contains(t, url, "1h0m0s")
+	// 回归：分片 URL 必须携带该次分片会话的 upload_id 与请求的 part_number，
+	// 否则 PUT 会把分片整体写到最终对象，complete 永远缺片。
+	require.Contains(t, url, "upload_id="+detail.UploadID)
+	require.Contains(t, url, "part_number=1")
+
+	part2, err := fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 2, WithExpires(time.Hour))
+	require.NoError(t, err)
+	require.Contains(t, part2, "part_number=2")
+	require.NotEqual(t, url, part2, "不同分片的预签名 URL 不能相同")
+
+	_, err = fs.PresignUploadPartURL(context.Background(), detail.FileUploadID, 0, WithExpires(time.Hour))
+	require.ErrorIs(t, err, ErrInvalidArgument)
 }
 
 func TestPresignUploadPartURL_NotMultipart(t *testing.T) {
@@ -526,12 +559,17 @@ func TestAbortMultipartUpload_NotMultipart(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotMultipartUpload)
 }
 
-func TestDeleteFileRecord_HashRemains(t *testing.T) {
+// TestDeleteFileRecord_ReclaimsUnreferencedObject 删除最后一条上传记录后，物理文件行
+// 与存储对象一并回收（此前只删记录：对象永久泄漏，且 FileID 永远指向已无人引用的文件）。
+// 同内容重新上传会重建文件行与对象，去重语义不受影响。
+func TestDeleteFileRecord_ReclaimsUnreferencedObject(t *testing.T) {
 	db := newTestDB(t)
-	fs, err := New(db, &mockStorage{}, "test-bucket")
+	mock := &mockStorage{}
+	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
+	ctx := context.Background()
 
-	detail1, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	detail1, err := fs.RecordUpload(ctx, RecordUploadRequest{
 		ContentHash: "hash-persist",
 		Name:        "first.txt",
 		Size:        100,
@@ -539,10 +577,15 @@ func TestDeleteFileRecord_HashRemains(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = fs.DeleteFile(context.Background(), detail1.FileUploadID)
-	require.NoError(t, err)
+	require.NoError(t, fs.DeleteFile(ctx, detail1.FileUploadID))
 
-	detail2, err := fs.RecordUpload(context.Background(), RecordUploadRequest{
+	fh, err := fs.fileDao.GetByCond(ctx, &fileCond{ContentHash: "hash-persist"})
+	require.NoError(t, err)
+	require.Nil(t, fh, "最后一条引用删除后物理文件行应被回收")
+	require.True(t, mock.deleteCalled, "存储对象应被删除")
+	require.Equal(t, "first.txt", mock.lastKey, "删除的应是该记录对应的存储对象 key")
+
+	detail2, err := fs.RecordUpload(ctx, RecordUploadRequest{
 		ContentHash: "hash-persist",
 		Name:        "second.txt",
 		Size:        100,
@@ -551,5 +594,37 @@ func TestDeleteFileRecord_HashRemains(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "second.txt", detail2.Name)
 	require.NotEqual(t, detail1.FileUploadID, detail2.FileUploadID)
-	require.Equal(t, detail1.FileID, detail2.FileID)
+	require.NotEmpty(t, detail2.FileID, "重新上传应重建文件行")
+}
+
+// TestDeleteFile_RefcountKeepsSharedObject 同一物理文件被多条记录引用时，
+// 删除其中一条不能删对象。
+func TestDeleteFile_RefcountKeepsSharedObject(t *testing.T) {
+	db := newTestDB(t)
+	mock := &mockStorage{}
+	fs, err := New(db, mock, "test-bucket")
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	first, err := fs.RecordUpload(ctx, RecordUploadRequest{
+		ContentHash: "shared-hash", Name: "a.txt", Size: 10, StoragePath: "shared.bin",
+	})
+	require.NoError(t, err)
+	second, err := fs.RecordUpload(ctx, RecordUploadRequest{
+		ContentHash: "shared-hash", Name: "b.txt", Size: 10, StoragePath: "shared.bin",
+	})
+	require.NoError(t, err)
+	require.Equal(t, first.FileID, second.FileID)
+
+	require.NoError(t, fs.DeleteFile(ctx, first.FileUploadID))
+	require.False(t, mock.deleteCalled, "仍有引用时不能删除存储对象")
+	fh, err := fs.fileDao.GetByID(ctx, first.FileID)
+	require.NoError(t, err)
+	require.NotNil(t, fh, "仍有引用时物理文件行必须保留")
+
+	require.NoError(t, fs.DeleteFile(ctx, second.FileUploadID))
+	require.True(t, mock.deleteCalled, "最后一条引用删除后对象应被回收")
+	fh, err = fs.fileDao.GetByID(ctx, first.FileID)
+	require.NoError(t, err)
+	require.Nil(t, fh)
 }

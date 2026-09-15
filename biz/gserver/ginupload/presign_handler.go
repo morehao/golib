@@ -18,57 +18,29 @@ const (
 	presignExpiresQuery = "expires"
 )
 
-// handlePresignedPut 消费预签名 PUT URL，验证 token 后将文件内容写入存储
+// handlePresignedPut 消费预签名 PUT URL。
+//
+// 同一个 URL 端点承载两种 op（由 token 内的签名载荷决定，客户端无法伪造或越权）：
+//   - put      ：请求体是整个对象，直接写入最终 key；
+//   - put_part ：请求体是分片内容，写入 token 绑定的 upload_id/part_number 分片。
+//
+// 请求体边读边写，内存占用与文件体积无关；体积上限由 filestore.WithMaxUploadBytes 控制。
+//
+// 注意：本端点是「存储协议」端点而非业务接口，错误按 HTTP 语义返回状态码
+// （非 Gin 客户端/浏览器 SDK 依赖状态码判断分片上传成败），成功仍返回 JSON envelope。
 func handlePresignedPut(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 直传入口同样要有硬上限，否则单个请求即可写满磁盘
+		if limit := fs.MaxUploadBytes(); limit > 0 {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		}
+
 		token := strings.TrimSpace(c.Query(presignTokenQuery))
 		expires := strings.TrimSpace(c.Query(presignExpiresQuery))
 		if token == "" || expires == "" {
-			gincontext.Fail(c, fmt.Errorf("missing token or expires query parameter"))
+			c.String(http.StatusForbidden, "missing token or expires query parameter")
 			return
 		}
-
-		bucket := strings.TrimSpace(c.Param("bucket"))
-		key := strings.TrimPrefix(c.Param("key"), "/")
-		if bucket == "" || key == "" {
-			gincontext.Fail(c, fmt.Errorf("bucket and key are required"))
-			return
-		}
-
-		if err := filestore.VerifyPresignedToken(fs.SignSecret(), bucket, key, "put", token, expires); err != nil {
-			if errors.Is(err, filestore.ErrPresignExpired) {
-				gincontext.Fail(c, fmt.Errorf("presigned url expired"))
-				return
-			}
-			if errors.Is(err, filestore.ErrPresignOpMismatch) {
-				gincontext.Fail(c, fmt.Errorf("operation mismatch"))
-				return
-			}
-			if errors.Is(err, filestore.ErrPresignKeyMismatch) {
-				gincontext.Fail(c, fmt.Errorf("key mismatch"))
-				return
-			}
-			gincontext.Fail(c, fmt.Errorf("invalid presigned token: %w", err))
-			return
-		}
-
-		contentType := c.GetHeader("Content-Type")
-		result, err := fs.HandlePresignedPut(c.Request.Context(), bucket, key, c.Request.Body, contentType)
-		if err != nil {
-			gincontext.Fail(c, fmt.Errorf("upload failed: %w", err))
-			return
-		}
-
-		gincontext.Success(c, presignedPutResponse{URI: result.Path.URI()})
-	}
-}
-
-// handlePresignedGet 消费预签名 GET URL（可选 token/expires 校验；不带参数时公开访问）。
-// 注意：GET 接口使用纯文本错误响应，便于浏览器直接访问调试。
-func handlePresignedGet(fs *filestore.FileStore) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		token := strings.TrimSpace(c.Query(presignTokenQuery))
-		expires := strings.TrimSpace(c.Query(presignExpiresQuery))
 
 		bucket := strings.TrimSpace(c.Param("bucket"))
 		key := strings.TrimPrefix(c.Param("key"), "/")
@@ -77,31 +49,69 @@ func handlePresignedGet(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		if token != "" || expires != "" {
-			hasToken := token != ""
-			hasExpires := expires != ""
-			if hasToken != hasExpires {
-				c.String(http.StatusBadRequest, "missing token or expires query parameter")
+		payload, err := filestore.ParsePresignedToken(fs.SignSecret(), bucket, key, token, expires)
+		if err != nil {
+			c.String(http.StatusForbidden, presignErrorMessage(err))
+			return
+		}
+
+		ctx := c.Request.Context()
+		switch payload.Op {
+		case filestore.PresignOpPut:
+			contentType := c.GetHeader("Content-Type")
+			result, putErr := fs.HandlePresignedPut(ctx, bucket, key, c.Request.Body, contentType)
+			if putErr != nil {
+				writeStorageError(c, putErr)
 				return
 			}
-			if hasToken {
-				if err := filestore.VerifyPresignedToken(fs.SignSecret(), bucket, key, "get", token, expires); err != nil {
-					if errors.Is(err, filestore.ErrPresignExpired) {
-						c.String(http.StatusForbidden, "presigned url expired")
-						return
-					}
-					if errors.Is(err, filestore.ErrPresignOpMismatch) {
-						c.String(http.StatusForbidden, "operation mismatch")
-						return
-					}
-					if errors.Is(err, filestore.ErrPresignKeyMismatch) {
-						c.String(http.StatusForbidden, "key mismatch")
-						return
-					}
-					c.String(http.StatusForbidden, "invalid presigned token")
-					return
-				}
+			gincontext.Success(c, presignedPutResponse{URI: result.Path.URI()})
+
+		case filestore.PresignOpPutPart:
+			part, partErr := fs.HandlePresignedUploadPart(ctx, bucket, key, payload.UploadID, payload.PartNumber, c.Request.Body)
+			if partErr != nil {
+				writeStorageError(c, partErr)
+				return
 			}
+			// 分片 ETag 同时放在响应头（S3/浏览器 SDK 读取的位置）与 body 中，
+			// 客户端 complete 时需要原样回传。
+			c.Header("ETag", `"`+part.ETag+`"`)
+			gincontext.Success(c, presignedPartResponse{PartNumber: part.PartNumber, ETag: part.ETag})
+
+		default:
+			c.String(http.StatusForbidden, "operation mismatch")
+		}
+	}
+}
+
+// handlePresignedGet 消费预签名 GET URL。
+//
+// 必须携带有效 token：不做任何匿名放行——对象默认私有，读权限只来自服务端签发的
+// 预签名 URL（token 绑定 bucket/key/op/有效期，签名覆盖全部字段）。
+// 注意：GET 接口使用纯文本错误响应 + HTTP 状态码，便于浏览器直接访问调试。
+func handlePresignedGet(fs *filestore.FileStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		bucket := strings.TrimSpace(c.Param("bucket"))
+		key := strings.TrimPrefix(c.Param("key"), "/")
+		if bucket == "" || key == "" {
+			c.String(http.StatusBadRequest, "bucket and key are required")
+			return
+		}
+
+		token := strings.TrimSpace(c.Query(presignTokenQuery))
+		expires := strings.TrimSpace(c.Query(presignExpiresQuery))
+		if token == "" || expires == "" {
+			c.String(http.StatusForbidden, "missing token or expires query parameter")
+			return
+		}
+
+		payload, err := filestore.ParsePresignedToken(fs.SignSecret(), bucket, key, token, expires)
+		if err != nil {
+			c.String(http.StatusForbidden, presignErrorMessage(err))
+			return
+		}
+		if payload.Op != filestore.PresignOpGet {
+			c.String(http.StatusForbidden, "operation mismatch")
+			return
 		}
 
 		result, err := fs.HandlePresignedGet(c.Request.Context(), bucket, key)
@@ -127,4 +137,39 @@ func handlePresignedGet(fs *filestore.FileStore) gin.HandlerFunc {
 			_ = c.Error(err)
 		}
 	}
+}
+
+// presignErrorMessage 把 token 校验失败统一映射为不泄露内部细节的对外文案。
+func presignErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, filestore.ErrPresignExpired):
+		return "presigned url expired"
+	case errors.Is(err, filestore.ErrPresignOpMismatch):
+		return "operation mismatch"
+	case errors.Is(err, filestore.ErrPresignKeyMismatch):
+		return "key mismatch"
+	default:
+		return "invalid presigned token"
+	}
+}
+
+// writeStorageError 以语义化 HTTP 状态码响应存储协议端点（预签名 PUT）。
+func writeStorageError(c *gin.Context, err error) {
+	var maxErr *http.MaxBytesError
+	status := http.StatusInternalServerError
+	message := fmt.Sprintf("upload failed: %v", err)
+	switch {
+	case errors.As(err, &maxErr):
+		status = http.StatusRequestEntityTooLarge
+		message = fmt.Sprintf("upload exceeds max size %d bytes", maxErr.Limit)
+	case errors.Is(err, storage.ErrInvalidArgument), errors.Is(err, storage.ErrInvalidPath):
+		status = http.StatusBadRequest
+	case errors.Is(err, storage.ErrNotFound), errors.Is(err, storage.ErrMultipartAborted):
+		status = http.StatusNotFound
+	case errors.Is(err, storage.ErrPermission):
+		status = http.StatusForbidden
+	case errors.Is(err, storage.ErrNotSupported):
+		status = http.StatusNotImplemented
+	}
+	c.String(status, message)
 }

@@ -6,4 +6,5 @@ var (
 	ErrFileNotFound       = errors.New("filestore: file not found")
 	ErrInvalidArgument    = errors.New("filestore: invalid argument")
 	ErrNotMultipartUpload = errors.New("filestore: not a multipart upload")
+	ErrHashMismatch       = errors.New("filestore: content hash mismatch")
 )

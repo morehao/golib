@@ -1,6 +1,7 @@
 package ginupload
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -81,6 +82,11 @@ func handleDeleteFile(fs *filestore.FileStore) gin.HandlerFunc {
 		}
 
 		if err := fs.DeleteFile(c.Request.Context(), uri.ID); err != nil {
+			// DELETE 语义幂等：记录本就不存在时按成功处理（重复删除不报错）
+			if errors.Is(err, filestore.ErrFileNotFound) {
+				gincontext.Success(c, nil)
+				return
+			}
 			gincontext.Fail(c, err)
 			return
 		}

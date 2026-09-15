@@ -63,6 +63,9 @@ func (m *mockStorage) PutObject(_ context.Context, _ string, _ string, reader io
 
 func (m *mockStorage) DeleteObject(_ context.Context, _ string, _ string) error { return nil }
 
+// CopyObject 支撑「暂存对象提升为最终对象」的流式上传路径（mock 只需可调用）。
+func (m *mockStorage) CopyObject(_ context.Context, _, _, _, _ string) error { return nil }
+
 func (m *mockStorage) CreateMultipartUpload(_ context.Context, _ string, _ string, _ ...storage.PutOption) (string, error) {
 	return "mock-upload-id", nil
 }
@@ -79,6 +82,10 @@ func (m *mockStorage) PresignGetObject(_ context.Context, _ string, key string, 
 
 func (m *mockStorage) PresignPutObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.PutOption) (string, error) {
 	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
+}
+
+func (m *mockStorage) PresignUploadPartObject(_ context.Context, _ string, key, uploadID string, partNumber int, expires time.Duration, _ ...storage.PutOption) (string, error) {
+	return fmt.Sprintf("https://presign.example.com/%s?upload_id=%s&part_number=%d&expires=%s", key, uploadID, partNumber, expires), nil
 }
 
 type failingMockStorage struct{ storage.Storage }
@@ -859,6 +866,13 @@ func TestHandleDeleteFile_NonExistentID(t *testing.T) {
 	require.Equal(t, 0, resp.Code)
 }
 
+// assertStorageError 断言存储协议端点（预签名 PUT/GET）的错误响应：纯文本 + HTTP 状态码。
+func assertStorageError(t *testing.T, w *httptest.ResponseRecorder, status int, contains string) {
+	t.Helper()
+	require.Equal(t, status, w.Code)
+	require.Contains(t, w.Body.String(), contains)
+}
+
 // --- presign token helpers ---
 
 func buildPresignToken(signSecret, bucket, key, op string, expires int64) string {
@@ -960,16 +974,7 @@ func TestHandlePresignedPut(t *testing.T) {
 		router := setupPresignRouter(fs)
 
 		w := presignPut(router, bucket, key, "", "", strings.NewReader(fileContent), "")
-		require.Equal(t, 200, w.Code)
-
-		var resp struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "missing token or expires")
+		assertStorageError(t, w, 403, "missing token or expires")
 	})
 
 	t.Run("empty bucket or key", func(t *testing.T) {
@@ -980,16 +985,7 @@ func TestHandlePresignedPut(t *testing.T) {
 		token := buildPresignToken(testSignSecret, bucket, key, "put", future)
 
 		w := presignPut(router, "", key, token, expiresStr, strings.NewReader(fileContent), "")
-		require.Equal(t, 200, w.Code)
-
-		var resp struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "bucket and key are required")
+		assertStorageError(t, w, 400, "bucket and key are required")
 	})
 
 	t.Run("expired token", func(t *testing.T) {
@@ -1000,16 +996,7 @@ func TestHandlePresignedPut(t *testing.T) {
 		token := buildPresignToken(testSignSecret, bucket, key, "put", past)
 
 		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "")
-		require.Equal(t, 200, w.Code)
-
-		var resp struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "expired")
+		assertStorageError(t, w, 403, "presigned url expired")
 	})
 
 	t.Run("operation mismatch", func(t *testing.T) {
@@ -1019,17 +1006,9 @@ func TestHandlePresignedPut(t *testing.T) {
 		expiresStr := strconv.FormatInt(future, 10)
 		token := buildPresignToken(testSignSecret, bucket, key, "get", future)
 
+		// get token 不能用于写入
 		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "")
-		require.Equal(t, 200, w.Code)
-
-		var resp struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "operation mismatch")
+		assertStorageError(t, w, 403, "operation mismatch")
 	})
 
 	t.Run("key mismatch", func(t *testing.T) {
@@ -1040,16 +1019,7 @@ func TestHandlePresignedPut(t *testing.T) {
 		token := buildPresignToken(testSignSecret, bucket, "other/key.txt", "put", future)
 
 		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "")
-		require.Equal(t, 200, w.Code)
-
-		var resp struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "key mismatch")
+		assertStorageError(t, w, 403, "key mismatch")
 	})
 
 	t.Run("invalid token format", func(t *testing.T) {
@@ -1059,16 +1029,7 @@ func TestHandlePresignedPut(t *testing.T) {
 		expiresStr := strconv.FormatInt(future, 10)
 
 		w := presignPut(router, bucket, key, "not.a.valid.token", expiresStr, strings.NewReader(fileContent), "")
-		require.Equal(t, 200, w.Code)
-
-		var resp struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		err := json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "invalid")
+		assertStorageError(t, w, 403, "invalid presigned token")
 	})
 
 	t.Run("storage put failure", func(t *testing.T) {
@@ -1082,16 +1043,7 @@ func TestHandlePresignedPut(t *testing.T) {
 		token := buildPresignToken(testSignSecret, bucket, key, "put", future)
 
 		w := presignPut(router, bucket, key, token, expiresStr, strings.NewReader(fileContent), "")
-		require.Equal(t, 200, w.Code)
-
-		var resp struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		err = json.Unmarshal(w.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		require.NotEqual(t, 0, resp.Code)
-		require.Contains(t, resp.Msg, "unexpected EOF")
+		assertStorageError(t, w, 500, "unexpected EOF")
 	})
 }
 
@@ -1101,13 +1053,17 @@ func TestHandlePresignedGet(t *testing.T) {
 	bucket := "test-bucket"
 	key := "uploads/file.txt"
 
-	t.Run("public access without token", func(t *testing.T) {
+	t.Run("anonymous access is rejected", func(t *testing.T) {
 		fs := newTestFileStoreWithSignSecret(t)
 		router := setupPresignRouter(fs)
 
+		// 对象默认私有：没有 token 一律拒绝，不能读出任何内容
 		w := presignGet(router, bucket, key, "", "")
-		require.Equal(t, 200, w.Code)
-		require.Contains(t, w.Body.String(), "mock file content: "+key)
+		assertStorageError(t, w, 403, "missing token or expires")
+		require.NotContains(t, w.Body.String(), "mock file content")
+
+		w = presignGet(router, bucket, key, "forged-token", strconv.FormatInt(time.Now().Unix()+3600, 10))
+		assertStorageError(t, w, 403, "invalid presigned token")
 	})
 
 	t.Run("with valid token", func(t *testing.T) {
@@ -1127,8 +1083,7 @@ func TestHandlePresignedGet(t *testing.T) {
 		router := setupPresignRouter(fs)
 
 		w := presignGet(router, bucket, key, "some-token", "")
-		require.Equal(t, 400, w.Code)
-		require.Contains(t, w.Body.String(), "missing token or expires query parameter")
+		assertStorageError(t, w, 403, "missing token or expires query parameter")
 	})
 
 	t.Run("expires without token", func(t *testing.T) {
@@ -1136,8 +1091,7 @@ func TestHandlePresignedGet(t *testing.T) {
 		router := setupPresignRouter(fs)
 
 		w := presignGet(router, bucket, key, "", "12345")
-		require.Equal(t, 400, w.Code)
-		require.Contains(t, w.Body.String(), "missing token or expires query parameter")
+		assertStorageError(t, w, 403, "missing token or expires query parameter")
 	})
 
 	t.Run("empty bucket or key", func(t *testing.T) {

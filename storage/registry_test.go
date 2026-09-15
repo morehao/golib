@@ -53,6 +53,9 @@ func (t *testStorage) PresignGetObject(ctx context.Context, bucket, key string, 
 func (t *testStorage) PresignPutObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...PutOption) (string, error) {
 	return "", nil
 }
+func (t *testStorage) PresignUploadPartObject(ctx context.Context, bucket, key, uploadID string, partNumber int, ttl time.Duration, opts ...PutOption) (string, error) {
+	return "", nil
+}
 func (t *testStorage) PathBuilder() PathBuilder { return nil }
 
 type testPathBuilder struct{}

@@ -125,6 +125,9 @@ func TestAccessLogBodyTruncated(t *testing.T) {
 	content := f.flushAndRead()
 	assert.LessOrEqual(t, len(jsonStr(content, gconstant.KeyHttpRequestBody)), 16, "request body truncated")
 	assert.LessOrEqual(t, len(jsonStr(content, gconstant.KeyHttpResponseBody)), 16, "response body truncated")
+	// 截断只影响日志内容，大小字段仍应是真实值（数值字段，非字符串）
+	assert.Contains(t, content, `"`+gconstant.KeyHttpRequestBodySize+`":100`, "request body size is real")
+	assert.Contains(t, content, `"`+gconstant.KeyHttpResponseBodySize+`":100`, "response body size is real")
 }
 
 func jsonStr(content, key string) string {

@@ -213,3 +213,19 @@
 | `POST /file/completeMultipartUpload` | `POST /files/multipart/{fileID}/complete` |
 | `POST /file/abortMultipartUpload` | `DELETE /files/multipart/{fileID}` |
 | `PUT/GET /object/:bucket/*key` | `PUT/GET /objects/:bucket/*key` |
+
+### 7.2 对象直传/直读的鉴权与分片链路（行为变更）
+
+对象默认私有，读权限只来自服务端签发的预签名 URL：
+
+| 端点 | 变更 |
+|---|---|
+| `GET /objects/:bucket/*key` | **不再支持匿名访问**。必须携带有效 `token`/`expires`（token 绑定 bucket/key/op/有效期，HMAC 签名覆盖全部字段）；缺失、过期、key 不符、op 不符一律 403，且不返回任何对象内容 |
+| `PUT /objects/:bucket/*key`（op=`put`） | 请求体整体写入最终 key（行为不变） |
+| `PUT /objects/:bucket/*key`（op=`put_part`） | 请求体作为**分片**写入 token 内绑定的 `upload_id`/`part_number`，不再整体覆盖最终对象；响应头 `ETag` 与 body 的 `etag` 均为分片内容 MD5，`complete` 时原样回传 |
+| `POST /files/multipart/{fileID}/parts` | 生成的预签名 URL 真正指向该次分片会话：S3 兼容后端签 `UploadPart` SigV4 URL，local 后端把 `upload_id`/`part_number` 写入 token（此前忽略 `part_number` 且签的是整体 `PutObject` URL，导致分片直传后 `complete` 必然报 `missing multipart part 1`） |
+| 存储协议端点错误语义 | `/objects/*` 的 PUT/GET 按 HTTP 语义返回状态码（400/403/404/413/500 + 纯文本），便于浏览器/SDK 判断分片成败；业务接口 `/files/*` 仍沿用 JSON envelope |
+
+local 后端 `complete` 现在会校验分片列表（非空、升序去重、ETag 与实际一致），且**先发布对象再清理分片**，发布失败时可重试；分片会话元数据（`<baseDir>/.multipart/<uploadID>/session.json`）与分片数据一起落盘，**进程重启后可继续上传**，超过 `storage.Config.MultipartTTL`（默认 24h）未完成的会话会被机会式回收（创建新会话时限频扫描，应用也可通过 `storage.MultipartCleaner` 主动触发），不再出现「重启丢会话、分片目录变垃圾」的情况。
+
+预签名 token 的编解码只有一份实现（`storage/presign_token.go`），local 驱动负责生成、filestore 负责消费，`filestore.ParsePresignedToken` 直接复用 `storage.DecodePresignToken`，两侧不再各维护一套协议。

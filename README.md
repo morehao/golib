@@ -368,15 +368,15 @@ For usage examples, refer to [ghttp usage](protocol/ghttp/README.md)
 
 ### Features
 - Unified API across all providers
-- Multipart upload support
-- Presigned URL generation (GET/PUT)
-- Object listing with paginator
+- Multipart upload support (resumable local sessions with TTL reclamation)
+- Presigned URL generation (GET/PUT/PUT part; HMAC-signed token bound to bucket/key/op)
+- Object listing with prefix/delimiter and continuation-token pagination
 - Batch operations (delete, copy)
-- URI helper for standardized resource identifiers
-- Key builder with prefix, date layout, and random suffix
+- URI + PathBuilder helpers for standardized resource identifiers and public URLs
+- Local filesystem driver so a business service can act as the object storage itself
 
 ### Usage
-For usage examples, refer to [storage usage](storage/README.md)
+For usage examples, see [storage README](storage/README.md).
 
 ## ratelimit
 

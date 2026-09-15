@@ -201,3 +201,7 @@ func (m *storageMock) PresignGetObject(ctx context.Context, bucket, key string, 
 func (m *storageMock) PresignPutObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.PutOption) (string, error) {
 	return "", storage.ErrNotSupported
 }
+
+func (m *storageMock) PresignUploadPartObject(ctx context.Context, bucket, key, uploadID string, partNumber int, ttl time.Duration, opts ...storage.PutOption) (string, error) {
+	return "", storage.ErrNotSupported
+}

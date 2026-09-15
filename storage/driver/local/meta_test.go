@@ -3,6 +3,7 @@ package local
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestMetaPath(t *testing.T) {
@@ -34,11 +35,11 @@ func TestMetaPath_DifferentBucketDifferentPath(t *testing.T) {
 func TestWriteMetaAndReadMeta_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	m := &metaFile{
-		Key:          "test/key.txt",
-		Size:         42,
-		ETag:         "abc123",
-		ContentType:  "text/plain",
-		Metadata:     map[string]string{"x-custom": "val"},
+		Key:         "test/key.txt",
+		Size:        42,
+		ETag:        "abc123",
+		ContentType: "text/plain",
+		Metadata:    map[string]string{"x-custom": "val"},
 	}
 	if err := writeMeta(dir, "bucket1", "test/key.txt", m); err != nil {
 		t.Fatal(err)
@@ -152,5 +153,74 @@ func TestSyncMeta_ETagConsistent(t *testing.T) {
 	}
 	if meta1.ETag != meta2.ETag {
 		t.Fatalf("expected consistent ETags: %q vs %q", meta1.ETag, meta2.ETag)
+	}
+}
+
+// TestSyncMeta_PreservesExistingAttributes 回归缺陷：GetObject/HeadObject 走
+// syncMeta("", nil) 重建缓存时，会把既有 ContentType/Metadata 抹成
+// octet-stream + {}（CopyObject 后首次读取即可触发）。
+func TestSyncMeta_PreservesExistingAttributes(t *testing.T) {
+	dir := t.TempDir()
+	dataPath := dir + "/data/bucket1/obj.bin"
+	if err := os.MkdirAll(dir+"/data/bucket1", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dataPath, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := syncMeta(dir, "bucket1", "obj.bin", dataPath, "text/plain", map[string]string{"owner": "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ContentType != "text/plain" || first.Metadata["owner"] != "alice" {
+		t.Fatalf("unexpected first meta: %+v", first)
+	}
+
+	// 让缓存判定为过期（模拟 CopyObject 未写 DataMtime / 数据被外部改动）
+	first.DataMtime = first.DataMtime.Add(-time.Hour)
+	if err := writeMeta(dir, "bucket1", "obj.bin", first); err != nil {
+		t.Fatal(err)
+	}
+
+	rebuilt, err := syncMeta(dir, "bucket1", "obj.bin", dataPath, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt.ContentType != "text/plain" {
+		t.Fatalf("ContentType 被抹掉: %q", rebuilt.ContentType)
+	}
+	if rebuilt.Metadata["owner"] != "alice" {
+		t.Fatalf("Metadata 被抹掉: %+v", rebuilt.Metadata)
+	}
+	// ETag 必须按数据文件重算且与首次一致
+	if rebuilt.ETag != first.ETag {
+		t.Fatalf("ETag 变化: %q -> %q", first.ETag, rebuilt.ETag)
+	}
+	// LastModified 取数据文件 mtime，重建不会把它推到现在
+	if !rebuilt.LastModified.Equal(rebuilt.DataMtime.UTC()) {
+		t.Fatalf("LastModified 应等于数据文件 mtime: %v vs %v", rebuilt.LastModified, rebuilt.DataMtime)
+	}
+}
+
+// TestSyncMeta_ExplicitAttributesOverride 显式传入的属性优先于既有值。
+func TestSyncMeta_ExplicitAttributesOverride(t *testing.T) {
+	dir := t.TempDir()
+	dataPath := dir + "/data/bucket1/obj2.bin"
+	if err := os.MkdirAll(dir+"/data/bucket1", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dataPath, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncMeta(dir, "bucket1", "obj2.bin", dataPath, "text/plain", map[string]string{"a": "1"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := syncMeta(dir, "bucket1", "obj2.bin", dataPath, "application/json", map[string]string{"b": "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ContentType != "application/json" || got.Metadata["b"] != "2" {
+		t.Fatalf("显式属性未生效: %+v", got)
 	}
 }

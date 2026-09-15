@@ -485,6 +485,31 @@ func (d *Driver) PresignPutObject(ctx context.Context, bucket, key string, ttl t
 	return req.URL, nil
 }
 
+// PresignUploadPartObject 签发指向 UploadPart 的 SigV4 预签名 URL，
+// 客户端可直接把分片 PUT 到对象存储，无需经过业务服务。
+func (d *Driver) PresignUploadPartObject(ctx context.Context, bucket, key, uploadID string, partNumber int, ttl time.Duration, _ ...storage.PutOption) (string, error) {
+	if err := pathcheck.ValidateBucket(bucket); err != nil {
+		return "", err
+	}
+	if err := pathcheck.ValidateKey(key); err != nil {
+		return "", err
+	}
+	if uploadID == "" || partNumber <= 0 {
+		return "", fmt.Errorf("%w: upload_id and part_number are required", storage.ErrInvalidArgument)
+	}
+	input := &s3.UploadPartInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(key),
+		UploadId:   aws.String(uploadID),
+		PartNumber: aws.Int32(int32(partNumber)),
+	}
+	req, err := d.presign.PresignUploadPart(ctx, input, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", wrapS3Err(err)
+	}
+	return req.URL, nil
+}
+
 func strPtr(s string) *string {
 	if s == "" {
 		return nil
