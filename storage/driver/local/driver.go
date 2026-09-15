@@ -46,11 +46,36 @@ type driver struct {
 
 var _ storage.Storage = (*driver)(nil)
 
-func NewPathBuilder(cfg storage.Config) storage.PathBuilder {
-	return &storage.LocalPathBuilder{
-		AbsDir:  cfg.BaseDir,
-		BaseURL: cfg.BaseURL,
+// Caps 声明 local driver 的能力与限制。
+//
+// Limits 全为 0，表示无协议限制（单对象体积、分片数、批量删除均不设上限）。
+//
+// ConditionalWrite 声明为 ProcessLocal 而非 NativeIfNoneMatch：实现是
+// "按 key 加锁 + 存在性检查"（见下方 PutObject），只在单进程内原子，
+// 多进程/多实例部署下不成立。上层不得据此做跨实例去重。
+func (d *driver) Caps() storage.Caps {
+	// 预签名能力依赖 signSecret：未配置密钥时三个预签名接口都会返回
+	// ErrNotSupported，因此 Caps 必须如实声明为"不支持"。否则上层会先被告知
+	// "支持"、再在运行时才拿到 ErrNotSupported，Caps 就失去了意义。
+	presign := d.signSecret != ""
+	return storage.Caps{
+		ConditionalWrite: storage.ConditionalWriteProcessLocal,
+		Multipart:        true,
+		ListParts:        true, // 从分片文件读取大小与时间（见 multipartStore.ListParts）
+		ServerSideCopy:   true, // 用硬链接实现，不产生额外数据副本
+		PresignPut:       presign,
+		PresignPart:      presign,
+		PresignGet:       presign,
+		Versioning:       false,
+		ByteRange:        true,
 	}
+}
+
+// NewPathBuilder 返回本地后端的 PathBuilder。
+// 它不接受 cfg：StoragePath 只标识对象（bucket/key/scheme/是否本地），
+// 磁盘根目录与对外 URL 分别由 driver 的 baseDir / baseURL 承担。
+func NewPathBuilder(cfg storage.Config) storage.PathBuilder {
+	return &storage.LocalPathBuilder{}
 }
 
 func New(cfg storage.Config) (storage.Storage, error) {
@@ -196,15 +221,22 @@ func (d *driver) PutObject(ctx context.Context, bucket, key string, body io.Read
 		return nil, err
 	}
 	return &storage.PutObjectResult{
-		ObjectInfo: storage.ObjectInfo{
-			Path:         d.newPath(bucket, key),
-			Size:         meta.Size,
-			ETag:         meta.ETag,
-			ContentType:  meta.ContentType,
-			LastModified: meta.LastModified,
-			Metadata:     meta.Metadata,
-		},
+		ObjectInfo: *infoFromMeta(bucket, key, meta),
 	}, nil
+}
+
+// infoFromMeta 是 ObjectInfo 的唯一构造点：所有返回元数据的路径都经此，
+// 保证 Bucket/Key/Size/ETag 等字段的语义在本地后端各处一致。
+func infoFromMeta(bucket, key string, m *metaFile) *storage.ObjectInfo {
+	return &storage.ObjectInfo{
+		Bucket:       bucket,
+		Key:          key,
+		Size:         m.Size,
+		ETag:         m.ETag,
+		ContentType:  m.ContentType,
+		LastModified: m.LastModified,
+		Metadata:     m.Metadata,
+	}
 }
 
 func (d *driver) GetObject(ctx context.Context, bucket, key string, opts ...storage.GetOption) (*storage.GetObjectResult, error) {
@@ -231,24 +263,35 @@ func (d *driver) GetObject(ctx context.Context, bucket, key string, opts ...stor
 		}
 		return nil, err
 	}
-	var reader io.ReadCloser
+	// 越界区间与 S3 的 416 InvalidRange 对齐：返回语义化错误而不是空响应体，
+	// 否则同一调用在 local 与 S3 上行为分叉，调用方无法写出后端无关的代码。
+	if o.ByteRange != nil {
+		start, end := o.ByteRange.Start, o.ByteRange.End
+		if start < 0 || start >= meta.Size || end < start {
+			return nil, fmt.Errorf("%w: range %d-%d, size %d",
+				storage.ErrRangeNotSatisfiable, start, end, meta.Size)
+		}
+		if end >= meta.Size {
+			end = meta.Size - 1
+		}
+		f, err := os.Open(dataP)
+		if err != nil {
+			return nil, err
+		}
+		return &storage.GetObjectResult{
+			Body:  newRangeReader(f, start, end, meta.Size),
+			Info:  *infoFromMeta(bucket, key, meta),
+			Range: &storage.RangeInfo{Start: start, End: end},
+		}, nil
+	}
+
 	f, err := os.Open(dataP)
 	if err != nil {
 		return nil, err
 	}
-	reader = f
-	if o.ByteRange != nil {
-		reader = newRangeReader(f, o.ByteRange.Start, o.ByteRange.End, meta.Size)
-	}
 	return &storage.GetObjectResult{
-		Body: reader,
-		ObjectInfo: storage.ObjectInfo{
-			Path:         d.newPath(bucket, key),
-			Size:         meta.Size,
-			ETag:         meta.ETag,
-			ContentType:  meta.ContentType,
-			LastModified: meta.LastModified,
-		},
+		Body: f,
+		Info: *infoFromMeta(bucket, key, meta),
 	}, nil
 }
 
@@ -286,11 +329,19 @@ func (d *driver) DeleteObject(ctx context.Context, bucket, key string) error {
 }
 
 func (d *driver) DeleteObjects(ctx context.Context, bucket string, keys []string) error {
+	// local 无批量上限，走共享分批逻辑只是为了让"空列表 = no-op"等语义
+	// 与其它后端完全一致（而不是各写一份循环）。
 	var failures []storage.DeleteFailure
-	for _, k := range keys {
-		if err := d.DeleteObject(ctx, bucket, k); err != nil {
-			failures = append(failures, storage.DeleteFailure{Key: k, Err: err})
+	err := storage.DeleteObjectsChunked(keys, d.Caps().Limits.MaxDeleteBatch, func(batch []string) error {
+		for _, k := range batch {
+			if err := d.DeleteObject(ctx, bucket, k); err != nil {
+				failures = append(failures, storage.DeleteFailure{Key: k, Err: err})
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if len(failures) > 0 {
 		return &storage.BulkDeleteError{Failures: failures}
@@ -406,14 +457,7 @@ func (d *driver) ListObjects(ctx context.Context, bucket, prefix string, opts ..
 				}
 				return fmt.Errorf("list objects: %s: %w", itemKey, metaErr)
 			}
-			out.Contents = append(out.Contents, storage.ObjectInfo{
-				Path:         d.newPath(bucket, itemKey),
-				Size:         meta.Size,
-				ETag:         meta.ETag,
-				ContentType:  meta.ContentType,
-				LastModified: meta.LastModified,
-				Metadata:     meta.Metadata,
-			})
+			out.Contents = append(out.Contents, *infoFromMeta(bucket, itemKey, meta))
 		}
 
 		if int64(len(out.Contents)+len(out.CommonPrefixes)) >= maxKeys {
@@ -433,7 +477,7 @@ func (d *driver) ListObjects(ctx context.Context, bucket, prefix string, opts ..
 			last = out.CommonPrefixes[len(out.CommonPrefixes)-1]
 		}
 		if len(out.Contents) > 0 {
-			if key := out.Contents[len(out.Contents)-1].Path.Key(); key > last {
+			if key := out.Contents[len(out.Contents)-1].Key; key > last {
 				last = key
 			}
 		}
@@ -444,7 +488,7 @@ func (d *driver) ListObjects(ctx context.Context, bucket, prefix string, opts ..
 
 // ---------- Multipart ----------
 
-func (d *driver) CreateMultipartUpload(ctx context.Context, bucket, key string, opts ...storage.PutOption) (string, error) {
+func (d *driver) CreateMultipart(ctx context.Context, bucket, key string, in storage.CreateMultipartInput) (string, error) {
 	if err := pathcheck.ValidateBucket(bucket); err != nil {
 		return "", err
 	}
@@ -455,74 +499,113 @@ func (d *driver) CreateMultipartUpload(ctx context.Context, bucket, key string, 
 	unlock := d.keys.Lock(lockKey)
 	defer unlock()
 
-	o := &storage.PutOptions{}
+	return d.mp.Create(bucket, key, in.ContentType, in.Metadata)
+}
+
+func (d *driver) UploadPart(ctx context.Context, ref storage.MultipartRef, number int32, body io.Reader) (*storage.PartInfo, error) {
+	if err := pathcheck.ValidateBucket(ref.Bucket); err != nil {
+		return nil, err
+	}
+	if err := pathcheck.ValidateKey(ref.Key); err != nil {
+		return nil, err
+	}
+	if err := storage.ValidatePartCount(number, d.Caps()); err != nil {
+		return nil, err
+	}
+	lockKey := ref.Bucket + ":" + ref.Key
+	unlock := d.keys.Lock(lockKey)
+	defer unlock()
+
+	if _, err := d.mp.Validate(ref.UploadID, ref.Bucket, ref.Key); err != nil {
+		return nil, err
+	}
+	etag, size, err := d.mp.WritePart(ref.UploadID, int(number), body)
+	if err != nil {
+		return nil, err
+	}
+	return &storage.PartInfo{PartNumber: number, ETag: etag, Size: size}, nil
+}
+
+func (d *driver) ListParts(ctx context.Context, ref storage.MultipartRef, opts ...storage.ListPartsOption) (*storage.ListPartsOutput, error) {
+	if err := pathcheck.ValidateBucket(ref.Bucket); err != nil {
+		return nil, err
+	}
+	if err := pathcheck.ValidateKey(ref.Key); err != nil {
+		return nil, err
+	}
+	o := &storage.ListPartsOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
-	return d.mp.Create(bucket, key, o.ContentType, o.Metadata)
-}
-
-func (d *driver) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, body io.Reader) (*storage.CompletedPart, error) {
-	if err := pathcheck.ValidateBucket(bucket); err != nil {
+	if _, err := d.mp.Validate(ref.UploadID, ref.Bucket, ref.Key); err != nil {
 		return nil, err
 	}
-	if err := pathcheck.ValidateKey(key); err != nil {
-		return nil, err
-	}
-	lockKey := bucket + ":" + key
-	unlock := d.keys.Lock(lockKey)
-	defer unlock()
-
-	if _, err := d.mp.Validate(uploadID, bucket, key); err != nil {
-		return nil, err
-	}
-	if partNumber <= 0 {
-		return nil, fmt.Errorf("%w: part number must be positive", storage.ErrInvalidArgument)
-	}
-	etag, err := d.mp.WritePart(uploadID, partNumber, body, 0)
+	all, err := d.mp.ListParts(ref.UploadID)
 	if err != nil {
 		return nil, err
 	}
-	return &storage.CompletedPart{PartNumber: partNumber, ETag: etag}, nil
+	// 与 S3 的 ListParts 分页语义保持一致：按分片号游标取页，并如实回报截断。
+	out := &storage.ListPartsOutput{}
+	maxParts := int(o.MaxParts)
+	if maxParts <= 0 {
+		maxParts = len(all)
+	}
+	for _, p := range all {
+		if o.PartNumberMarker > 0 && p.PartNumber <= o.PartNumberMarker {
+			continue
+		}
+		if len(out.Parts) >= maxParts {
+			out.IsTruncated = true
+			break
+		}
+		out.Parts = append(out.Parts, p)
+	}
+	if out.IsTruncated && len(out.Parts) > 0 {
+		out.NextPartNumberMarker = out.Parts[len(out.Parts)-1].PartNumber
+	}
+	return out, nil
 }
 
-func (d *driver) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []storage.CompletedPart) error {
-	if err := pathcheck.ValidateBucket(bucket); err != nil {
-		return err
+func (d *driver) CompleteMultipart(ctx context.Context, ref storage.MultipartRef, parts []storage.PartInfo) (*storage.ObjectInfo, error) {
+	if err := pathcheck.ValidateBucket(ref.Bucket); err != nil {
+		return nil, err
 	}
-	if err := pathcheck.ValidateKey(key); err != nil {
-		return err
+	if err := pathcheck.ValidateKey(ref.Key); err != nil {
+		return nil, err
 	}
-	lockKey := bucket + ":" + key
+	if err := storage.ValidateParts(parts, d.Caps()); err != nil {
+		return nil, err
+	}
+	lockKey := ref.Bucket + ":" + ref.Key
 	unlock := d.keys.Lock(lockKey)
 	defer unlock()
 
-	um, err := d.mp.Validate(uploadID, bucket, key)
+	um, err := d.mp.Validate(ref.UploadID, ref.Bucket, ref.Key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	tmpDir, err := os.MkdirTemp(d.baseDir, ".merge-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer os.RemoveAll(tmpDir)
 	mergeDst := filepath.Join(tmpDir, "obj")
-	if err := d.mp.Merge(uploadID, mergeDst, parts); err != nil {
-		return err
+	if err := d.mp.Merge(ref.UploadID, mergeDst, parts); err != nil {
+		return nil, err
 	}
 
-	dataP := d.dataPath(bucket, key)
+	dataP := d.dataPath(ref.Bucket, ref.Key)
 	if err := os.MkdirAll(filepath.Dir(dataP), 0o755); err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.Rename(mergeDst, dataP); err != nil {
-		return err
+		return nil, err
 	}
 	// 对象已发布成功，此时才清理分片目录与上传状态：
 	// 若 rename 失败，分片数据仍然完整，客户端可以重试 complete。
-	if err := d.mp.Cleanup(uploadID); err != nil {
-		return err
+	if err := d.mp.Cleanup(ref.UploadID); err != nil {
+		return nil, err
 	}
 
 	contentType := ""
@@ -538,24 +621,27 @@ func (d *driver) CompleteMultipartUpload(ctx context.Context, bucket, key, uploa
 		metaData = map[string]string{}
 	}
 
-	_, err = syncMeta(d.baseDir, bucket, key, dataP, contentType, metaData)
-	return err
+	meta, err := syncMeta(d.baseDir, ref.Bucket, ref.Key, dataP, contentType, metaData)
+	if err != nil {
+		return nil, err
+	}
+	return infoFromMeta(ref.Bucket, ref.Key, meta), nil
 }
 
-func (d *driver) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
-	if err := pathcheck.ValidateBucket(bucket); err != nil {
+func (d *driver) AbortMultipart(ctx context.Context, ref storage.MultipartRef) error {
+	if err := pathcheck.ValidateBucket(ref.Bucket); err != nil {
 		return err
 	}
-	if err := pathcheck.ValidateKey(key); err != nil {
+	if err := pathcheck.ValidateKey(ref.Key); err != nil {
 		return err
 	}
-	lockKey := bucket + ":" + key
+	lockKey := ref.Bucket + ":" + ref.Key
 	unlock := d.keys.Lock(lockKey)
 	defer unlock()
-	if _, err := d.mp.Validate(uploadID, bucket, key); err != nil {
+	if _, err := d.mp.Validate(ref.UploadID, ref.Bucket, ref.Key); err != nil {
 		return err
 	}
-	return d.mp.Abort(uploadID)
+	return d.mp.Abort(ref.UploadID)
 }
 
 // ---------- Ext ----------
@@ -579,14 +665,7 @@ func (d *driver) HeadObject(ctx context.Context, bucket, key string) (*storage.O
 		}
 		return nil, err
 	}
-	return &storage.ObjectInfo{
-		Path:         d.newPath(bucket, key),
-		Size:         meta.Size,
-		ETag:         meta.ETag,
-		ContentType:  meta.ContentType,
-		LastModified: meta.LastModified,
-		Metadata:     meta.Metadata,
-	}, nil
+	return infoFromMeta(bucket, key, meta), nil
 }
 
 func (d *driver) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error {
@@ -824,4 +903,6 @@ func (r *rangeReader) Read(p []byte) (int, error) {
 
 func (r *rangeReader) Close() error { return r.rc.Close() }
 
-var _ = errors.New
+// 本文件原先有一行 `var _ = errors.New` 的占位（用于在删除某段代码后压制
+// "imported and not used"）。它本身是死代码，且会掩盖后续真正变成未使用的
+// import，故删除；errors 包在本文件中有真实使用者。

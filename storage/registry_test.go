@@ -26,44 +26,50 @@ func (t *testStorage) PutObject(ctx context.Context, bucket, key string, body io
 func (t *testStorage) GetObject(ctx context.Context, bucket, key string, opts ...GetOption) (*GetObjectResult, error) {
 	return nil, nil
 }
-func (t *testStorage) DeleteObject(ctx context.Context, bucket, key string) error          { return nil }
-func (t *testStorage) DeleteObjects(ctx context.Context, bucket string, keys []string) error { return nil }
+func (t *testStorage) DeleteObject(ctx context.Context, bucket, key string) error { return nil }
+func (t *testStorage) DeleteObjects(ctx context.Context, bucket string, keys []string) error {
+	return nil
+}
 func (t *testStorage) ListObjects(ctx context.Context, bucket, prefix string, opts ...ListOption) (*ListObjectsOutput, error) {
 	return nil, nil
 }
-func (t *testStorage) CreateMultipartUpload(ctx context.Context, bucket, key string, opts ...PutOption) (string, error) {
+func (t *testStorage) CreateMultipart(ctx context.Context, bucket, key string, in CreateMultipartInput) (string, error) {
 	return "", nil
 }
-func (t *testStorage) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, body io.Reader) (*CompletedPart, error) {
+func (t *testStorage) UploadPart(ctx context.Context, ref MultipartRef, number int32, body io.Reader) (*PartInfo, error) {
 	return nil, nil
 }
-func (t *testStorage) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []CompletedPart) error {
+func (t *testStorage) ListParts(ctx context.Context, ref MultipartRef, opts ...ListPartsOption) (*ListPartsOutput, error) {
+	return nil, nil
+}
+func (t *testStorage) CompleteMultipart(ctx context.Context, ref MultipartRef, parts []PartInfo) (*ObjectInfo, error) {
+	return nil, nil
+}
+func (t *testStorage) AbortMultipart(ctx context.Context, ref MultipartRef) error {
 	return nil
 }
-func (t *testStorage) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error { return nil }
 func (t *testStorage) HeadObject(ctx context.Context, bucket, key string) (*ObjectInfo, error) {
 	return nil, nil
 }
 func (t *testStorage) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) error {
 	return nil
 }
-func (t *testStorage) PresignGetObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...GetOption) (string, error) {
-	return "", nil
+func (t *testStorage) PresignGetObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...GetOption) (*PresignedRequest, error) {
+	return nil, nil
 }
-func (t *testStorage) PresignPutObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...PutOption) (string, error) {
-	return "", nil
+func (t *testStorage) PresignPutObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...PutOption) (*PresignedRequest, error) {
+	return nil, nil
 }
-func (t *testStorage) PresignUploadPartObject(ctx context.Context, bucket, key, uploadID string, partNumber int, ttl time.Duration, opts ...PutOption) (string, error) {
-	return "", nil
+func (t *testStorage) PresignUploadPartObject(ctx context.Context, ref MultipartRef, number int32, ttl time.Duration, opts ...PutOption) (*PresignedRequest, error) {
+	return nil, nil
 }
 func (t *testStorage) PathBuilder() PathBuilder { return nil }
+
+func (t *testStorage) Caps() Caps { return Caps{} }
 
 type testPathBuilder struct{}
 
 func (p *testPathBuilder) Build(bucket, key string) StoragePath { return nil }
-func (p *testPathBuilder) ParsePublicURL(rawURL string, opts ...ParseURLOption) (StoragePath, error) {
-	return nil, nil
-}
 
 var _ Storage = (*testStorage)(nil)
 var _ PathBuilder = (*testPathBuilder)(nil)

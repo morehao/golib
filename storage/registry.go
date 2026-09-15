@@ -9,9 +9,9 @@ type StorageFactory func(Config) (Storage, error)
 type PathBuilderFactory func(Config) PathBuilder
 
 var (
-	storageMu     sync.RWMutex
-	storageReg    = make(map[string]StorageFactory)
-	pathBuilderMu sync.RWMutex
+	storageMu      sync.RWMutex
+	storageReg     = make(map[string]StorageFactory)
+	pathBuilderMu  sync.RWMutex
 	pathBuilderReg = make(map[string]PathBuilderFactory)
 )
 

@@ -55,10 +55,6 @@ func CheckExist(ctx context.Context, contentHash string) (*FileDetail, bool, err
 	return Get().CheckExist(ctx, contentHash)
 }
 
-func RecordUpload(ctx context.Context, req RecordUploadRequest) (*FileDetail, error) {
-	return Get().RecordUpload(ctx, req)
-}
-
 func UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileDetail, error) {
 	return Get().UploadAndRecord(ctx, req)
 }
@@ -67,23 +63,11 @@ func MaxUploadBytes() int64 {
 	return Get().MaxUploadBytes()
 }
 
-func StageObject(ctx context.Context, r io.Reader, opts ...storage.PutOption) (*StagedObject, error) {
-	return Get().StageObject(ctx, r, opts...)
-}
-
-func DiscardObject(ctx context.Context, path string) error {
-	return Get().DiscardObject(ctx, path)
-}
-
-func CommitStagedObject(ctx context.Context, req CommitStagedObjectRequest) (*FileDetail, error) {
-	return Get().CommitStagedObject(ctx, req)
-}
-
 func GetFile(ctx context.Context, id string) (*FileDetail, error) {
 	return Get().GetFile(ctx, id)
 }
 
-func PresignGetFileURL(ctx context.Context, id string, opts ...PresignOption) (string, error) {
+func PresignGetFileURL(ctx context.Context, id string, opts ...PresignOption) (*storage.PresignedRequest, error) {
 	return Get().PresignGetFileURL(ctx, id, opts...)
 }
 
@@ -99,12 +83,17 @@ func InitMultipartUpload(ctx context.Context, req InitMultipartUploadRequest) (*
 	return Get().InitMultipartUpload(ctx, req)
 }
 
-func PresignUploadPartURL(ctx context.Context, id string, partNum int32, opts ...PresignOption) (string, error) {
+func PresignUploadPartURL(ctx context.Context, id string, partNum int32, opts ...PresignOption) (*storage.PresignedRequest, error) {
 	return Get().PresignUploadPartURL(ctx, id, partNum, opts...)
 }
 
 func CompleteMultipartUpload(ctx context.Context, req CompleteMultipartUploadRequest) (*FileDetail, error) {
 	return Get().CompleteMultipartUpload(ctx, req)
+}
+
+// ListParts 列出分片上传会话中已成功上传的分片。
+func ListParts(ctx context.Context, id string, opts ...storage.ListPartsOption) (*storage.ListPartsOutput, error) {
+	return Get().ListParts(ctx, id, opts...)
 }
 
 func AbortMultipartUpload(ctx context.Context, id string) error {
@@ -116,15 +105,10 @@ func HandlePresignedPut(ctx context.Context, bucket, key string, body io.Reader,
 }
 
 // HandlePresignedUploadPart 处理预签名分片 PUT：body 作为分片流式写入。
-func HandlePresignedUploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, body io.Reader) (*storage.CompletedPart, error) {
+func HandlePresignedUploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader) (*storage.PartInfo, error) {
 	return Get().HandlePresignedUploadPart(ctx, bucket, key, uploadID, partNumber, body)
 }
 
 func HandlePresignedGet(ctx context.Context, bucket, key string) (*storage.GetObjectResult, error) {
 	return Get().HandlePresignedGet(ctx, bucket, key)
-}
-
-// CleanupStagedObjects 清理残留暂存对象（stage/ 前缀），返回清理数量。
-func CleanupStagedObjects(ctx context.Context, olderThan time.Duration) (int, error) {
-	return Get().CleanupStagedObjects(ctx, olderThan)
 }

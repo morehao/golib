@@ -64,8 +64,8 @@ func (s *FileStore) HandlePresignedPut(ctx context.Context, bucket, key string, 
 
 // HandlePresignedUploadPart 处理预签名分片 PUT 请求：请求体作为指定分片写入，
 // 流式透传，不缓存整个分片。
-func (s *FileStore) HandlePresignedUploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, body io.Reader) (*storage.CompletedPart, error) {
-	return s.st.UploadPart(ctx, bucket, key, uploadID, partNumber, body)
+func (s *FileStore) HandlePresignedUploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int32, body io.Reader) (*storage.PartInfo, error) {
+	return s.st.UploadPart(ctx, storage.MultipartRef{Bucket: bucket, Key: key, UploadID: uploadID}, partNumber, body)
 }
 
 // HandlePresignedGet 处理预签名 GET 请求，从 storage 读取并返回数据。

@@ -53,14 +53,16 @@ func handlePresignGetFileURL(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		url, err := fs.PresignGetFileURL(c.Request.Context(), uri.ID)
+		presigned, err := fs.PresignGetFileURL(c.Request.Context(), uri.ID)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
 
 		gincontext.Success(c, presignURLResponse{
-			URL:       url,
+			URL:       presigned.URL,
+			Method:    presigned.Method,
+			Headers:   presigned.Headers,
 			ExpiresIn: int(fs.GetExpiry().Seconds()),
 		})
 	}
@@ -137,12 +139,12 @@ func handleRedirectByQuery(fs *filestore.FileStore) gin.HandlerFunc {
 
 // redirectToFileURL 按文件ID生成预签名URL并 302 重定向
 func redirectToFileURL(c *gin.Context, fs *filestore.FileStore, fileID string) {
-	url, err := fs.PresignGetFileURL(c.Request.Context(), fileID)
+	presigned, err := fs.PresignGetFileURL(c.Request.Context(), fileID)
 	if err != nil {
 		gincontext.Fail(c, err)
 		return
 	}
-	c.Redirect(http.StatusFound, url)
+	c.Redirect(http.StatusFound, presigned.URL)
 }
 
 // @Tags 文件

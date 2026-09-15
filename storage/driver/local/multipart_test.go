@@ -91,30 +91,47 @@ func TestMultipart_Validate_KeyMismatch(t *testing.T) {
 	}
 }
 
-func TestMultipart_WritePart_KnownSize(t *testing.T) {
+func TestMultipart_WritePart(t *testing.T) {
 	ms := newTestStore(t)
 	id, _ := ms.Create("bucket1", "key1", "", nil)
 	body := bytes.NewReader([]byte("part data"))
-	if _, err := ms.WritePart(id, 1, body, 9); err != nil {
+	etag, n, err := ms.WritePart(id, 1, body)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if n != int64(len("part data")) {
+		t.Errorf("WritePart 返回的字节数 = %d, want %d（必须由计数得出）", n, len("part data"))
+	}
+	if etag == "" {
+		t.Error("WritePart 必须返回分片 ETag")
 	}
 }
 
-func TestMultipart_WritePart_UnknownSize(t *testing.T) {
+// TestMultipart_Merge_ReconcilesDeclaredSize 覆盖 local 相对 S3 多出的一个便宜
+// 能力：分片就在本地磁盘上，因此可以把调用方声明的 PartInfo.Size 与实际文件
+// 对账。CompleteMultipart 的 ObjectInfo.Size 是 Σ parts[i].Size 求和得出的，
+// 不对账就等于采信调用方声明值（S3 路径上无此校验，只能信）。
+func TestMultipart_Merge_ReconcilesDeclaredSize(t *testing.T) {
 	ms := newTestStore(t)
 	id, _ := ms.Create("bucket1", "key1", "", nil)
-	body := bytes.NewReader([]byte("part data"))
-	if _, err := ms.WritePart(id, 1, body, 0); err != nil {
+	etag, _, err := ms.WritePart(id, 1, bytes.NewReader([]byte("part data")))
+	if err != nil {
 		t.Fatal(err)
 	}
-}
+	dst := t.TempDir() + "/merged.txt"
 
-func TestMultipart_WritePart_SizeMismatch(t *testing.T) {
-	ms := newTestStore(t)
-	id, _ := ms.Create("bucket1", "key1", "", nil)
-	body := bytes.NewReader([]byte("short"))
-	if _, err := ms.WritePart(id, 1, body, 100); err == nil {
-		t.Fatal("expected error for size mismatch")
+	// 声明值与实际不符：必须拒绝，否则上层落库的 size 就是假的。
+	err = ms.Merge(id, dst, []storage.PartInfo{{PartNumber: 1, ETag: etag, Size: 999}})
+	if !errors.Is(err, storage.ErrInvalidArgument) {
+		t.Fatalf("声明大小与实际不符时 Merge = %v, want ErrInvalidArgument", err)
+	}
+	// Size 为 0 表示调用方未声明，跳过对账。
+	if err := ms.Merge(id, dst, []storage.PartInfo{{PartNumber: 1, ETag: etag}}); err != nil {
+		t.Fatalf("未声明 Size 时 Merge = %v, want nil", err)
+	}
+	// 声明值正确时必须通过。
+	if err := ms.Merge(id, dst, []storage.PartInfo{{PartNumber: 1, ETag: etag, Size: int64(len("part data"))}}); err != nil {
+		t.Fatalf("声明大小正确时 Merge = %v, want nil", err)
 	}
 }
 
@@ -122,11 +139,11 @@ func TestMultipart_Merge(t *testing.T) {
 	ms := newTestStore(t)
 	id, _ := ms.Create("bucket1", "key1", "text/plain", nil)
 
-	etag1, _ := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")), 5)
-	etag2, _ := ms.WritePart(id, 2, bytes.NewReader([]byte("part2")), 5)
+	etag1, _, _ := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")))
+	etag2, _, _ := ms.WritePart(id, 2, bytes.NewReader([]byte("part2")))
 
 	dst := t.TempDir() + "/merged.txt"
-	if err := ms.Merge(id, dst, []storage.CompletedPart{
+	if err := ms.Merge(id, dst, []storage.PartInfo{
 		{PartNumber: 1, ETag: etag1},
 		{PartNumber: 2, ETag: etag2},
 	}); err != nil {
@@ -147,7 +164,7 @@ func TestMultipart_Merge_MissingPart(t *testing.T) {
 	id, _ := ms.Create("bucket1", "key1", "", nil)
 
 	dst := t.TempDir() + "/merged.txt"
-	err := ms.Merge(id, dst, []storage.CompletedPart{
+	err := ms.Merge(id, dst, []storage.PartInfo{
 		{PartNumber: 1, ETag: "etag1"},
 	})
 	if err == nil {
@@ -202,7 +219,7 @@ func TestMultipart_WritePart_ReadError(t *testing.T) {
 	ms := newTestStore(t)
 	id, _ := ms.Create("bucket1", "key1", "", nil)
 	r := failingReader{err: io.ErrUnexpectedEOF}
-	if _, err := ms.WritePart(id, 1, r, 10); err == nil {
+	if _, _, err := ms.WritePart(id, 1, r); err == nil {
 		t.Fatal("expected error from failing reader")
 	}
 }
@@ -211,12 +228,12 @@ func TestMergeKeepsPartsWhenPublishFails(t *testing.T) {
 	ms := newTestStore(t)
 	id, _ := ms.Create("bucket1", "key1", "", nil)
 
-	etag1, _ := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")), 5)
-	etag3, _ := ms.WritePart(id, 3, bytes.NewReader([]byte("part3")), 5)
+	etag1, _, _ := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")))
+	etag3, _, _ := ms.WritePart(id, 3, bytes.NewReader([]byte("part3")))
 	dst := t.TempDir() + "/merged.txt"
 
 	// 缺少 part 2：合并失败，但已上传的分片必须原样保留，客户端可以补传后重试
-	err := ms.Merge(id, dst, []storage.CompletedPart{
+	err := ms.Merge(id, dst, []storage.PartInfo{
 		{PartNumber: 1, ETag: etag1},
 		{PartNumber: 2, ETag: "whatever"},
 		{PartNumber: 3, ETag: etag3},
@@ -235,18 +252,18 @@ func TestMergeKeepsPartsWhenPublishFails(t *testing.T) {
 func TestMultipart_CompleteValidatesParts(t *testing.T) {
 	ms := newTestStore(t)
 	id, _ := ms.Create("bucket1", "key1", "", nil)
-	etag1, _ := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")), 5)
-	etag2, _ := ms.WritePart(id, 2, bytes.NewReader([]byte("part2")), 5)
+	etag1, _, _ := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")))
+	etag2, _, _ := ms.WritePart(id, 2, bytes.NewReader([]byte("part2")))
 	dst := t.TempDir() + "/merged.txt"
 
 	cases := []struct {
 		name  string
-		parts []storage.CompletedPart
+		parts []storage.PartInfo
 	}{
 		{"empty", nil},
-		{"etag mismatch", []storage.CompletedPart{{PartNumber: 1, ETag: "deadbeef"}, {PartNumber: 2, ETag: etag2}}},
-		{"descending", []storage.CompletedPart{{PartNumber: 2, ETag: etag2}, {PartNumber: 1, ETag: etag1}}},
-		{"duplicate", []storage.CompletedPart{{PartNumber: 1, ETag: etag1}, {PartNumber: 1, ETag: etag1}}},
+		{"etag mismatch", []storage.PartInfo{{PartNumber: 1, ETag: "deadbeef"}, {PartNumber: 2, ETag: etag2}}},
+		{"descending", []storage.PartInfo{{PartNumber: 2, ETag: etag2}, {PartNumber: 1, ETag: etag1}}},
+		{"duplicate", []storage.PartInfo{{PartNumber: 1, ETag: etag1}, {PartNumber: 1, ETag: etag1}}},
 	}
 	for _, tc := range cases {
 		if err := ms.Merge(id, dst, tc.parts); err == nil {
@@ -258,7 +275,7 @@ func TestMultipart_CompleteValidatesParts(t *testing.T) {
 	}
 
 	// 真实 ETag（含引号形式，客户端回显常见格式）应通过
-	if err := ms.Merge(id, dst, []storage.CompletedPart{
+	if err := ms.Merge(id, dst, []storage.PartInfo{
 		{PartNumber: 1, ETag: `"` + etag1 + `"`},
 		{PartNumber: 2, ETag: strings.ToUpper(etag2)},
 	}); err != nil {
@@ -272,10 +289,10 @@ func TestMultipart_CompleteValidatesParts(t *testing.T) {
 func TestMultipart_CleanupAfterMerge(t *testing.T) {
 	ms := newTestStore(t)
 	id, _ := ms.Create("bucket1", "key1", "", nil)
-	etag1, _ := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")), 5)
+	etag1, _, _ := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")))
 	dst := t.TempDir() + "/merged.txt"
 
-	if err := ms.Merge(id, dst, []storage.CompletedPart{{PartNumber: 1, ETag: etag1}}); err != nil {
+	if err := ms.Merge(id, dst, []storage.PartInfo{{PartNumber: 1, ETag: etag1}}); err != nil {
 		t.Fatal(err)
 	}
 	// Merge 不再自行清理：分片目录与状态由调用方在发布成功后清理
@@ -302,11 +319,11 @@ func TestMultipart_SessionSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	etag1, err := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")), 5)
+	etag1, _, err := ms.WritePart(id, 1, bytes.NewReader([]byte("part1")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	etag2, err := ms.WritePart(id, 2, bytes.NewReader([]byte("part2")), 5)
+	etag2, _, err := ms.WritePart(id, 2, bytes.NewReader([]byte("part2")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +346,7 @@ func TestMultipart_SessionSurvivesRestart(t *testing.T) {
 	}
 
 	dst := filepath.Join(t.TempDir(), "merged")
-	if err := restarted.Merge(id, dst, []storage.CompletedPart{
+	if err := restarted.Merge(id, dst, []storage.PartInfo{
 		{PartNumber: 1, ETag: etag1},
 		{PartNumber: 2, ETag: etag2},
 	}); err != nil {
@@ -350,7 +367,7 @@ func TestMultipart_CleanupExpired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ms.WritePart(fresh, 1, bytes.NewReader([]byte("fresh")), 5); err != nil {
+	if _, _, err := ms.WritePart(fresh, 1, bytes.NewReader([]byte("fresh"))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -358,7 +375,7 @@ func TestMultipart_CleanupExpired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ms.WritePart(stale, 1, bytes.NewReader([]byte("stale")), 5); err != nil {
+	if _, _, err := ms.WritePart(stale, 1, bytes.NewReader([]byte("stale"))); err != nil {
 		t.Fatal(err)
 	}
 	// 把 stale 会话的创建时间改到 TTL 之前并落盘
@@ -429,7 +446,7 @@ func TestMultipart_TTLDisabled(t *testing.T) {
 func TestMultipart_WritePartFailureRemovesPartialPart(t *testing.T) {
 	ms := newTestStore(t)
 	id, _ := ms.Create("bucket1", "key1", "", nil)
-	if _, err := ms.WritePart(id, 1, failingReader{err: io.ErrUnexpectedEOF}, 10); err == nil {
+	if _, _, err := ms.WritePart(id, 1, failingReader{err: io.ErrUnexpectedEOF}); err == nil {
 		t.Fatal("expected error")
 	}
 	if _, err := os.Stat(filepath.Join(ms.uploadDir(id), partFileName(1))); !os.IsNotExist(err) {

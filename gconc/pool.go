@@ -33,6 +33,15 @@ type pool struct {
 	mu     sync.Mutex
 	errors []error
 
+	// sendMu 保护 "向 taskQueue 发送" 与 "关闭 taskQueue" 之间的竞争。
+	// 发送方持读锁、关闭方持写锁，因此 close(taskQueue) 必然发生在所有在途发送
+	// 之后，从根本上消除 "send on closed channel" panic（实测：修复前
+	// ShutdownNow 与阻塞中的 Send 竞争，300 轮可复现 1 次 panic）。
+	// queueClosed 只在持有写锁时修改，读判断一律在读锁内 —— 仅靠原子标志无法
+	// 消除"已通过检查、尚未发送"的窗口。
+	sendMu      sync.RWMutex
+	queueClosed bool
+
 	// 统计信息（原子访问）
 	activeWorkers  int32
 	pendingTasks   int32 // 已提交但尚未被 worker 取走的任务数
@@ -130,10 +139,48 @@ func (p *pool) finish(err error) {
 	atomic.AddInt64(&p.completedTasks, 1)
 }
 
+// reserve 在任务真正对 worker 可见**之前**先把等待计数加上。
+//
+// 顺序至关重要：必须"先 reserve 再入队"。若反过来（先入队、后 Add），worker
+// 可能在 Add 发生之前就取走并执行完该任务、进而调用 taskWG.Done()，于是 Done
+// 使计数变成 -1 并 panic（sync: negative WaitGroup counter）。计数必须在任务
+// 可见之前就位 —— 这与"发布前完成初始化"是同一条规则。
+func (p *pool) reserve() { p.taskWG.Add(1) }
+
+// release 撤销 reserve，仅在入队失败（队列满 / 超时 / 上下文取消）时调用。
+func (p *pool) release() { p.taskWG.Done() }
+
 // accept 记录任务已成功进入队列。
 func (p *pool) accept() {
 	atomic.AddInt32(&p.pendingTasks, 1)
-	p.taskWG.Add(1)
+}
+
+// tryEnqueue 在队列未关闭时非阻塞投递任务。
+// 返回 false 表示队列已满或已关闭 —— 两种情况调用方的处理相同（撤销 reserve）。
+func (p *pool) tryEnqueue(task Task) bool {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.queueClosed {
+		return false
+	}
+	select {
+	case p.taskQueue <- task:
+		return true
+	default:
+		return false
+	}
+}
+
+// closeQueue 标记队列已关闭并关闭它。此后任何发送都会在 tryEnqueue 处被挡下。
+// 必须与发送方用同一把锁互斥，否则会 panic：send on closed channel。
+func (p *pool) closeQueue() {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+	if p.queueClosed {
+		return
+	}
+	p.queueClosed = true
+	close(p.taskQueue)
 }
 
 // Submit 非阻塞提交任务。若队列已满、池未处于运行态或任务为 nil 则返回 false。
@@ -144,13 +191,13 @@ func (p *Pool) Submit(task Task) bool {
 	if p.maxPending > 0 && int(atomic.LoadInt32(&p.pendingTasks)) >= p.maxPending {
 		return false
 	}
-	select {
-	case p.taskQueue <- task:
-		p.accept()
-		return true
-	default:
+	p.reserve()
+	if !p.tryEnqueue(task) {
+		p.release()
 		return false
 	}
+	p.accept()
+	return true
 }
 
 // SubmitWithTimeout 在给定超时时间内尝试提交任务，超时、池关闭或失败时返回 false。
@@ -168,26 +215,50 @@ func (p *Pool) SubmitWithTimeout(task Task, timeout time.Duration) bool {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
+	p.reserve()
+	// 持读锁直到本次发送有结论：这样 closeQueue 无法在"检查通过、尚未发送"
+	// 的窗口里关闭队列。
+	p.sendMu.RLock()
+	if p.queueClosed {
+		p.sendMu.RUnlock()
+		p.release()
+		return false
+	}
 	select {
 	case p.taskQueue <- task:
+		p.sendMu.RUnlock()
 		p.accept()
 		return true
 	case <-timer.C:
+		p.sendMu.RUnlock()
+		p.release()
 		return false
 	case <-p.taskCtx.Done():
+		p.sendMu.RUnlock()
+		p.release()
 		return false
 	}
 }
 
-// Send 阻塞式提交任务。若任务上下文已取消则直接返回，不执行该任务。
+// Send 阻塞式提交任务。若任务上下文已取消或池已关闭则直接返回，不执行该任务。
 func (p *Pool) Send(task Task) {
 	if task == nil {
 		return
 	}
+	p.reserve()
+	p.sendMu.RLock()
+	if p.queueClosed {
+		p.sendMu.RUnlock()
+		p.release()
+		return
+	}
 	select {
 	case p.taskQueue <- task:
+		p.sendMu.RUnlock()
 		p.accept()
 	case <-p.taskCtx.Done():
+		p.sendMu.RUnlock()
+		p.release()
 	}
 }
 
@@ -223,7 +294,7 @@ func (p *Pool) Shutdown() []error {
 		if !atomic.CompareAndSwapInt32(&p.state, int32(stateRunning), int32(stateShutdown)) {
 			return
 		}
-		close(p.taskQueue)
+		p.closeQueue()
 		p.wg.Wait()
 		atomic.StoreInt32(&p.state, int32(stateTerminated))
 		p.cancel()
@@ -239,7 +310,7 @@ func (p *Pool) ShutdownNow() ([]Task, []error) {
 			return
 		}
 		p.cancel()
-		close(p.taskQueue)
+		p.closeQueue()
 		for task := range p.taskQueue {
 			unprocessed = append(unprocessed, task)
 		}

@@ -3,7 +3,6 @@ package ginupload
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -25,131 +24,60 @@ const maxFormFieldBytes = 1 << 20 // 1MB
 // @Success 200 {object} gincontext.DtoRender{data=fileRecordResponse}
 // @Router /files [post]
 //
-// 大文件直传说明：本实现用 multipart.Reader 边读边写，不经过 c.FormFile 的
-// 整包临时文件落盘，也不把文件读进内存，内存占用与文件体积无关（仅保留固定大小
-// 缓冲区 + 元数据）。请求体上限由 filestore.WithMaxUploadBytes 控制。
+// 上传说明：对象 key 由服务端生成，客户端无法指定落点。文件内容经服务端代理写入
+// 存储，并由服务端边写边计数得到权威 size。表单用受控内存上限解析，超出部分自动
+// 落临时文件，堆占用与文件体积无关；请求体上限由 filestore.WithMaxUploadBytes 控制。
 func handleUpload(fs *filestore.FileStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := c.Request.Context()
-
-		// 给整个请求体一个硬上限，避免无边界占用磁盘/带宽（流式读写本身内存恒定）
+		// 给整个请求体一个硬上限，避免无边界占用磁盘/带宽
 		if limit := fs.MaxUploadBytes(); limit > 0 {
 			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		}
 
-		mr, err := c.Request.MultipartReader()
-		if err != nil {
-			gincontext.Fail(c, fmt.Errorf("invalid multipart request: %w", err))
+		// 用较小的内存上限解析 multipart：超出部分自动落临时文件，
+		// 避免默认 32MB 上限先把大文件搬进堆。
+		if err := c.Request.ParseMultipartForm(maxFormFieldBytes); err != nil {
+			failUpload(c, err)
 			return
 		}
+		defer func() { _ = c.Request.MultipartForm.RemoveAll() }()
 
 		// content_hash 允许出现在表单字段或 query 中（兼容历史行为）
 		contentHash := strings.TrimSpace(c.Query("content_hash"))
-		var (
-			fileName string
-			mimeType string
-			staged   *filestore.StagedObject
-		)
-		// 提前返回（字段缺失、重复文件、读取失败等）时清理已落盘的暂存对象
-		defer func() {
-			if staged != nil {
-				_ = fs.DiscardObject(ctx, staged.Path)
-			}
-		}()
-
-		for {
-			part, partErr := mr.NextPart()
-			if errors.Is(partErr, io.EOF) {
-				break
-			}
-			if partErr != nil {
-				failUpload(c, partErr)
-				return
-			}
-
-			// 文件部分：直接流式写入暂存对象，不在内存/临时文件里攒整包
-			if part.FileName() != "" {
-				if staged != nil {
-					_ = part.Close()
-					gincontext.Fail(c, fmt.Errorf("only one file part is allowed"))
-					return
-				}
-				fileName = part.FileName()
-				mimeType = part.Header.Get("Content-Type")
-
-				var stageOpts []storage.PutOption
-				if mimeType != "" {
-					// 暂存时写入 Content-Type，提升为最终对象时由底层 Copy 继承
-					stageOpts = append(stageOpts, storage.WithContentType(mimeType))
-				}
-				s, stageErr := fs.StageObject(ctx, part, stageOpts...)
-				_ = part.Close()
-				if stageErr != nil {
-					failUpload(c, stageErr)
-					return
-				}
-				staged = s
-				continue
-			}
-
-			// 普通字段：限制单字段大小
-			if part.FormName() == "content_hash" {
-				v, fieldErr := readSmallField(part)
-				_ = part.Close()
-				if fieldErr != nil {
-					gincontext.Fail(c, fmt.Errorf("invalid content_hash: %w", fieldErr))
-					return
-				}
-				if v != "" {
-					contentHash = v
-				}
-				continue
-			}
-			_, _ = io.Copy(io.Discard, io.LimitReader(part, maxFormFieldBytes))
-			_ = part.Close()
-		}
-
-		if staged == nil {
-			gincontext.Fail(c, fmt.Errorf("file is required"))
-			return
+		if v := strings.TrimSpace(c.Request.FormValue("content_hash")); v != "" {
+			contentHash = v
 		}
 		if contentHash == "" {
 			gincontext.Fail(c, fmt.Errorf("content_hash is required"))
 			return
 		}
 
-		// CommitStagedObject 内部负责暂存对象生命周期（成功/失败都会清理）。
-		// 这里传入的 path/hash 均已非空，落在「提交方接管清理」的契约内，
-		// 因此置空 staged 避免 defer 重复删除。
-		detail, commitErr := fs.CommitStagedObject(ctx, filestore.CommitStagedObjectRequest{
+		fh, err := c.FormFile("file")
+		if err != nil {
+			gincontext.Fail(c, fmt.Errorf("file is required: %w", err))
+			return
+		}
+		f, err := fh.Open()
+		if err != nil {
+			gincontext.Fail(c, fmt.Errorf("open file: %w", err))
+			return
+		}
+		defer f.Close()
+
+		detail, err := fs.UploadAndRecord(c.Request.Context(), filestore.UploadAndRecordRequest{
 			ContentHash: contentHash,
-			Name:        fileName,
-			MimeType:    mimeType,
-			StoragePath: staged.Path,
-			Size:        staged.Size,
-			SHA256:      staged.SHA256,
+			Name:        fh.Filename,
+			Size:        fh.Size,
+			MimeType:    fh.Header.Get("Content-Type"),
+			Reader:      f,
 		})
-		staged = nil
-		if commitErr != nil {
-			gincontext.Fail(c, fmt.Errorf("upload: %w", commitErr))
+		if err != nil {
+			gincontext.Fail(c, fmt.Errorf("upload: %w", err))
 			return
 		}
 
 		gincontext.Success(c, toFileRecordResp(detail))
 	}
-}
-
-// readSmallField 读取小体积表单字段，超过上限直接报错而不是截断，
-// 避免把超长字段当成合法输入。
-func readSmallField(r io.Reader) (string, error) {
-	buf, err := io.ReadAll(io.LimitReader(r, maxFormFieldBytes+1))
-	if err != nil {
-		return "", err
-	}
-	if len(buf) > maxFormFieldBytes {
-		return "", fmt.Errorf("form field too large")
-	}
-	return strings.TrimSpace(string(buf)), nil
 }
 
 // failUpload 区分「请求体超限」与其他读取错误，给出可定位的报错。
@@ -210,10 +138,9 @@ func handleCreateMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			Name:        req.Name,
 			Size:        req.Size,
 			MimeType:    req.MimeType,
-			StoragePath: req.StoragePath,
 		})
 		if err != nil {
-			gincontext.Fail(c, err)
+			failFileOp(c, err)
 			return
 		}
 
@@ -243,14 +170,16 @@ func handlePresignUploadPartURL(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		url, err := fs.PresignUploadPartURL(c.Request.Context(), req.FileID, req.PartNumber)
+		presigned, err := fs.PresignUploadPartURL(c.Request.Context(), req.FileID, req.PartNumber)
 		if err != nil {
 			gincontext.Fail(c, err)
 			return
 		}
 
 		gincontext.Success(c, presignURLResponse{
-			URL:       url,
+			URL:       presigned.URL,
+			Method:    presigned.Method,
+			Headers:   presigned.Headers,
 			ExpiresIn: int(fs.GetExpiry().Seconds()),
 		})
 	}
@@ -275,9 +204,9 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		parts := make([]storage.CompletedPart, len(req.Parts))
+		parts := make([]storage.PartInfo, len(req.Parts))
 		for i, p := range req.Parts {
-			parts[i] = storage.CompletedPart{PartNumber: int(p.PartNumber), ETag: p.ETag}
+			parts[i] = storage.PartInfo{PartNumber: p.PartNumber, ETag: p.ETag}
 		}
 
 		detail, err := fs.CompleteMultipartUpload(c.Request.Context(), filestore.CompleteMultipartUploadRequest{
@@ -285,11 +214,59 @@ func handleCompleteMultipartUpload(fs *filestore.FileStore) gin.HandlerFunc {
 			Parts: parts,
 		})
 		if err != nil {
-			gincontext.Fail(c, err)
+			failFileOp(c, err)
 			return
 		}
 
 		gincontext.Success(c, toFileRecordResp(detail))
+	}
+}
+
+// @Tags 文件
+// @Summary 列出已上传分片
+// @accept application/json
+// @Produce application/json
+// @Param id path string true "文件ID"
+// @Param max_parts query int false "单页最大分片数"
+// @Param part_number_marker query int false "从该分片号之后继续列举"
+// @Success 200 {object} gincontext.DtoRender{data=listPartsResponse}
+// @Router /files/{id}/parts [get]
+func handleListParts(fs *filestore.FileStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var uri fileIDURI
+		if err := c.ShouldBindUri(&uri); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+		var query listPartsQueryRequest
+		if err := c.ShouldBindQuery(&query); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+
+		var opts []storage.ListPartsOption
+		if query.MaxParts > 0 {
+			opts = append(opts, storage.WithMaxParts(query.MaxParts))
+		}
+		if query.PartNumberMarker > 0 {
+			opts = append(opts, storage.WithPartNumberMarker(query.PartNumberMarker))
+		}
+
+		out, err := fs.ListParts(c.Request.Context(), uri.ID, opts...)
+		if err != nil {
+			gincontext.Fail(c, err)
+			return
+		}
+
+		parts := make([]presignedPartResponse, len(out.Parts))
+		for i, p := range out.Parts {
+			parts[i] = presignedPartResponse{PartNumber: int(p.PartNumber), ETag: p.ETag}
+		}
+		gincontext.Success(c, listPartsResponse{
+			Parts:                parts,
+			IsTruncated:          out.IsTruncated,
+			NextPartNumberMarker: out.NextPartNumberMarker,
+		})
 	}
 }
 

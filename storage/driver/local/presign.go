@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -22,59 +23,78 @@ const (
 // presignPayload 与 storage.PresignTokenPayload 同构，保留别名便于测试直接解码校验。
 type presignPayload = storage.PresignTokenPayload
 
-func (d *driver) PresignGetObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.GetOption) (string, error) {
+func (d *driver) PresignGetObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.GetOption) (*storage.PresignedRequest, error) {
 	if d.signSecret == "" {
-		return "", storage.ErrNotSupported
+		return nil, storage.ErrNotSupported
 	}
 	return d.generatePresignedURL(bucket, key, presignOpGet, "", 0, ttl)
 }
 
-func (d *driver) PresignPutObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.PutOption) (string, error) {
+func (d *driver) PresignPutObject(ctx context.Context, bucket, key string, ttl time.Duration, opts ...storage.PutOption) (*storage.PresignedRequest, error) {
 	if d.signSecret == "" {
-		return "", storage.ErrNotSupported
+		return nil, storage.ErrNotSupported
 	}
 	return d.generatePresignedURL(bucket, key, presignOpPut, "", 0, ttl)
 }
 
-// PresignUploadPartObject 为单个分片生成预签名 URL：URL 仍指向本服务的对象端点，
+// PresignUploadPartObject 为单个分片生成预签名请求：URL 仍指向本服务的对象端点，
 // 但 token 内绑定了 upload_id 与 part_number（签名覆盖），消费端据此把请求体
 // 作为分片写入对应的分片会话，而不是整体覆盖最终对象。
-func (d *driver) PresignUploadPartObject(ctx context.Context, bucket, key, uploadID string, partNumber int, ttl time.Duration, _ ...storage.PutOption) (string, error) {
+func (d *driver) PresignUploadPartObject(ctx context.Context, ref storage.MultipartRef, number int32, ttl time.Duration, _ ...storage.PutOption) (*storage.PresignedRequest, error) {
 	if d.signSecret == "" {
-		return "", storage.ErrNotSupported
+		return nil, storage.ErrNotSupported
 	}
-	if uploadID == "" || partNumber <= 0 {
-		return "", fmt.Errorf("%w: upload_id and part_number are required", storage.ErrInvalidArgument)
+	if ref.UploadID == "" || number <= 0 {
+		return nil, fmt.Errorf("%w: upload_id and part_number are required", storage.ErrInvalidArgument)
 	}
-	return d.generatePresignedURL(bucket, key, presignOpPutPart, uploadID, partNumber, ttl)
+	return d.generatePresignedURL(ref.Bucket, ref.Key, presignOpPutPart, ref.UploadID, number, ttl)
 }
 
-func (d *driver) generatePresignedURL(bucket, key, op, uploadID string, partNumber int, ttl time.Duration) (string, error) {
+func (d *driver) generatePresignedURL(bucket, key, op, uploadID string, partNumber int32, ttl time.Duration) (*storage.PresignedRequest, error) {
 	if d.baseURL == "" {
-		return "", fmt.Errorf("%w: BaseURL is required for presigned URL", storage.ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: BaseURL is required for presigned URL", storage.ErrInvalidConfig)
 	}
-	exp := time.Now().UTC().Add(ttl).Unix()
+	// ttl=0 必须走统一的默认值，而不是"立刻过期" —— 后者与 S3 后端
+	// 的默认行为相反，同一调用在两个后端上结果不同。
+	ttl, err := storage.ResolvePresignTTL(ttl)
+	if err != nil {
+		return nil, err
+	}
+	expiresAt := time.Now().UTC().Add(ttl)
+	exp := expiresAt.Unix()
 	token, err := storage.EncodePresignToken(d.signSecret, presignPayload{
 		Key:        storage.PresignTokenKey(bucket, key),
 		Op:         op,
 		Exp:        exp,
 		UploadID:   uploadID,
-		PartNumber: partNumber,
+		PartNumber: int(partNumber),
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	base := strings.TrimRight(d.baseURL, "/")
 	u, err := url.Parse(base + "/" + bucket + "/" + key)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	q := u.Query()
 	q.Set("token", token)
 	q.Set("expires", strconv.FormatInt(exp, 10))
 	u.RawQuery = q.Encode()
-	return u.String(), nil
+
+	method := http.MethodPut
+	if op == presignOpGet {
+		method = http.MethodGet
+	}
+	// local 的签名信息全部落在 URL 查询参数里，不覆盖任何请求头，
+	// 因此 Headers 为空表而不是 nil：调用方可以无条件遍历它。
+	return &storage.PresignedRequest{
+		Method:    method,
+		URL:       u.String(),
+		Headers:   http.Header{},
+		ExpiresAt: expiresAt,
+	}, nil
 }
 
 // 预签名校验错误统一别名到 storage 包的同名错误，保证 errors.Is 跨包可用。

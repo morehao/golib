@@ -392,7 +392,7 @@ func listKeysAndPrefixes(t *testing.T, s storage.Storage, bucket, prefix string,
 	}
 	keys := make([]string, 0, len(out.Contents))
 	for _, c := range out.Contents {
-		keys = append(keys, c.Path.Key())
+		keys = append(keys, c.Key)
 	}
 	return keys, out.CommonPrefixes, out
 }

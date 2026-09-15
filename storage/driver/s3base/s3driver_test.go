@@ -41,26 +41,6 @@ func TestTrimETag_SingleQuoteStart(t *testing.T) {
 	}
 }
 
-func TestUsePathStyle_MyQCloud(t *testing.T) {
-	if usePathStyle("https://cos.ap-guangzhou.myqcloud.com") {
-		t.Fatal("expected false for myqcloud.com endpoint")
-	}
-}
-
-func TestUsePathStyle_OtherEndpoint(t *testing.T) {
-	if !usePathStyle("https://oss-cn-hangzhou.aliyuncs.com") {
-		t.Fatal("expected true for non-myqcloud endpoint")
-	}
-}
-
-func TestUsePathStyle_IPAddress(t *testing.T) {
-	if !usePathStyle("http://192.168.1.1:9000") {
-		t.Fatal("expected true for IP address endpoint")
-	}
-}
-
-func TestUsePathStyle_InvalidURL(t *testing.T) {
-	if !usePathStyle("://invalid-url") {
-		t.Fatal("expected true for invalid URL")
-	}
-}
+// 寻址风格（原 usePathStyle 的一组测试）已从"嗅探 endpoint 里的厂商域名"
+// 改为 ProviderProfile.ForcePathStyle 数据声明，对应断言移到各 provider 包的
+// contract_test.go 与 profile_test.go。

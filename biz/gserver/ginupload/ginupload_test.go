@@ -36,12 +36,16 @@ const (
 
 var bg = context.Background()
 
-type mockStorage struct{ storage.Storage }
+type mockStorage struct {
+	storage.Storage
+	// listPartsOut 是 ListParts 的返回值（nil 时返回空列表）。
+	listPartsOut *storage.ListPartsOutput
+}
 
 var _ storage.PathBuilder = (*storage.LocalPathBuilder)(nil)
 
 func (m *mockStorage) PathBuilder() storage.PathBuilder {
-	return &storage.LocalPathBuilder{AbsDir: "/mock"}
+	return &storage.LocalPathBuilder{}
 }
 
 func (m *mockStorage) GetObject(_ context.Context, _ string, key string, _ ...storage.GetOption) (*storage.GetObjectResult, error) {
@@ -54,7 +58,8 @@ func (m *mockStorage) PutObject(_ context.Context, _ string, _ string, reader io
 	_, _ = io.Copy(io.Discard, reader)
 	return &storage.PutObjectResult{
 		ObjectInfo: storage.ObjectInfo{
-			Path:        (&storage.LocalPathBuilder{AbsDir: "/mock"}).Build("test-bucket", "uploads/file.txt"),
+			Bucket:      "test-bucket",
+			Key:         "uploads/file.txt",
 			Size:        100,
 			ContentType: "text/plain",
 		},
@@ -66,27 +71,52 @@ func (m *mockStorage) DeleteObject(_ context.Context, _ string, _ string) error 
 // CopyObject 支撑「暂存对象提升为最终对象」的流式上传路径（mock 只需可调用）。
 func (m *mockStorage) CopyObject(_ context.Context, _, _, _, _ string) error { return nil }
 
-func (m *mockStorage) CreateMultipartUpload(_ context.Context, _ string, _ string, _ ...storage.PutOption) (string, error) {
+func (m *mockStorage) CreateMultipart(_ context.Context, _ string, _ string, _ storage.CreateMultipartInput) (string, error) {
 	return "mock-upload-id", nil
 }
 
-func (m *mockStorage) CompleteMultipartUpload(_ context.Context, _ string, _ string, _ string, _ []storage.CompletedPart) error {
-	return nil
+func (m *mockStorage) ListParts(_ context.Context, _ storage.MultipartRef, _ ...storage.ListPartsOption) (*storage.ListPartsOutput, error) {
+	if m.listPartsOut != nil {
+		return m.listPartsOut, nil
+	}
+	return &storage.ListPartsOutput{}, nil
 }
 
-func (m *mockStorage) AbortMultipartUpload(_ context.Context, _ string, _ string, _ string) error { return nil }
-
-func (m *mockStorage) PresignGetObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.GetOption) (string, error) {
-	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
+func (m *mockStorage) CompleteMultipart(_ context.Context, _ storage.MultipartRef, _ []storage.PartInfo) (*storage.ObjectInfo, error) {
+	return &storage.ObjectInfo{}, nil
 }
 
-func (m *mockStorage) PresignPutObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.PutOption) (string, error) {
-	return fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires), nil
+func (m *mockStorage) AbortMultipart(_ context.Context, _ storage.MultipartRef) error { return nil }
+
+// mockSignedHeaders 模拟 SigV4 纳入签名的头：HTTP 层必须原样透传给前端。
+var mockSignedHeaders = http.Header{"X-Amz-Meta-Origin": {"ginupload-test"}}
+
+func (m *mockStorage) PresignGetObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.GetOption) (*storage.PresignedRequest, error) {
+	return &storage.PresignedRequest{
+		Method:  http.MethodGet,
+		URL:     fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires),
+		Headers: mockSignedHeaders,
+	}, nil
 }
 
-func (m *mockStorage) PresignUploadPartObject(_ context.Context, _ string, key, uploadID string, partNumber int, expires time.Duration, _ ...storage.PutOption) (string, error) {
-	return fmt.Sprintf("https://presign.example.com/%s?upload_id=%s&part_number=%d&expires=%s", key, uploadID, partNumber, expires), nil
+func (m *mockStorage) PresignPutObject(_ context.Context, _ string, key string, expires time.Duration, _ ...storage.PutOption) (*storage.PresignedRequest, error) {
+	return &storage.PresignedRequest{
+		Method:  http.MethodPut,
+		URL:     fmt.Sprintf("https://presign.example.com/%s?expires=%s", key, expires),
+		Headers: mockSignedHeaders,
+	}, nil
 }
+
+func (m *mockStorage) PresignUploadPartObject(_ context.Context, ref storage.MultipartRef, number int32, expires time.Duration, _ ...storage.PutOption) (*storage.PresignedRequest, error) {
+	return &storage.PresignedRequest{
+		Method: http.MethodPut,
+		URL: fmt.Sprintf("https://presign.example.com/%s?upload_id=%s&part_number=%d&expires=%s",
+			ref.Key, ref.UploadID, number, expires),
+		Headers: mockSignedHeaders,
+	}, nil
+}
+
+func (m *mockStorage) Caps() storage.Caps { return storage.Caps{Multipart: true, ListParts: true} }
 
 type failingMockStorage struct{ storage.Storage }
 
@@ -95,7 +125,7 @@ func (m *failingMockStorage) PutObject(_ context.Context, _ string, _ string, _ 
 }
 
 func (m *failingMockStorage) PathBuilder() storage.PathBuilder {
-	return &storage.LocalPathBuilder{AbsDir: "/mock"}
+	return &storage.LocalPathBuilder{}
 }
 
 func (m *failingMockStorage) GetObject(_ context.Context, _ string, key string, _ ...storage.GetOption) (*storage.GetObjectResult, error) {
@@ -119,7 +149,7 @@ func (m *failingPutMockStorage) GetObject(_ context.Context, _ string, key strin
 }
 
 func (m *failingPutMockStorage) PathBuilder() storage.PathBuilder {
-	return &storage.LocalPathBuilder{AbsDir: "/mock"}
+	return &storage.LocalPathBuilder{}
 }
 
 // --- helpers ---
@@ -237,18 +267,26 @@ func TestHandleUpload(t *testing.T) {
 	})
 }
 
+// seedUpload 用 UploadAndRecord 造一条已完成的上传记录，供前置数据使用。
+// reader 长度与 size 一致，保证落库 size 等于声明值。
+func seedUpload(t *testing.T, fs *filestore.FileStore, hash, name string, size int64) *filestore.FileDetail {
+	t.Helper()
+	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
+		ContentHash: hash,
+		Name:        name,
+		Size:        size,
+		Reader:      strings.NewReader(strings.Repeat("x", int(size))),
+	})
+	require.NoError(t, err)
+	return detail
+}
+
 func TestHandleCheckExist(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
 	// pre-seed a file with known content hash
-	_, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		ContentHash: "fp-exist",
-		Name:        "exist.txt",
-		Size:        100,
-		StoragePath: "exist.txt",
-	})
-	require.NoError(t, err)
+	_ = seedUpload(t, fs, "fp-exist", "exist.txt", 100)
 
 	t.Run("exists", func(t *testing.T) {
 		w := postJSON(router, testAPIPrefix+"/files/check-exist", checkExistRequest{ContentHash: "fp-exist"})
@@ -304,13 +342,12 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 		Name:        "large.mp4",
 		Size:        10485760,
 		MimeType:    "video/mp4",
-		StoragePath: "videos/large.mp4",
 	}
 	w := postJSON(router, testAPIPrefix+"/files/multipart", req)
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int                    `json:"code"`
+		Code int                     `json:"code"`
 		Data createMultipartResponse `json:"data"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
@@ -323,33 +360,74 @@ func TestHandleInitMultipartUpload(t *testing.T) {
 func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 	fs := newTestFileStore(t)
 	// pre-seed a completed file with same content hash
-	_, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		ContentHash: "existing-fp",
-		Name:        "existing.txt",
-		Size:        100,
-		StoragePath: "existing.txt",
-	})
-	require.NoError(t, err)
+	_ = seedUpload(t, fs, "existing-fp", "existing.txt", 100)
 
 	router := setupRouter(fs)
 	req := createMultipartRequest{
 		ContentHash: "existing-fp",
 		Name:        "new.mp4",
 		Size:        999999,
-		StoragePath: "new.mp4",
 	}
 	w := postJSON(router, testAPIPrefix+"/files/multipart", req)
+	// 去重命中：返回 409（内容已存在），且绝不创建分片会话。
+	require.Equal(t, http.StatusConflict, w.Code)
+
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	require.NotEqual(t, 0, resp.Code)
+	require.Contains(t, resp.Msg, "content already exists")
+}
+
+// TestHandleListParts GET /files/:id/parts 返回分片列表与 is_truncated。
+func TestHandleListParts(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	mock := &mockStorage{listPartsOut: &storage.ListPartsOutput{
+		Parts: []storage.PartInfo{
+			{PartNumber: 1, ETag: "etag-1"},
+			{PartNumber: 2, ETag: "etag-2"},
+		},
+		IsTruncated:          true,
+		NextPartNumberMarker: 2,
+	}}
+	fs, err := filestore.New(db, mock, "test-bucket")
+	require.NoError(t, err)
+	router := setupRouter(fs)
+
+	detail, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
+		ContentHash: "parts-fp",
+		Name:        "parts.mp4",
+		Size:        1000,
+	})
+	require.NoError(t, err)
+
+	w := getReq(router, fmt.Sprintf("%s/files/%s/parts", testAPIPrefix, detail.FileUploadID))
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int                    `json:"code"`
-		Data createMultipartResponse `json:"data"`
+		Code int               `json:"code"`
+		Msg  string            `json:"msg"`
+		Data listPartsResponse `json:"data"`
 	}
-	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code, resp.Msg)
+	require.Len(t, resp.Data.Parts, 2)
+	require.Equal(t, 1, resp.Data.Parts[0].PartNumber)
+	require.Equal(t, "etag-1", resp.Data.Parts[0].ETag)
+	require.True(t, resp.Data.IsTruncated)
+	require.Equal(t, int32(2), resp.Data.NextPartNumberMarker)
+}
+
+// TestCreateMultipartRequest_HasNoStoragePath 编译期事实：该 DTO 已无 StoragePath 字段。
+// 上面的字面量构造不出现该字段即已证明；这里再用 JSON 序列化做一次运行时加固。
+func TestCreateMultipartRequest_HasNoStoragePath(t *testing.T) {
+	raw, err := json.Marshal(createMultipartRequest{ContentHash: "h", Name: "n", Size: 1, MimeType: "m"})
 	require.NoError(t, err)
-	require.Equal(t, 0, resp.Code)
-	require.NotEmpty(t, resp.Data.UploadID)
-	require.NotZero(t, resp.Data.FileID)
+	require.NotContains(t, string(raw), "storage_path")
 }
 
 func TestHandlePresignUploadPartURL(t *testing.T) {
@@ -361,7 +439,6 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 		ContentHash: "presign-fp",
 		Name:        "test.mp4",
 		Size:        1000,
-		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
@@ -371,13 +448,17 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int                 `json:"code"`
+		Code int                `json:"code"`
 		Data presignURLResponse `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
 	require.Contains(t, resp.Data.URL, "presign.example.com")
+	// 回归：SigV4 覆盖的 Headers 必须原样序列化给前端，否则客户端直传会 SignatureDoesNotMatch。
+	require.Equal(t, http.MethodPut, resp.Data.Method)
+	require.NotNil(t, resp.Data.Headers)
+	require.Equal(t, "ginupload-test", resp.Data.Headers.Get("X-Amz-Meta-Origin"))
 }
 
 func TestHandlePresignUploadPartURL_NotFound(t *testing.T) {
@@ -407,7 +488,6 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 		ContentHash: "complete-fp",
 		Name:        "test.mp4",
 		Size:        1000,
-		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
@@ -421,7 +501,7 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int                  `json:"code"`
+		Code int                `json:"code"`
 		Data fileRecordResponse `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
@@ -455,7 +535,6 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 		ContentHash: "abort-fp",
 		Name:        "test.mp4",
 		Size:        1000,
-		StoragePath: "test.mp4",
 	})
 	require.NoError(t, err)
 
@@ -479,12 +558,12 @@ func TestHandleGetFileDetail(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
 		ContentHash: "rec-fp",
 		Name:        "rec.txt",
 		Size:        100,
 		MimeType:    "text/plain",
-		StoragePath: "rec.txt",
+		Reader:      strings.NewReader(strings.Repeat("x", 100)),
 	})
 	require.NoError(t, err)
 
@@ -493,7 +572,7 @@ func TestHandleGetFileDetail(t *testing.T) {
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
-			Code int                  `json:"code"`
+			Code int                `json:"code"`
 			Data fileDetailResponse `json:"data"`
 		}
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
@@ -522,12 +601,12 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
 		ContentHash: "dl-fp",
 		Name:        "download.txt",
 		Size:        100,
 		MimeType:    "text/plain",
-		StoragePath: "files/download.txt",
+		Reader:      strings.NewReader(strings.Repeat("x", 100)),
 	})
 	require.NoError(t, err)
 
@@ -535,14 +614,20 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	require.Equal(t, 200, w.Code)
 
 	var resp struct {
-		Code int                 `json:"code"`
+		Code int                `json:"code"`
 		Data presignURLResponse `json:"data"`
 	}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
+	_, _, objectKey, err := storage.ParseURI(detail.StorageURI)
+	require.NoError(t, err)
 	require.Contains(t, resp.Data.URL, "presign.example.com")
-	require.Contains(t, resp.Data.URL, "files/download.txt")
+	require.Contains(t, resp.Data.URL, objectKey)
+	// 回归：预签名响应必须带 Method 与 Headers，不能只给 URL。
+	require.Equal(t, http.MethodGet, resp.Data.Method)
+	require.NotNil(t, resp.Data.Headers)
+	require.Equal(t, "ginupload-test", resp.Data.Headers.Get("X-Amz-Meta-Origin"))
 }
 
 func TestHandlePresignGetFileURL_NotFound(t *testing.T) {
@@ -566,13 +651,7 @@ func TestHandleDeleteFile(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
-		ContentHash: "detail-fp",
-		Name:        "del.txt",
-		Size:        10,
-		StoragePath: "del.txt",
-	})
-	require.NoError(t, err)
+	detail := seedUpload(t, fs, "detail-fp", "del.txt", 10)
 
 	w := deleteReq(router, fmt.Sprintf("%s/files/%s", testAPIPrefix, detail.FileUploadID))
 	require.Equal(t, 200, w.Code)
@@ -580,7 +659,7 @@ func TestHandleDeleteFile(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 	}
-	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.Code)
 
@@ -633,13 +712,15 @@ func TestHandleRedirectGetFileURL(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
 		ContentHash: "redirect-fp",
 		Name:        "img.png",
 		Size:        1024,
 		MimeType:    "image/png",
-		StoragePath: "images/img.png",
+		Reader:      strings.NewReader(strings.Repeat("x", 1024)),
 	})
+	require.NoError(t, err)
+	_, _, objectKey, err := storage.ParseURI(detail.StorageURI)
 	require.NoError(t, err)
 
 	t.Run("redirects to presigned URL with file_id", func(t *testing.T) {
@@ -649,18 +730,18 @@ func TestHandleRedirectGetFileURL(t *testing.T) {
 
 		require.Equal(t, 302, w.Code)
 		require.Contains(t, w.Header().Get("Location"), "presign.example.com")
-		require.Contains(t, w.Header().Get("Location"), "images/img.png")
+		require.Contains(t, w.Header().Get("Location"), objectKey)
 	})
 
 	t.Run("redirects to presigned URL with storage_uri", func(t *testing.T) {
-		storageURI := "file:///test-bucket/images/img.png"
+		storageURI := detail.StorageURI
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/redirect?storage_uri="+storageURI, nil)
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, 302, w.Code)
 		require.Contains(t, w.Header().Get("Location"), "presign.example.com")
-		require.Contains(t, w.Header().Get("Location"), "images/img.png")
+		require.Contains(t, w.Header().Get("Location"), objectKey)
 	})
 
 	t.Run("invalid file_id", func(t *testing.T) {
@@ -724,13 +805,15 @@ func TestHandleServeFileByID(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.RecordUpload(bg, filestore.RecordUploadRequest{
+	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
 		ContentHash: "serve-fp",
 		Name:        "hello.txt",
 		Size:        11,
 		MimeType:    "text/plain",
-		StoragePath: "files/hello.txt",
+		Reader:      strings.NewReader(strings.Repeat("x", 11)),
 	})
+	require.NoError(t, err)
+	_, _, objectKey, err := storage.ParseURI(detail.StorageURI)
 	require.NoError(t, err)
 
 	t.Run("serves file content with file_id", func(t *testing.T) {
@@ -742,11 +825,11 @@ func TestHandleServeFileByID(t *testing.T) {
 		require.Equal(t, "text/plain", w.Header().Get("Content-Type"))
 		require.Contains(t, w.Header().Get("Content-Disposition"), "hello.txt")
 		require.Equal(t, "11", w.Header().Get("Content-Length"))
-		require.Contains(t, w.Body.String(), "files/hello.txt")
+		require.Contains(t, w.Body.String(), objectKey)
 	})
 
 	t.Run("serves file content with storage_uri", func(t *testing.T) {
-		storageURI := "file:///test-bucket/files/hello.txt"
+		storageURI := detail.StorageURI
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", testAPIPrefix+"/files/serve?storage_uri="+storageURI, nil)
 		router.ServeHTTP(w, req)
@@ -960,7 +1043,7 @@ func TestHandlePresignedPut(t *testing.T) {
 		require.Equal(t, 200, w.Code)
 
 		var resp struct {
-			Code int                    `json:"code"`
+			Code int                  `json:"code"`
 			Data presignedPutResponse `json:"data"`
 		}
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
