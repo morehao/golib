@@ -75,12 +75,12 @@ Test-specific environment variables:
 `biz` is a business component package providing commonly used infrastructure components for business development.
 
 ### Sub-components
-- **gcontext**: Context utilities, including request ID, user ID, tenant ID and other context key-value definitions and formatting
+- **gcontext**: Context utilities: request ID, user ID, tenant ID and other context key-value definitions, formatting, plus explicit **tenant scope** (`CurrentScope`/`ExplicitScope`/`AllScope`) with `TenantScopeFilter` as the single translator to data-layer filtering
 - **gobject**: Common business objects, including user authentication info (UserClaims), operator info (OperatorBaseInfo), pagination query (PageQuery)
 - **gconstant**: Business constant definitions, including error codes (100000 series), API versions, etc.
 - **gserver**: Gin server related. `RouterGroups` is the unique top-level route group factory (path `/v1/{app}`), auto-mounting otelgin & access-log middleware; business modules register routes via `Register(group, ...)`. Routing style spec: [docs/router-style.md](docs/router-style.md)
 - **gmiddleware**: Gin middleware, including JWT authentication, CORS, access logging, Token blacklist
-- **gormplugin**: GORM plugins, including multi-tenant plugin (automatically adds tenant_id filter conditions)
+- **gormplugin**: GORM multi-tenant plugin: injects a scope condition into SELECT/UPDATE/DELETE, resolves the scope with a three-state `Resolver` (unset / all-tenants / by-value) and supports fail-closed `MissingScope`
 - **genericdao**: Generic DAO,封装基础的增删改查操作
 - **testkit**: Testing toolkit, supporting test initializer and context building
 
