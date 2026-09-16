@@ -34,12 +34,12 @@ go get github.com/morehao/golib
 `biz` 是业务组件包，提供了业务开发中常用的基础设施组件。
 
 ### 子组件
-- **gcontext**: 上下文工具，包含请求 ID、用户 ID、租户 ID 等上下文键值定义和格式化
+- **gcontext**: 上下文工具，包含请求 ID、用户 ID、租户 ID 等上下文键值定义和格式化，以及显式的**租户作用域**（`CurrentScope`/`ExplicitScope`/`AllScope`）与唯一翻译点 `TenantScopeFilter`
 - **gobject**: 通用业务对象，包含用户认证信息（UserClaims）、操作者信息（OperatorBaseInfo）、分页查询（PageQuery）
 - **gconstant**: 业务常量定义，包含错误码（100000 系列）、API 版本等
 - **gserver**: Gin 服务器相关。`RouterGroups` 是唯一的顶层路由分组工厂（路径 `/v1/{app}`），自动挂载 otelgin 与访问日志中间件；业务模块通过 `Register(group, ...)` 注册路由。路由风格规范见 [docs/router-style.md](docs/router-style.md)
 - **gmiddleware**: Gin 中间件，包含 JWT 认证、CORS、访问日志、Token 黑名单
-- **gormplugin**: GORM 插件，包含多租户插件（自动添加 tenant_id 过滤条件）
+- **gormplugin**: GORM 多租户插件：对 SELECT/UPDATE/DELETE 注入作用域条件，用三态 `Resolver`（未声明／全租户／按值）解析作用域，并支持 fail-closed 的 `MissingScope` 钩子
 - **genericdao**: 泛型 DAO，封装基础的增删改查操作
 - **testkit**: 测试工具包，支持测试初始化器和上下文构建
 
