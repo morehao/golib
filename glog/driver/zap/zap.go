@@ -263,12 +263,25 @@ func (l *zapLogger) LogDepth(ctx context.Context, level glog.Level, msg string, 
 	l.entry(level, ctx, extra, msg, kvs)
 }
 
+// sweetenFields 把 kvs 转成 zap.Field，支持两种形式混写：
+//   - 交替的 key/value 对；
+//   - glog.KV(...) 返回的 glog.Field，按单个元素展开。
+//
+// 必须显式识别 glog.Field：它若被当成 key，会被输出成 !badKeyN，
+// 字段名消失后字段脱敏 Hook 也看不到该字段（ghttp 曾因此把 URL 里的凭据明文打进日志）。
 func sweetenFields(kvs []any) []zap.Field {
 	if len(kvs) == 0 {
 		return nil
 	}
+	// 纯 k/v 时每个元素对产出 1 个字段，按 (len+1)/2 预分配即为精确容量；
+	// 混入 glog.Field 时最多多一次 append 扩容，保住热路径的常见分配量。
 	fields := make([]zap.Field, 0, (len(kvs)+1)/2)
-	for i := 0; i < len(kvs); i += 2 {
+	for i := 0; i < len(kvs); {
+		if f, ok := kvs[i].(glog.Field); ok {
+			fields = append(fields, zap.Any(f.Key, f.Value))
+			i++
+			continue
+		}
 		if i == len(kvs)-1 {
 			fields = append(fields, zap.Any("!extra", kvs[i]))
 			break
@@ -276,10 +289,11 @@ func sweetenFields(kvs []any) []zap.Field {
 		key, ok := kvs[i].(string)
 		if !ok {
 			fields = append(fields, zap.Any(fmt.Sprintf("!badKey%d", i), kvs[i]))
-			i--
+			i++
 			continue
 		}
 		fields = append(fields, zap.Any(key, kvs[i+1]))
+		i += 2
 	}
 	return fields
 }

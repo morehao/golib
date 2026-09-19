@@ -391,3 +391,43 @@ func TestZapCloseFlushesBuffer(t *testing.T) {
 	assert.Nil(t, readErr)
 	assert.Contains(t, string(b), "buffered message")
 }
+
+// TestZapKVFieldExpansion 断言 glog.KV(...) 作为参数时被展开成正常字段。
+//
+// glog.KV 返回 glog.Field，driver 若不识别它，zap 会把它当非法 key 输出成 !badKeyN：
+// 字段名消失、字段脱敏 Hook 也看不到该字段——ghttp 曾因此把 URL 里的凭据明文写进日志。
+func TestZapKVFieldExpansion(t *testing.T) {
+	tempDir := t.TempDir()
+	config := &glog.LogConfig{
+		Service:         "zap-kv",
+		Module:          "test",
+		Level:           glog.InfoLevel,
+		LoggerType:      glog.LoggerTypeZap,
+		EnableOTELTrace: false,
+		Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
+	}
+
+	var seenKeys []string
+	hook := func(fields []glog.Field) {
+		for i := range fields {
+			seenKeys = append(seenKeys, fields[i].Key)
+		}
+	}
+
+	logger, err := glog.NewLogger(config, glog.WithFieldHookFunc(hook))
+	assert.Nil(t, err)
+
+	// KV 与普通 k/v 混用：两种写法都必须产出正常字段名
+	logger.Infow(context.Background(), "kv message", glog.KV("user_id", 1001), "module", "order")
+	logger.Close()
+
+	dateStr := time.Now().Format("20060102")
+	b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "zap-kv_full.log"))
+	assert.Nil(t, readErr)
+	content := string(b)
+	assert.Contains(t, content, `"user_id":1001`)
+	assert.Contains(t, content, `"module":"order"`)
+	assert.NotContains(t, content, "!badKey")
+	assert.Contains(t, seenKeys, "user_id", "字段名必须能被 Hook 看到，否则脱敏无从下手")
+	assert.Contains(t, seenKeys, "module")
+}

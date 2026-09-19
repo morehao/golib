@@ -310,13 +310,34 @@ func (l *slogLogger) LogDepth(ctx context.Context, level glog.Level, msg string,
 	}
 }
 
+// normalizeKVs 把 kvs 规整成"偶数长度、key/value 交替"的序列，并把 glog.KV(...) 传入的
+// glog.Field 展开成 k/v 两项：
+//   - 补齐长度保证无 Hook、无 ctx 提取时的快路径（r.Add(kvs...)）不丢字段；
+//   - 展开 Field 让 slog 原生 Add 与 kvsToFields 都拿到合法 key，否则会输出 !BADKEY，
+//     字段名消失后脱敏 Hook 也看不到该字段（ghttp 曾因此把 URL 里的凭据明文打进日志）。
 func normalizeKVs(kvs []any) []any {
-	if len(kvs)%2 == 0 {
+	hasField := false
+	for _, kv := range kvs {
+		if _, ok := kv.(glog.Field); ok {
+			hasField = true
+			break
+		}
+	}
+	if !hasField && len(kvs)%2 == 0 {
 		return kvs
 	}
-	fixed := make([]any, len(kvs)+1)
-	copy(fixed, kvs)
-	fixed[len(kvs)] = "(MISSING)"
+
+	fixed := make([]any, 0, len(kvs)+1)
+	for _, kv := range kvs {
+		if f, ok := kv.(glog.Field); ok {
+			fixed = append(fixed, f.Key, f.Value)
+			continue
+		}
+		fixed = append(fixed, kv)
+	}
+	if len(fixed)%2 != 0 {
+		fixed = append(fixed, "(MISSING)")
+	}
 	return fixed
 }
 

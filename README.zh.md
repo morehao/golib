@@ -226,13 +226,19 @@ if ok, err := lock.Lock(ctx); err != nil {
 ## glog
 
 ### 简介
-`glog` 是日志组件，基于 zap 提供高性能日志功能。
+`glog` 是日志组件，对外提供统一的 `Logger` 接口、对内适配可插拔驱动（zap / log/slog），提供高性能结构化日志能力。
 
 ### 特性
-- 支持 Console/File 输出
-- 支持 OTel 集成
-- 支持结构化日志
+- 双驱动：`zap`（默认）与 `log/slog`，共用一套 API 与配置
+- 支持 Console/File 输出，文件按天分目录并按大小/份数/天数滚动
+- 每个 file writer 支持 `_full`（全量）与 `_wf`（仅 warn 及以上）双文件
+- 自动提取上下文字段：OTel 链路字段与自定义 `ExtraKeys`
+- 支持结构化日志（`Infow`/`Warnw`/...）
+- 支持脱敏 Hook：`WithFieldHookFunc`（字段）与 `WithMessageHookFunc`（消息）
 - 高性能日志写入
+
+### 使用
+使用示例参照 [glog 使用说明](glog/README.md)
 
 ## gtrace
 

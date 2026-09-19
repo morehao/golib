@@ -267,13 +267,19 @@ For usage examples, refer to [gcrypto usage](gcrypto/README.md)
 ## glog
 
 ### Overview
-`glog` is a logging component based on zap providing high-performance logging functionality.
+`glog` is a logging component exposing a unified `Logger` interface with pluggable drivers (zap / log/slog), providing high-performance structured logging.
 
 ### Features
-- Console/File output support
-- OTel integration
-- Structured logging support
+- Pluggable drivers: `zap` (default) and `log/slog`, sharing one API and config
+- Console/File output with daily directories and size/backup/age rotation
+- Dual-file mode per file writer: `_full` (all levels) and `_wf` (warn and above)
+- Automatic context field extraction: OTel trace fields and custom `ExtraKeys`
+- Structured logging (`Infow`/`Warnw`/...)
+- Desensitization hooks: `WithFieldHookFunc` (fields) and `WithMessageHookFunc` (message)
 - High-performance log writing
+
+### Usage
+See [glog usage](glog/README.md)
 
 ## gtrace
 

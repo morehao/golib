@@ -9,6 +9,12 @@ type Field struct {
 	Value any
 }
 
+// KV 构造一个结构化日志字段，可与其他 k/v 参数混用在 Infow/Warnw/Errorw/With 里：
+//
+//	glog.Infow(ctx, "order created", glog.KV("user_id", 1001), "module", "order")
+//
+// 两个内置 driver 都会把 glog.Field 展开成普通 key/value；若自己实现 driver，
+// 必须做同样的展开，否则 Field 会被当成"非法 key"，字段名丢失、脱敏 Hook 也看不到它。
 func KV(key string, value any) Field {
 	return Field{
 		Key:   key,
