@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -42,13 +43,109 @@ type Client struct {
 	Retryable       bool          // 网络错误是否重试
 	IdleConnTimeout time.Duration // 空闲连接超时回收时间
 
+	// MaxResponseBytes 是单次**缓冲进内存**的响应体字节上限：
+	//   正数 → 上限字节数；0（含未设置）或负数 → 不限制。
+	//
+	// 默认不限制，与 net/http、resty 等主流客户端的默认行为一致（上限是显式配置项，
+	// 不是默认策略）。面向不可信或易配错的上游时，建议显式设置它，或按单次调用传
+	// WithMaxResponseBytes——上游返回几 GB 的 HTML 错误页（网关劫持、base_url 配错）时，
+	// 没有上限就等于把内存交给对方。
+	//
+	// 它约束的是"缓冲"，不是"响应大小"：默认整包路径（Get/Post → Result.Response）、
+	// 流式模式下 Result.Buffer()/JSON() 的按需缓冲、以及错误页读取，
+	// 都要把 body 读进内存，因此都受它约束；而 Result.Read / io.Copy 的流式消费不缓冲、
+	// 内存恒定，不受它约束（可用 WithMaxResponseBytes 按单次调用覆盖）。
+	// 于是"同一个调用点可能是接口、也可能是文件下载"不需要靠猜：缓冲的那条路上限兜底，
+	// 流式的那条路把大小交给磁盘/下游，两边都不会 OOM，也不依赖上游声明的 Content-Type。
+	//
+	// 超限返回 ErrResponseTooLarge 而**不是**静默截断：截断会让下游报"JSON 解析失败"，
+	// 把真正的原因（响应异常巨大）藏起来。
+	//
+	// 注意：它只解决 OOM，不解决"上游永远传不完"——后者由 ctx 取消与 Result.Close() 负责。
+	MaxResponseBytes int64
+
 	httpClient   *http.Client // 缓存的HTTP客户端
 	streamClient *http.Client // 流式请求客户端（仅限制响应头阶段超时，不截断 body 读取）
 	once         sync.Once    // 确保 httpClient 只初始化一次
 	streamOnce   sync.Once    // 确保 streamClient 只初始化一次
 }
 
+// ErrResponseTooLarge 表示响应体超过生效的 MaxResponseBytes 上限。
+//
+// 只有在配置了上限（Client 级或 WithMaxResponseBytes）时才可能返回它；
+// 凡是把 body 缓冲进内存的路径（默认整包路径、Result.Buffer、错误页读取）
+// 超限时都返回它；流式消费（Result.Read / io.Copy）不缓冲，因此永远不会返回它。
+var ErrResponseTooLarge = errors.New("ghttp: response body exceeds MaxResponseBytes")
+
+// responseLimit 把 MaxResponseBytes 解析成 readBodyWithLimit 需要的值
+// （<=0 表示不限制）。
+//
+// 解析放在读取时而不是 NewClient 里，这样绕过 NewClient 直接构造的 Client
+// 也不会拿到与配置不一致的语义。
+func (c *Client) responseLimit() int64 {
+	if c.MaxResponseBytes > 0 {
+		return c.MaxResponseBytes
+	}
+	return 0
+}
+
 // 配置字段在 NewClient 后视为只读，不提供运行时可修改入口，避免数据竞争。
+
+// CallOption 配置"单次调用"的行为，与承载请求数据的 RequestOption 分开：
+// 数据用结构体、行为用选项，与本仓库 glog/gasync 的既有约定一致。
+//
+// 不传任何 CallOption 就是默认行为：**整包**读取响应体到 Result.Response，并受
+// Client.MaxResponseBytes 约束。要流式（不缓冲、内存恒定）就显式传 WithStream()。
+type CallOption func(*callOptions)
+
+type callOptions struct {
+	stream           bool
+	maxResponseBytes int64
+	limitSet         bool // 是否显式设置过上限（区分"不传"与"显式传 0/负数=不限制"）
+}
+
+// WithStream 让本次调用以流式方式返回响应体：不缓冲、内存恒定、不受 MaxResponseBytes 约束。
+//
+// 整包（默认）与流式的分界是"是否缓冲"，不是"响应大小"：
+//   - 不传 WithStream：body 缓冲进 Result.Response，受上限保护；
+//   - 传 WithStream：用 Result.Read / io.Copy 消费（文件下载、原样转发），用完必须 Close；
+//     确需整体内容时调用 Result.Buffer()，该操作同样受上限保护。
+//
+// 因此"同一个接口可能返回 JSON、也可能是文件下载"不需要靠上游的 Content-Type 猜是否设防：
+// 缓冲的那条路有上限兜底，流式的那条路根本不吃内存。
+func WithStream() CallOption {
+	return func(o *callOptions) { o.stream = true }
+}
+
+// WithMaxResponseBytes 覆盖本次调用的缓冲上限：正数=上限字节数，0 或负数=不限制。
+//
+// 不传则沿用 Client.MaxResponseBytes（同样默认不限制）。它只约束"缓冲"
+// （默认整包路径、Result.Buffer、错误页），对流式消费没有意义。
+func WithMaxResponseBytes(n int64) CallOption {
+	return func(o *callOptions) {
+		o.maxResponseBytes = n
+		o.limitSet = true
+	}
+}
+
+func applyCallOptions(opts ...CallOption) callOptions {
+	var o callOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return o
+}
+
+// effectiveLimit 解析本次调用的缓冲上限：显式传了 WithMaxResponseBytes 就以它为准
+// （含 0/负数=不限制），否则用 Client 配置。
+func (c *Client) effectiveLimit(o callOptions) int64 {
+	if o.limitSet {
+		return o.maxResponseBytes
+	}
+	return c.responseLimit()
+}
 
 func NewClient(cfg *protocol.HttpClientConfig) *Client {
 	client := &Client{
@@ -63,6 +160,7 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 		client.Host = cfg.Host
 		client.Timeout = cfg.Timeout
 		client.Retry = cfg.MaxRetry
+		client.MaxResponseBytes = cfg.MaxResponseBytes
 		if cfg.MaxIdleConns > 0 {
 			client.MaxIdleConns = cfg.MaxIdleConns
 		}
@@ -210,10 +308,24 @@ type HTTPError struct {
 	Body     []byte
 	Header   http.Header
 	Message  string
+
+	// BodyErr 记录读取响应体时发生的错误（目前只可能是响应体超过 MaxResponseBytes 被拒绝）。
+	// 此时 Body 为空：内容被整体丢弃而不是静默截断，调用方可用
+	// errors.Is(err, ErrResponseTooLarge) 区分"上游返回空 body"与"被上限拦下"。
+	BodyErr error
 }
 
 func (e *HTTPError) Error() string {
+	if e.BodyErr != nil {
+		return fmt.Sprintf("http request failed: status=%d, message=%s, body unavailable: %v", e.HttpCode, e.Message, e.BodyErr)
+	}
 	return fmt.Sprintf("http request failed: status=%d, message=%s", e.HttpCode, e.Message)
+}
+
+// Unwrap 暴露 BodyErr，使 errors.Is(err, ErrResponseTooLarge) 在"按状态码重试耗尽"与
+// 流式错误页两条路径上同样成立（这两条路径不再返回读取错误本身）。
+func (e *HTTPError) Unwrap() error {
+	return e.BodyErr
 }
 
 func (e *HTTPError) IsClientError() bool {
@@ -238,17 +350,133 @@ func newHTTPError(statusCode int, body []byte, header http.Header) *HTTPError {
 	return httpErr
 }
 
+// Result 是一次调用的响应，支持两种消费模式（由是否传 WithStream 决定）：
+//
+//   - 默认整包：Response 已填好完整响应体，受 Client.MaxResponseBytes 约束；
+//   - 流式（WithStream）：Response 为空，用 Read / io.Copy 消费（内存恒定、不受上限约束），
+//     用完必须 Close；确需整体内容时调用 Buffer()，那次缓冲同样受上限约束。
+//
+// Read/Close 两种模式下都可用（整包模式从 Response 读，Close 是空操作）。
+//
+// 访问器的分工和主流客户端一致——"原始流"与"已缓冲内容"分开：
+//   - Read / io.Copy：消费流，不缓冲、不受上限约束；
+//   - Buffer / JSON：需要整体内容时显式缓冲（受上限约束，能报错）；
+//   - Bytes / String：纯访问器，只返回**已经缓冲好**的内容，流式模式下为空，
+//     不会替你去读网络——否则"取个字段看看"就会变成一次隐式的整体读取。
 type Result struct {
 	HttpCode int
 	Response []byte
 	Header   http.Header
 	Ctx      context.Context
+
+	body      io.ReadCloser      // 流式模式：尚未缓冲的响应体
+	reader    io.Reader          // Read 的游标（整包模式指向 Response）
+	cancel    context.CancelFunc // 流式模式：取消读取阶段的 ctx，由 Close 触发
+	limit     int64              // 缓冲上限（<=0 表示不限制）
+	stream    bool               // 是否处于流式（未缓冲）模式
+	consumed  bool               // 流式 body 是否已被 Read 消费过
+	closed    bool               // Close 是否已执行（幂等）
+	bufferErr error              // 缓冲失败的原因（如超限），供 Buffer/JSON 复述
+}
+
+// ErrNotBuffered 表示响应体仍处于流式状态且无法整体缓冲（已被部分读取或已关闭）。
+var ErrNotBuffered = errors.New("ghttp: response body is not buffered")
+
+// Streaming 报告响应体是否尚未缓冲（传了 WithStream 且还没触碰整体内容）。
+func (r *Result) Streaming() bool { return r.stream }
+
+// Read 读取响应体：流式模式直接读网络 body，整包模式从已缓冲的 Response 读。
+func (r *Result) Read(p []byte) (int, error) {
+	if r.stream {
+		if r.body == nil {
+			return 0, fmt.Errorf("response body is nil")
+		}
+		n, err := r.body.Read(p)
+		if n > 0 {
+			r.consumed = true
+		}
+		return n, err
+	}
+	if r.reader == nil {
+		if r.Response == nil {
+			return 0, fmt.Errorf("response body is nil")
+		}
+		r.reader = bytes.NewReader(r.Response)
+	}
+	return r.reader.Read(p)
+}
+
+// Close 释放流式响应体与读取阶段的 context（幂等）。整包模式无需调用，调用也是空操作。
+func (r *Result) Close() error {
+	if r.closed {
+		return nil
+	}
+	r.closed = true
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	if r.body == nil {
+		return nil
+	}
+	err := r.body.Close()
+	r.body = nil
+	return err
+}
+
+// Buffer 把响应体整体缓冲进内存并返回，是流式模式"转为整包"的显式入口。
+//
+// 它是缓冲操作，因此与默认整包路径同样受 Client.MaxResponseBytes 约束
+// （可用 WithMaxResponseBytes 覆盖），超限返回 ErrResponseTooLarge 且内容整体丢弃。
+//
+// 缓冲失败后连接即被释放、该 Result 不能再读：body 的前缀已经被读掉，继续读只会
+// 得到半截内容。需要重试就重新发起请求，别在失败的 Result 上接着读。
+func (r *Result) Buffer() ([]byte, error) {
+	if err := r.ensureBuffered(); err != nil {
+		return nil, err
+	}
+	return r.Response, nil
+}
+
+// ensureBuffered 把流式响应体就地转为整包，幂等：已缓冲直接通过，失败原因缓存以便复述。
+func (r *Result) ensureBuffered() error {
+	if !r.stream {
+		if r.Response == nil && r.bufferErr == nil {
+			return fmt.Errorf("response body is nil")
+		}
+		return r.bufferErr
+	}
+	if r.bufferErr != nil {
+		return r.bufferErr
+	}
+	if r.body == nil {
+		r.bufferErr = fmt.Errorf("%w (response body already closed)", ErrNotBuffered)
+		return r.bufferErr
+	}
+	if r.consumed {
+		// 已被 Read 消费掉一部分，此时再缓冲只会拿到半截内容
+		r.bufferErr = fmt.Errorf("%w (response stream already partially read)", ErrNotBuffered)
+		return r.bufferErr
+	}
+
+	body, err := readBodyWithLimit(r.body, r.limit)
+	if err != nil {
+		r.bufferErr = err
+		_ = r.Close()
+		return r.bufferErr
+	}
+	_ = r.Close()
+
+	r.Response = body
+	r.reader = bytes.NewReader(body)
+	r.stream = false
+	return nil
 }
 
 // JSON 反序列化响应体到指定结构体
 func (r *Result) JSON(v any) error {
-	if r.Response == nil {
-		return fmt.Errorf("response body is nil")
+	if err := r.ensureBuffered(); err != nil {
+		return err
 	}
 	return json.Unmarshal(r.Response, v)
 }
@@ -263,7 +491,11 @@ func (r *Result) IsError() bool {
 	return r.HttpCode >= 400
 }
 
-// String 获取响应体字符串
+// String 返回**已缓冲**的响应体字符串。
+//
+// 它是纯访问器：不会替你去读网络，也不消费流，因此流式模式（WithStream）下返回空串。
+// 需要整体内容请显式调用 Buffer()（能拿到超限等具体错误）或 JSON()——
+// 这样"取个字段看看"就不会变成一次隐式的整体读取。
 func (r *Result) String() string {
 	if r.Response == nil {
 		return ""
@@ -271,7 +503,7 @@ func (r *Result) String() string {
 	return string(r.Response)
 }
 
-// Bytes 获取响应体字节数组
+// Bytes 返回**已缓冲**的响应体字节切片，语义同 String：纯访问器，不读网络。
 func (r *Result) Bytes() []byte {
 	if r.Response == nil {
 		return []byte{}
@@ -279,67 +511,85 @@ func (r *Result) Bytes() []byte {
 	return r.Response
 }
 
-func (c *Client) Get(ctx context.Context, path string, opt RequestOption) (*Result, error) {
-	return c.httpDo(ctx, http.MethodGet, path, opt)
+// Get 发起 GET 请求。默认整包读取响应体；传 WithStream() 则改为流式。
+func (c *Client) Get(ctx context.Context, path string, opt RequestOption, opts ...CallOption) (*Result, error) {
+	return c.httpDo(ctx, http.MethodGet, path, opt, opts...)
 }
 
-func (c *Client) Post(ctx context.Context, path string, opt RequestOption) (*Result, error) {
-	return c.httpDo(ctx, http.MethodPost, path, opt)
+// Post 发起 POST 请求。默认整包读取响应体；传 WithStream() 则改为流式。
+func (c *Client) Post(ctx context.Context, path string, opt RequestOption, opts ...CallOption) (*Result, error) {
+	return c.httpDo(ctx, http.MethodPost, path, opt, opts...)
 }
 
-func (c *Client) Put(ctx context.Context, path string, opt RequestOption) (*Result, error) {
-	return c.httpDo(ctx, http.MethodPut, path, opt)
+// Put 发起 PUT 请求。默认整包读取响应体；传 WithStream() 则改为流式。
+func (c *Client) Put(ctx context.Context, path string, opt RequestOption, opts ...CallOption) (*Result, error) {
+	return c.httpDo(ctx, http.MethodPut, path, opt, opts...)
 }
 
-func (c *Client) Delete(ctx context.Context, path string, opt RequestOption) (*Result, error) {
-	return c.httpDo(ctx, http.MethodDelete, path, opt)
+// Delete 发起 DELETE 请求。默认整包读取响应体；传 WithStream() 则改为流式。
+func (c *Client) Delete(ctx context.Context, path string, opt RequestOption, opts ...CallOption) (*Result, error) {
+	return c.httpDo(ctx, http.MethodDelete, path, opt, opts...)
 }
 
-func (c *Client) Patch(ctx context.Context, path string, opt RequestOption) (*Result, error) {
-	return c.httpDo(ctx, http.MethodPatch, path, opt)
+// Patch 发起 PATCH 请求。默认整包读取响应体；传 WithStream() 则改为流式。
+func (c *Client) Patch(ctx context.Context, path string, opt RequestOption, opts ...CallOption) (*Result, error) {
+	return c.httpDo(ctx, http.MethodPatch, path, opt, opts...)
 }
 
-func (c *Client) GetJSON(ctx context.Context, path string, result any, opt RequestOption) error {
-	resp, err := c.Get(ctx, path, opt)
+func (c *Client) GetJSON(ctx context.Context, path string, result any, opt RequestOption, opts ...CallOption) error {
+	resp, err := c.Get(ctx, path, opt, opts...)
 	if err != nil {
 		return err
 	}
+	defer resp.Close() // 流式模式下解析失败也要释放连接（整包模式为空操作）
+
 	return resp.JSON(result)
 }
 
-func (c *Client) PostJSON(ctx context.Context, path string, result any, opt RequestOption) error {
-	resp, err := c.Post(ctx, path, opt)
+func (c *Client) PostJSON(ctx context.Context, path string, result any, opt RequestOption, opts ...CallOption) error {
+	resp, err := c.Post(ctx, path, opt, opts...)
 	if err != nil {
 		return err
 	}
+	defer resp.Close()
+
 	return resp.JSON(result)
 }
 
-func (c *Client) PutJSON(ctx context.Context, path string, result any, opt RequestOption) error {
-	resp, err := c.Put(ctx, path, opt)
+func (c *Client) PutJSON(ctx context.Context, path string, result any, opt RequestOption, opts ...CallOption) error {
+	resp, err := c.Put(ctx, path, opt, opts...)
 	if err != nil {
 		return err
 	}
+	defer resp.Close()
+
 	return resp.JSON(result)
 }
 
-func (c *Client) DeleteJSON(ctx context.Context, path string, result any, opt RequestOption) error {
-	resp, err := c.Delete(ctx, path, opt)
+func (c *Client) DeleteJSON(ctx context.Context, path string, result any, opt RequestOption, opts ...CallOption) error {
+	resp, err := c.Delete(ctx, path, opt, opts...)
 	if err != nil {
 		return err
 	}
+	defer resp.Close()
+
 	return resp.JSON(result)
 }
 
-func (c *Client) PatchJSON(ctx context.Context, path string, result any, opt RequestOption) error {
-	resp, err := c.Patch(ctx, path, opt)
+func (c *Client) PatchJSON(ctx context.Context, path string, result any, opt RequestOption, opts ...CallOption) error {
+	resp, err := c.Patch(ctx, path, opt, opts...)
 	if err != nil {
 		return err
 	}
+	defer resp.Close()
+
 	return resp.JSON(result)
 }
 
-func (c *Client) httpDo(ctx context.Context, method, path string, opt RequestOption) (*Result, error) {
+func (c *Client) httpDo(ctx context.Context, method, path string, opt RequestOption, opts ...CallOption) (*Result, error) {
+	co := applyCallOptions(opts...)
+	limit := c.effectiveLimit(co)
+
 	reqURL := c.Host + path
 
 	payload, requestBody, err := c.buildPayloadAndURL(method, &reqURL, opt)
@@ -355,31 +605,41 @@ func (c *Client) httpDo(ctx context.Context, method, path string, opt RequestOpt
 	}
 
 	startTime := time.Now()
-	result, err := c.do(ctx, request, &opt, requestBody)
+
+	// 默认整包缓冲（受 limit 约束）；WithStream 才走流式，成功路径不缓冲、不受 limit 约束
+	var result *Result
+	if co.stream {
+		result, err = c.doStream(ctx, request, requestBody, limit)
+	} else {
+		buffered, doErr := c.do(ctx, request, &opt, requestBody, limit)
+		result, err = &buffered, doErr
+	}
+
 	costTime := time.Since(startTime).Milliseconds()
 
+	// 流式模式下 Response 为空，日志里只记状态码，不去读 body（读了就等于缓冲，会破坏流式语义）
 	reqData, respData := c.formatLogMsg(requestBody, result.Response)
 	if err != nil {
 		glog.Errorw(ctx, err.Error(),
-			glog.KV(gconstant.KeyService, c.Service),
-			glog.KV(gconstant.KeyUrlFull, reqURL),
-			glog.KV(gconstant.KeyHttpRequestBody, reqData),
-			glog.KV(gconstant.KeyHttpResponseCode, result.HttpCode),
-			glog.KV(gconstant.KeyHttpResponseBody, string(respData)),
-			glog.KV(gconstant.KeyAppRequestDurationMs, costTime),
+			gconstant.KeyService, c.Service,
+			gconstant.KeyUrlFull, reqURL,
+			gconstant.KeyHttpRequestBody, reqData,
+			gconstant.KeyHttpResponseCode, result.HttpCode,
+			gconstant.KeyHttpResponseBody, string(respData),
+			gconstant.KeyAppRequestDurationMs, costTime,
 		)
 	} else {
 		glog.Infow(ctx, "http request success",
-			glog.KV(gconstant.KeyService, c.Service),
-			glog.KV(gconstant.KeyUrlFull, reqURL),
-			glog.KV(gconstant.KeyHttpRequestBody, reqData),
-			glog.KV(gconstant.KeyHttpResponseCode, result.HttpCode),
-			glog.KV(gconstant.KeyHttpResponseBody, string(respData)),
-			glog.KV(gconstant.KeyAppRequestDurationMs, costTime),
+			gconstant.KeyService, c.Service,
+			gconstant.KeyUrlFull, reqURL,
+			gconstant.KeyHttpRequestBody, reqData,
+			gconstant.KeyHttpResponseCode, result.HttpCode,
+			gconstant.KeyHttpResponseBody, string(respData),
+			gconstant.KeyAppRequestDurationMs, costTime,
 		)
 	}
 
-	return &result, err
+	return result, err
 }
 
 // buildPayloadAndURL 根据方法构造请求体并调整 URL：
@@ -463,14 +723,14 @@ func resolveTimeout(opt *RequestOption, clientTimeout time.Duration) time.Durati
 	return timeout
 }
 
-func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOption, requestBody []byte) (Result, error) {
+func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOption, requestBody []byte, limit int64) (Result, error) {
 	timeout := resolveTimeout(opt, c.Timeout)
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	request = request.WithContext(reqCtx)
 
-	resp, err := c.executeCore(reqCtx, request, requestBody)
+	resp, err := c.executeCore(reqCtx, request, requestBody, limit)
 	result := Result{Ctx: ctx}
 
 	if err != nil {
@@ -482,7 +742,7 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBodyWithLimit(resp.Body, limit)
 	if err != nil {
 		return result, fmt.Errorf("read response body failed: %w", err)
 	}
@@ -500,13 +760,15 @@ func (c *Client) do(ctx context.Context, request *http.Request, opt *RequestOpti
 
 // executeCore 处理超时、退避重试并返回原始响应，不读取响应体。
 // 网络错误（Retryable）以及命中 RetryOnStatus 的响应会按 RetryInterval 指数退避重试，等待可被 ctx 取消。
-func (c *Client) executeCore(ctx context.Context, request *http.Request, requestBody []byte) (*http.Response, error) {
-	return c.executeCoreWithClient(c.getHTTPClient(), ctx, request, requestBody)
+//
+// limit 是本次调用的缓冲上限，只用于把错误页读进 HTTPError 的那次读取。
+func (c *Client) executeCore(ctx context.Context, request *http.Request, requestBody []byte, limit int64) (*http.Response, error) {
+	return c.executeCoreWithClient(c.getHTTPClient(), ctx, request, requestBody, limit)
 }
 
 // executeCoreWithClient 是 executeCore 的底层实现，允许传入不同的 http.Client，
 // 供流式客户端复用同一套重试逻辑。
-func (c *Client) executeCoreWithClient(httpClient *http.Client, ctx context.Context, request *http.Request, requestBody []byte) (*http.Response, error) {
+func (c *Client) executeCoreWithClient(httpClient *http.Client, ctx context.Context, request *http.Request, requestBody []byte, limit int64) (*http.Response, error) {
 	// Retry 表示总尝试次数（含首次），Retry=3 即最多发起 3 次请求（1 次初始 + 2 次重试）。
 	attempts := c.Retry
 	if attempts <= 0 {
@@ -539,10 +801,16 @@ func (c *Client) executeCoreWithClient(httpClient *http.Client, ctx context.Cont
 		}
 
 		if retryOnStatus(c.RetryOnStatus, resp.StatusCode) {
-			body, _ := io.ReadAll(resp.Body)
+			// 这里读 body 只是为了把它带进 HTTPError：同样要受上限保护，
+			// 否则一个巨大的 5xx 错误页会在重试路径上把内存吃光。
+			// 读取失败（如超限）时 body 为空且错误被忽略，但原因会挂到 HTTPError.BodyErr，
+			// 不做静默截断——否则调用方只会看到"上游返回了空 body"。
+			body, bodyErr := readBodyWithLimit(resp.Body, limit)
 			resp.Body.Close()
 			if i == attempts-1 {
-				return nil, newHTTPError(resp.StatusCode, body, resp.Header)
+				httpErr := newHTTPError(resp.StatusCode, body, resp.Header)
+				httpErr.BodyErr = bodyErr
+				return nil, httpErr
 			}
 			if waitErr := retryWait(ctx, c.RetryInterval, i); waitErr != nil {
 				return nil, waitErr
@@ -588,6 +856,30 @@ func retryOnStatus(retryOnStatus []int, statusCode int) bool {
 
 func (c *Client) formatLogMsg(requestParam, responseData []byte) ([]byte, []byte) {
 	return truncateBytes(requestParam, maxLogSize), truncateBytes(responseData, maxLogSize)
+}
+
+// readBodyWithLimit 读取响应体；超过 limit 时返回 ErrResponseTooLarge。
+//
+// 故意不返回被截断的内容：下游拿到半截 JSON 只会报"解析失败"，
+// 真因（上游返回了异常巨大的响应）会被埋掉，而排障的人最需要知道的恰恰是这个。
+func readBodyWithLimit(r io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return io.ReadAll(r)
+	}
+	// limit 为 MaxInt64 时 limit+1 溢出为负数，LimitReader 会立即 EOF，
+	// 把"不限制"静默变成"返回空 body"。这里直接退化为不限制，避免这种假成功。
+	if limit == math.MaxInt64 {
+		return io.ReadAll(r)
+	}
+	// 多读 1 字节：能读出 limit+1 才说明"超限"，恰好等于上限不算超限
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("%w (limit=%d bytes)", ErrResponseTooLarge, limit)
+	}
+	return body, nil
 }
 
 // truncateBytes 按 UTF-8 rune 边界安全截断字节切片，避免截出非法多字节序列导致日志乱码。

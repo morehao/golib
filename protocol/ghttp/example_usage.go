@@ -3,6 +3,7 @@ package ghttp
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/morehao/golib/protocol"
@@ -129,4 +130,21 @@ func ExampleUsage() {
 		return
 	}
 	fmt.Printf("数据: %+v\n", data)
+
+	// 示例6: 流式下载（默认是整包，WithStream 才是流式）
+	// 同一个调用点既可能是 JSON 接口、也可能是文件下载时，先按流式拿响应，
+	// 需要解析再 Buffer/JSON（那次缓冲才受 MaxResponseBytes 约束），否则直接落盘/转发。
+	fmt.Println("\n=== 流式下载 ===")
+	stream, err := client.Get(ctx, "/file/export", RequestOption{}, WithStream())
+	if err != nil {
+		fmt.Printf("请求失败: %v\n", err)
+		return
+	}
+	defer stream.Close() // 流式模式必须释放连接
+
+	if _, err = io.Copy(io.Discard, stream); err != nil { // 换成文件/ResponseWriter 即为下载
+		fmt.Printf("下载失败: %v\n", err)
+		return
+	}
+	fmt.Printf("状态码: %d，内容长度: %s\n", stream.HttpCode, stream.Header.Get("Content-Length"))
 }

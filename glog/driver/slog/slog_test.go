@@ -463,3 +463,65 @@ func TestSlogWriterConfigDefaults(t *testing.T) {
 	assert.Equal(t, 10, mb)
 	assert.Equal(t, 7, ma)
 }
+
+// TestSlogKVFieldExpansion 断言 glog.KV(...) 在**两条路径**上都被展开成正常字段：
+// 有 Hook 的路径（kvsToFields）与无 Hook、无 ctx 提取的快路径（r.Add(kvs...)）。
+//
+// 只修其中一条是最容易漏的写法：快路径不经过 kvsToFields，slog 原生 Add 会把
+// glog.Field 输出成 !BADKEY，字段名消失后脱敏 Hook 也就无从下手。
+func TestSlogKVFieldExpansion(t *testing.T) {
+	dateStr := time.Now().Format("20060102")
+
+	t.Run("hook path", func(t *testing.T) {
+		tempDir := t.TempDir()
+		config := &glog.LogConfig{
+			Service:         "slog-kv-hook",
+			Level:           glog.InfoLevel,
+			LoggerType:      glog.LoggerTypeSlog,
+			EnableOTELTrace: false,
+			Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
+		}
+
+		var seenKeys []string
+		logger, err := glog.NewLogger(config, glog.WithFieldHookFunc(func(fields []glog.Field) {
+			for i := range fields {
+				seenKeys = append(seenKeys, fields[i].Key)
+			}
+		}))
+		assert.Nil(t, err)
+
+		logger.Infow(context.Background(), "kv message", glog.KV("user_id", 1001), "module", "order")
+		logger.Close()
+
+		b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-kv-hook_full.log"))
+		assert.Nil(t, readErr)
+		content := string(b)
+		assert.Contains(t, content, `"user_id":1001`)
+		assert.Contains(t, content, `"module":"order"`)
+		assert.NotContains(t, content, "!BADKEY")
+		assert.Contains(t, seenKeys, "user_id", "字段名必须能被 Hook 看到，否则脱敏无从下手")
+	})
+
+	t.Run("fast path", func(t *testing.T) {
+		tempDir := t.TempDir()
+		config := &glog.LogConfig{
+			Service:         "slog-kv-fast",
+			Level:           glog.InfoLevel,
+			LoggerType:      glog.LoggerTypeSlog,
+			EnableOTELTrace: false, // 无 Hook、无 ExtraKeys → 走 r.Add(kvs...) 快路径
+			Writers:         []glog.WriterConfig{{Type: glog.WriterFile, Dir: tempDir}},
+		}
+		logger, err := glog.NewLogger(config)
+		assert.Nil(t, err)
+
+		logger.Infow(context.Background(), "kv message", glog.KV("user_id", 1001), "module", "order")
+		logger.Close()
+
+		b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-kv-fast_full.log"))
+		assert.Nil(t, readErr)
+		content := string(b)
+		assert.Contains(t, content, `"user_id":1001`)
+		assert.Contains(t, content, `"module":"order"`)
+		assert.NotContains(t, content, "!BADKEY")
+	})
+}
