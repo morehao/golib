@@ -54,6 +54,15 @@ const (
 	StorageKodoBucket     = "STORAGE_KODO_BUCKET"
 	StorageLocalDir       = "STORAGE_LOCAL_DIR"
 	StorageLocalBucket    = "STORAGE_LOCAL_BUCKET"
+
+	// GLLM - OpenAI 兼容端点，供 gllm 集成测试使用。
+	// BaseURL 必须包含 /v1，gllm 不做隐式拼接。
+	GLLMOpenAIBaseURL = "GLLM_OPENAI_BASE_URL"
+	GLLMOpenAIAPIKey  = "GLLM_OPENAI_API_KEY"
+	GLLMOpenAIModel   = "GLLM_OPENAI_MODEL"
+	// GLLMOpenAIRequire 置为真值时，缺少上述配置将导致测试硬失败而非跳过，
+	// 供"必须验证真实模型"的 CI 环境使用，防止集成用例被静默跳过而长期失效。
+	GLLMOpenAIRequire = "GLLM_OPENAI_REQUIRE"
 )
 
 func Load() {
