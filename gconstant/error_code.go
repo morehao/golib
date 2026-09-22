@@ -49,7 +49,7 @@ var AuthErrorMsgMap = gerror.CodeMsgMap{
 // LLM 相关错误码 (120000-120099)
 // 由 gllm 包使用；分类规则与可重试矩阵见 gllm/errors.go
 const (
-	LLMConfigInvalidErr       = 120000 // 配置非法：缺字段、引用不存在、档位未定义
+	LLMConfigInvalidErr       = 120000 // 配置非法：缺字段、引用不存在、模型或 provider 未定义
 	LLMProviderUnsupportedErr = 120001 // driver type 未注册（漏了 blank import）
 	LLMAuthErr                = 120002 // 鉴权失败 (401 / 403)
 	LLMRateLimitErr           = 120003 // 限流或配额耗尽 (429)
