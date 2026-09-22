@@ -15,6 +15,7 @@ Components:
 - [gcrypto](#gcrypto) Encryption/decryption component
 - [gerror](#gerror) Error handling component
 - [glog](#glog) Logging component
+- [gllm](#gllm) LLM access configuration layer (config → eino model)
 - [gtrace](#gtrace) OpenTelemetry Trace initialization component
 - [gtree](#gtree) Tree structure construction tool
 - [gutil](#gutil) Common utility functions collection
@@ -399,3 +400,30 @@ For usage examples, see [storage README](storage/README.md).
 ### Notes
 - During fail-over, each process uses its own local limiter; in multi-instance deployments the aggregate limit is roughly `instances × configured rate`, and quotas are not shared across instances
 - `Rate`/`Burst`/`Period`/`CleanupInterval` must be positive, otherwise `NewLimiter` returns an error
+
+## gllm
+
+### Overview
+`gllm` is the LLM access configuration layer: it resolves a config value object into an eino `model.ToolCallingChatModel`. It answers *which provider, which model, what happens on failure* — not *how to talk to a vendor*, which is already covered by eino-ext components.
+
+### Features
+- Value-object config with frozen field names (`providers` / `models` / `allow_degraded`), no config-file dependency
+- Call sites name the model directly: the `models` key *is* the model name, so no invented intermediate layer sits between provider and model
+- Startup-time validation via `Resolve` — config errors surface before the first call, not on it
+- Explicit, detectable degradation: a missing API key falls back to a built-in fake model with `Model.Degraded = true` instead of failing startup
+- Error classification into a reserved code range (`120000-120099`) with a retryability matrix
+- Driver registry with capability declarations; the core depends on eino only, never on eino-ext
+
+### Supported Drivers
+- `openai` — OpenAI and every OpenAI-compatible endpoint (DeepSeek, DashScope compatible mode, Ark, vLLM, Ollama, …); see `gllm/driver/openai`
+- `fake` — built-in fallback, auto-registered
+
+### Notes
+- No vendor protocol implementations; protocol lives in eino-ext, drivers only wire and register
+- No retry loop inside the library — it exposes `Retryable` plus recommended backoff constants so the caller or an eino callback owns retries
+- `base_url` is passed through verbatim — write it exactly as the vendor documents it (OpenAI's includes `/v1`, DeepSeek's does not)
+- Adding a driver is three things: implement `gllm.Factory`, call `gllm.Register` in `init()`, optionally declare capabilities / `WithNoAuth`
+
+### Usage
+For usage examples, see [gllm README](gllm/README.md).
+For a step-by-step adoption guide, see [gllm integration guide](docs/gllm-integration-guide.md).

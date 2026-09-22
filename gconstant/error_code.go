@@ -45,3 +45,29 @@ var AuthErrorMsgMap = gerror.CodeMsgMap{
 	TokenExpiredErr:     "token expired",
 	PermissionDeniedErr: "permission denied",
 }
+
+// LLM 相关错误码 (120000-120099)
+// 由 gllm 包使用；分类规则与可重试矩阵见 gllm/errors.go
+const (
+	LLMConfigInvalidErr       = 120000 // 配置非法：缺字段、引用不存在、模型或 provider 未定义
+	LLMProviderUnsupportedErr = 120001 // driver type 未注册（漏了 blank import）
+	LLMAuthErr                = 120002 // 鉴权失败 (401 / 403)
+	LLMRateLimitErr           = 120003 // 限流或配额耗尽 (429)
+	LLMTimeoutErr             = 120004 // 超时 / context deadline
+	LLMUpstreamErr            = 120005 // 上游 5xx
+	LLMBadRequestErr          = 120006 // 请求非法 (400 / 422)
+	LLMContentFilterErr       = 120007 // 内容过滤拦截
+	LLMDegradedErr            = 120008 // 已降级为 fallback 模型（可探测，非致命）
+)
+
+var LLMErrorMsgMap = gerror.CodeMsgMap{
+	LLMConfigInvalidErr:       "llm config invalid",
+	LLMProviderUnsupportedErr: "llm provider type not registered",
+	LLMAuthErr:                "llm authentication failed",
+	LLMRateLimitErr:           "llm rate limit or quota exhausted",
+	LLMTimeoutErr:             "llm request timeout",
+	LLMUpstreamErr:            "llm upstream error",
+	LLMBadRequestErr:          "llm bad request",
+	LLMContentFilterErr:       "llm content filtered",
+	LLMDegradedErr:            "llm degraded to fallback model",
+}
