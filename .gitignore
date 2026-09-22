@@ -52,6 +52,9 @@ docs/superpowers/
 .aider/
 .windsurf/
 
+# DSH 过程性文档（按约定放 .dsh/docs/{specs,plans,notes}/，属本地产物，不入库）
+.dsh/
+
 # Local Go build cache / temp (used when system temp is unavailable)
 .gocache/
 .go-cache/**

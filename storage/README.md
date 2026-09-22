@@ -11,9 +11,10 @@
 | 阿里云 OSS | `storage.DriverOSS` | 见 `storage/driver/oss` |
 | 腾讯云 COS | `storage.DriverCOS` | 见 `storage/driver/cos` |
 | 火山引擎 TOS | `storage.DriverTOS` | 见 `storage/driver/tos` |
+| 七牛云 Kodo | `storage.DriverKodo` | 见 `storage/driver/kodo` |
 | 本地文件系统 | `storage.DriverLocal` | 见 `storage/driver/local`，无外部对象存储时由业务服务自己充当对象存储 |
 
-S3 系驱动（minio/oss/cos/tos）统一内嵌 `s3base.Driver`，新增能力在 `s3base` 实现一次即全部生效。
+S3 系驱动（minio/oss/cos/tos/kodo）统一内嵌 `s3base.Driver`，新增能力在 `s3base` 实现一次即全部生效。
 
 ## 快速开始
 
@@ -77,11 +78,28 @@ out, err := st.ListObjects(ctx, "mybucket", "dir/", storage.WithMaxKeys(100))
 | 阿里云 OSS | `https://oss-cn-beijing.aliyuncs.com`（须与 bucket 所在地域一致） | 与 endpoint 同地域，如 `oss-cn-beijing` |
 | 腾讯云 COS | `https://cos.ap-beijing.myqcloud.com` | 如 `ap-beijing` |
 | 火山引擎 TOS | `https://tos-cn-beijing.volces.com` | 如 `cn-beijing` |
+| 七牛云 Kodo | `https://s3.<region>.qiniucs.com`，如 `https://s3.cn-north-1.qiniucs.com`（连字符形态 `s3-cn-north-1.qiniucs.com` 同样可用） | 桶所在区域，如 `cn-north-1` |
 
 端点与 bucket 地域不一致时，OSS/COS 会直接拒绝请求（OSS 报 `SecondLevelDomainForbidden`），
 因此 `Region` 必须与 `Endpoint` 所在地域一致。OSS 的寻址风格、条件写头、
 `DeleteObjects` 的 `Content-MD5`、请求校验和编码等差异全部收敛在
 `storage/driver/oss` 的 `ProviderProfile` 里，调用方无需感知。
+
+Kodo 的注意事项（均为 2026-09-22 对 `cn-north-1` 真实端点实测）：
+
+- `Region` 必须与桶所在区域一致，否则回 `400 IncorrectRegion`；错误已映射为
+  `storage.ErrInvalidArgument`。
+- `bucket` 参数填的是 **S3 空间名**（控制台「空间概览」可查，或 `Get Service` 获取），
+  空间名称全局不唯一时七牛会自动生成一个不同的 S3 空间名。
+- **不支持匿名访问**：S3 端点对无签名请求一律回 `400 NotSupportAnonymous`，
+  对外可访问 URL 必须走预签名或自绑 CDN / 源站域名。
+- **不支持条件写**：`WithIfNotExists()` 在本驱动上返回 `ErrNotSupported`（显式拒绝）。
+  实测 Kodo 对 `If-None-Match: *` 既不报错也不生效，**会静默覆盖**，因此驱动声明
+  `ConditionalWriteNone` 而不是下发该头；需要跨实例去重请在业务层用 DB 唯一约束。
+- `WithStorageClass` 取值为 `STANDARD`（默认）/ `LINE` / `INTELLIGENT_TIERING` /
+  `GLACIER` / `DEEP_ARCHIVE`；沿用 S3 的 `STANDARD_IA` 会被拒（`400 InvalidStorageClass`）。
+- 寻址风格固定 path-style：Kodo 两种风格都支持，但 S3 空间名可能含 `.`，
+  virtual-hosted 会遇到通配证书不匹配。
 
 ## 核心接口
 

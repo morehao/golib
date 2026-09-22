@@ -46,6 +46,12 @@ const (
 	StorageTOSBaseURL     = "STORAGE_TOS_BASE_URL"
 	StorageTOSRegion      = "STORAGE_TOS_REGION"
 	StorageTOSBucket      = "STORAGE_TOS_BUCKET"
+	StorageKodoEndpoint   = "STORAGE_KODO_ENDPOINT"
+	StorageKodoAccessKey  = "STORAGE_KODO_ACCESS_KEY"
+	StorageKodoSecretKey  = "STORAGE_KODO_SECRET_KEY"
+	StorageKodoBaseURL    = "STORAGE_KODO_BASE_URL"
+	StorageKodoRegion     = "STORAGE_KODO_REGION"
+	StorageKodoBucket     = "STORAGE_KODO_BUCKET"
 	StorageLocalDir       = "STORAGE_LOCAL_DIR"
 	StorageLocalBucket    = "STORAGE_LOCAL_BUCKET"
 )

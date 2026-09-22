@@ -10,6 +10,7 @@ const (
 	DriverOSS   DriverType = "oss"
 	DriverCOS   DriverType = "cos"
 	DriverTOS   DriverType = "tos"
+	DriverKodo  DriverType = "kodo"
 	DriverLocal DriverType = "local"
 )
 

@@ -371,6 +371,7 @@ For usage examples, refer to [ghttp usage](protocol/ghttp/README.md)
 - Alibaba Cloud OSS
 - Tencent Cloud COS
 - Volcano Engine TOS
+- Qiniu Cloud Kodo
 
 ### Features
 - Unified API across all providers
