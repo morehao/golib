@@ -29,8 +29,15 @@ type FileStore struct {
 	maxUploadBytes int64
 }
 
+// New 创建文件存储组件。
+//
+// 默认**自动建表**（幂等）；需要自己掌控 DDL（共库统一流程，或运行时账号无 DDL 权限）
+// 时传 WithoutAutoMigrate() 关掉隐式建表，并由外部流程先调一次 Migrate。
 func New(db *gorm.DB, st storage.Storage, bucket string, opts ...StoreOption) (*FileStore, error) {
-	var o storeOptions
+	if db == nil {
+		return nil, fmt.Errorf("filestore.New: db is required: %w", ErrInvalidArgument)
+	}
+	o := defaultStoreOptions()
 	for _, fn := range opts {
 		fn(&o)
 	}
@@ -39,8 +46,10 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...StoreOption) (*
 		maxUploadBytes = defaultMaxUploadBytes
 	}
 
-	if err := db.AutoMigrate(&FileEntity{}, &FileUploadEntity{}); err != nil {
-		return nil, fmt.Errorf("filestore.New: auto-migrate: %w", err)
+	if o.autoMigrate {
+		if err := Migrate(db); err != nil {
+			return nil, fmt.Errorf("filestore.New: auto-migrate: %w", err)
+		}
 	}
 
 	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
