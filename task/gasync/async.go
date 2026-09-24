@@ -9,8 +9,8 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/gutil"
 	"github.com/morehao/golib/gtrace"
+	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 )
 
@@ -38,9 +38,10 @@ func NewClient(cfg *Config, opts ...Option) (*Client, error) {
 	if cfg == nil {
 		cfg = defaultConfig()
 	}
+	o := newOptions{Config: cfg, autoMigrate: true}
 	for _, opt := range opts {
 		if opt != nil {
-			opt.apply(cfg)
+			opt.apply(&o)
 		}
 	}
 	if cfg.RedisAddr == "" {
@@ -57,9 +58,10 @@ func NewServer(cfg *Config, db *gorm.DB, opts ...Option) (*Server, error) {
 	if cfg == nil {
 		cfg = defaultConfig()
 	}
+	o := newOptions{Config: cfg, autoMigrate: true}
 	for _, opt := range opts {
 		if opt != nil {
-			opt.apply(cfg)
+			opt.apply(&o)
 		}
 	}
 	if cfg.RedisAddr == "" {
@@ -67,6 +69,12 @@ func NewServer(cfg *Config, db *gorm.DB, opts ...Option) (*Server, error) {
 	}
 	if db == nil {
 		return nil, ErrNilDB
+	}
+	// 默认自动建表（幂等）；WithoutAutoMigrate() 可关闭，交由外部流程执行 DDL。
+	if o.autoMigrate {
+		if err := AutoMigrate(db); err != nil {
+			return nil, err
+		}
 	}
 
 	mux := asynq.NewServeMux()

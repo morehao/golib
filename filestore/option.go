@@ -23,8 +23,33 @@ func WithExpires(d time.Duration) PresignOption {
 type StoreOption func(*storeOptions)
 
 type storeOptions struct {
+	autoMigrate    bool
 	signSecret     string
 	maxUploadBytes int64
+}
+
+// defaultStoreOptions 只负责"零值不等于期望默认值"的字段。
+// maxUploadBytes 保持零值语义（见 New 里的 0 → defaultMaxUploadBytes 处理）。
+func defaultStoreOptions() storeOptions {
+	return storeOptions{autoMigrate: true}
+}
+
+// WithoutAutoMigrate 关闭 New 的自动建表。
+//
+// 适用于两类部署：
+//
+//   - 共库：DDL 由统一发布流程执行一次，服务侧不该各自 ALTER；
+//
+//   - 运行时账号无 DDL 权限：服务账号只有 DML，建表由专用迁移账号完成。
+//
+//     // 发布流程（专用账号，有 DDL 权限）
+//     if err := filestore.Migrate(db); err != nil { ... }
+//     // 服务侧（只有 DML 权限）
+//     fs, err := filestore.New(db, st, bucket, filestore.WithoutAutoMigrate())
+//
+// 只影响 New 的隐式建表；显式调用 filestore.Migrate 永远执行。
+func WithoutAutoMigrate() StoreOption {
+	return func(o *storeOptions) { o.autoMigrate = false }
 }
 
 func WithSignSecret(secret string) StoreOption {

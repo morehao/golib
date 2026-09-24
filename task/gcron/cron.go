@@ -61,13 +61,20 @@ func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Opt
 	if cfg == nil {
 		cfg = defaultConfig()
 	}
+	o := newOptions{Config: cfg, autoMigrate: true}
 	for _, opt := range opts {
 		if opt != nil {
-			opt.apply(cfg)
+			opt.apply(&o)
 		}
 	}
 	if db == nil {
 		return nil, ErrNilDB
+	}
+	// 默认自动建表（幂等）；WithoutAutoMigrate() 可关闭，交由外部流程执行 DDL。
+	if o.autoMigrate {
+		if err := AutoMigrate(db); err != nil {
+			return nil, err
+		}
 	}
 	// 兼容旧签名：位置参数 lockFactory 优先；未传时使用 WithLockFactory 配置的工厂。
 	if lockFactory == nil {

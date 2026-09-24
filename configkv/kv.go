@@ -10,16 +10,39 @@ import (
 )
 
 var (
-	defaultKV *kv
-	adminAPI  *AdminAPI
-	once      sync.Once
+	defaultKV   *kv
+	adminAPI    *AdminAPI
+	initMu      sync.Mutex
+	initialized bool
 )
 
 type kv struct {
 	store *store
 }
 
-func New(db *gorm.DB) *kv {
+// New 创建实例（推荐写法：显式注入，不使用包级全局）。
+//
+// 默认**自动建表**（幂等），失败即返回错误。需要自己掌控 DDL（共库统一流程，
+// 或运行时账号无 DDL 权限）时传 WithoutAutoMigrate()：
+//
+//	k, err := New(db)                              // 自动建表
+//	k, err := New(db, WithoutAutoMigrate())        // 不建表，DDL 由发布流程显式执行
+func New(db *gorm.DB, opts ...Option) (*kv, error) {
+	if db == nil {
+		return nil, errDBRequired
+	}
+	cfg := defaultOptions()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+	if cfg.autoMigrate {
+		if err := Migrate(db); err != nil {
+			return nil, err
+		}
+	}
+
 	registry := map[ValueType]Codec{
 		ValueTypeJson: &JSONCodec{},
 		ValueTypeToml: &TOMLCodec{},
@@ -28,7 +51,7 @@ func New(db *gorm.DB) *kv {
 
 	c, err := newAESCrypto()
 	if err != nil {
-		panic("init configkv crypto failed: " + err.Error())
+		return nil, fmt.Errorf("configkv: init crypto: %w", err)
 	}
 
 	getDB := func(ctx context.Context) *gorm.DB {
@@ -36,7 +59,7 @@ func New(db *gorm.DB) *kv {
 	}
 	s := newStore(getDB, registry, c)
 	adminAPI = newAdmin(s)
-	return &kv{store: s}
+	return &kv{store: s}, nil
 }
 
 func (k *kv) GetStore() *store {
@@ -95,45 +118,55 @@ func (k *kv) GetBool(ctx context.Context, group, key string) (bool, error) {
 	return strconv.ParseBool(cfg.Value)
 }
 
-func Init(db *gorm.DB) {
-	once.Do(func() {
-		registry := map[ValueType]Codec{
-			ValueTypeJson: &JSONCodec{},
-			ValueTypeToml: &TOMLCodec{},
-			ValueTypeYaml: &YAMLCodec{},
-		}
-
-		c, err := newAESCrypto()
-		if err != nil {
-			panic("init configkv crypto failed: " + err.Error())
-		}
-
-		getDB := func(ctx context.Context) *gorm.DB {
-			return db.WithContext(ctx)
-		}
-		s := newStore(getDB, registry, c)
-		adminAPI = newAdmin(s)
-		defaultKV = &kv{store: s}
-	})
+// Init 初始化包级单例，重复调用返回首个实例（与 dict.Init 一致的语义）。
+// 单例对测试与多数据源不友好，新代码优先用 New + 显式注入。
+func Init(db *gorm.DB, opts ...Option) (*kv, error) {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if initialized {
+		return defaultKV, nil
+	}
+	instance, err := New(db, opts...)
+	if err != nil {
+		return nil, err
+	}
+	defaultKV = instance
+	initialized = true
+	return instance, nil
 }
 
 func GetValue(ctx context.Context, group, key string, dest any) error {
+	if defaultKV == nil {
+		return errNotInitialized
+	}
 	return defaultKV.GetValue(ctx, group, key, dest)
 }
 
 func GetString(ctx context.Context, group, key string) (string, error) {
+	if defaultKV == nil {
+		return "", errNotInitialized
+	}
 	return defaultKV.GetString(ctx, group, key)
 }
 
 func GetInt64(ctx context.Context, group, key string) (int64, error) {
+	if defaultKV == nil {
+		return 0, errNotInitialized
+	}
 	return defaultKV.GetInt64(ctx, group, key)
 }
 
 func GetFloat64(ctx context.Context, group, key string) (float64, error) {
+	if defaultKV == nil {
+		return 0, errNotInitialized
+	}
 	return defaultKV.GetFloat64(ctx, group, key)
 }
 
 func GetBool(ctx context.Context, group, key string) (bool, error) {
+	if defaultKV == nil {
+		return false, errNotInitialized
+	}
 	return defaultKV.GetBool(ctx, group, key)
 }
 

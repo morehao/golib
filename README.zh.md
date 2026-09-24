@@ -7,6 +7,7 @@
 - [gconc](#gconc) 并发任务池组件
 - [configkv](#configkv) 配置管理组件
 - [dbaccess](#dbaccess) 数据库客户端组件（支持 MySQL、Redis、Elasticsearch）
+- [dict](#dict) 数据字典组件（类型 + 码值，支持树形层级）
 - [distlock](#distlock) 分布式锁组件（不支持可重入）
 - [excel](#excel) Excel 读写组件
 - [gast](#gast) 语法树工具
@@ -25,6 +26,24 @@
 ```bash
 go get github.com/morehao/golib
 ```
+
+# 内置表的建表与迁移（统一约定）
+
+`configkv`、`dict`、`filestore`、`task/gcron`、`task/gasync` 拥有自己的内置表，统一遵循同一套约定：
+
+1. **默认建表**：创建实例（`New` / `Init` / `NewServer`）时自动执行幂等的 `AutoMigrate`，调用方零配置即可跑起来。
+   注意 GORM 生成的 DDL 不含 `IF NOT EXISTS`，所以多副本在**空库上同时冷启动**时可能有一个副本首次启动失败
+   （重启即恢复）。在意这一点就用 `WithoutAutoMigrate()` 关掉隐式建表，改由发布流程建表。
+2. **需要自己掌控 DDL 时传 `WithoutAutoMigrate()`**：开关是构造选项（函数式选项模式），
+   因此在共库、或运行时账号没有 DDL 权限的部署里，可以关掉隐式建表，改由发布流程用专用账号显式执行
+   `dict.Migrate(db)` / `configkv.Migrate(db)` / `filestore.Migrate(db)` / `gcron.AutoMigrate(db)` / `gasync.AutoMigrate(db)`。
+   显式入口永远执行，不受开关影响。
+3. **每个包的 README 都给出 MySQL 与 PostgreSQL 的完整 DDL**：由 `internal/ddlgen` 从 gorm tag 生成，
+   并由测试逐语句校验，因此不会与实体漂移，可直接交给 DBA 手工执行。
+
+> GORM 官方建议"生产环境用版本化迁移、别依赖 AutoMigrate"，那条建议针对的是**应用自己拥有的**表。
+> 本库是拥有少量固定内置表的**可复用组件**，schema 由组件版本决定，因此选择"默认建表 + 显式退出选项"，
+> 把"应用要不要碰 DDL"交给部署形态决定。同类先例是 `casbin-gorm-adapter` 的 `TurnOffAutoMigrate(db)`。
 
 # 组件使用说明
 
@@ -113,6 +132,23 @@ go get github.com/morehao/golib
 
 ### 使用
 使用示例参照 [dbaccess 使用说明](dbaccess/README.md)
+
+## dict
+
+### 简介
+`dict` 是通用数据字典组件：**类型 + 码值**两级模型，可选树形层级，支持类型级/项级 `extra` JSON。把散落在各服务的枚举收敛成可运营的数据，业务代码不再硬编码枚举。
+
+### 特性
+- 类型由**全表唯一**的 `code` 标识，类型表**不含任何分组/命名空间列**（与 RuoYi、yudao、JeecgBoot 一致）；共库即共享一个 `code` 命名空间，跨模块命名靠约定
+- 项表用自然键 `type_code` 关联类型，并保留物化 `path` + `level`：整类型一次查询读全，内存组树
+- 读取 fail-closed，错误可用 `errors.Is` 判别（`ErrTypeNotFound` / `ErrTypeDisabled` / `ErrItemNotFound` / `ErrItemDisabled`）
+- `BatchExists` 一次查询校验最多 1000 个码值
+- **不内置缓存**（每次读 DB），但保留 `Source` 接缝用于缓存装饰器
+- 硬删（无 `deleted_at`）、唯一写入通道 `AdminAPI` 维护全部树不变量，并提供 `CheckIntegrity` 巡检
+- 表按**多服务共库**设计：`dict.New` 默认自动建表（幂等），共库或运行时账号无 DDL 权限时传 `dict.WithoutAutoMigrate()` 关掉、改由发布流程显式 `dict.Migrate(db)`；`code` 全局唯一，接入前需确认命名不与他人冲突
+
+### 使用
+使用示例参照 [dict 使用说明](dict/README.md)
 
 ## distlock
 

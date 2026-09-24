@@ -7,6 +7,46 @@
 
 两个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
 
+## 建表与迁移
+
+两个子包都在**创建实例时默认建表**（幂等 `AutoMigrate`），常规接入不需要额外步骤：
+
+```go
+s, err := gcron.New(db, cfg, lock)    // 表不存在就建
+srv, err := gasync.NewServer(cfg, db) // 表不存在就建
+```
+
+需要自己掌控 DDL 的部署——多个服务共库、DDL 只能有一个执行者，或运行时账号没有 `CREATE/ALTER`
+权限——传 `WithoutAutoMigrate()` 关掉隐式建表，改由发布流程用专用账号显式执行一次：
+
+```go
+// 发布流程 / 迁移 Job（专用账号，有 DDL 权限）
+if err := gcron.AutoMigrate(db); err != nil {
+    return err
+}
+if err := gasync.AutoMigrate(db); err != nil {
+    return err
+}
+
+// 服务侧（账号只有 DML 权限）
+s, err := gcron.New(db, cfg, lock, gcron.WithoutAutoMigrate())
+srv, err := gasync.NewServer(cfg, db, gasync.WithoutAutoMigrate())
+```
+
+- `WithoutAutoMigrate()` 是**构造选项**（函数式选项模式），只关掉构造函数里的**隐式**建表；
+  显式 `AutoMigrate(db)` 永远执行；
+- `gasync.NewClient` 不接触 DB，与迁移无关；
+- 要交给 DBA 手工执行，用文末[附录：手工建表 DDL](#附录手工建表-ddl)，或
+  `go run internal/ddlgen/main.go gcron`（`gasync` 同理）从 `model.go` 的 gorm tag 重新生成。
+
+> **为什么组件敢在构造函数里建表？** GORM 官方建议"生产环境改用版本化迁移，别依赖 AutoMigrate"，
+> 那条建议针对的是**应用自己**的表（表多、变更频繁、需要可回滚的版本历史）。本组件只拥有两张固定的小表，
+> schema 完全由组件版本决定，升级组件本就该跟着升级表结构。同类先例是
+> [`casbin-gorm-adapter`](https://github.com/apache/casbin-gorm-adapter)：构造时 `AutoMigrate`，
+> 需要时用 `TurnOffAutoMigrate(db)` 关掉（本库用构造选项表达同一意图，更贴合本仓既有的 Option 风格）。
+> 因此取舍是**默认建表 + 显式退出选项**——把"应用要不要碰 DDL"交给部署形态决定。
+
+
 ## gcron
 
 ### 简介
@@ -29,12 +69,14 @@
 
 ### 数据表
 
-`gcron.AutoMigrate` 会创建以下两张表：
+`gcron.New` 默认就会调用 `gcron.AutoMigrate` 创建以下两张表（关闭方式见[建表与迁移](#建表与迁移)）：
 
 | 表名 | 说明 |
 |---|---|
 | `core_cron_task` | 定时任务定义（id=任务 ID、biz_id/biz_type=业务维度、name=任务名称、task_type、cron 表达式、描述、状态等） |
 | `core_cron_task_run` | 定时任务执行记录（id=运行 ID、task_id=所属任务、起止时间、耗时、状态（running/success/failed/skipped/timed_out）、request id 等） |
+
+两张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
 
 ### 使用示例
 
@@ -52,7 +94,7 @@ import (
 func main() {
 	db, _ := openDB() // *gorm.DB，用于执行记录落库
 
-	// 可选：自动建表
+	// 建表：New 内部已默认执行；这里显式调用只是把失败提前到启动阶段（幂等，可省）
 	if err := gcron.AutoMigrate(db); err != nil {
 		panic(err)
 	}
@@ -128,12 +170,14 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 ### 数据表
 
-`gasync.AutoMigrate` 会创建以下两张表：
+`gasync.NewServer` 默认就会调用 `gasync.AutoMigrate` 创建以下两张表（关闭方式见[建表与迁移](#建表与迁移)）：
 
 | 表名 | 说明 |
 |---|---|
 | `core_async_task` | 异步任务定义（id=任务类型、名称、描述、启停状态；由 `Register` 自动维护，新类型以 enabled 创建，已存在时保留既有状态） |
 | `core_async_task_run` | 异步任务执行记录（id=任务实例 ID、task_type、队列、状态、重试、request id 等） |
+
+两张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
 
 ### 使用示例
 
@@ -172,7 +216,7 @@ func handleEmail(ctx context.Context, payload []byte) error {
 func main() {
 	db, _ := openDB() // *gorm.DB，用于执行记录落库
 
-	// 可选：自动建表
+	// 建表：NewServer 内部已默认执行；这里显式调用只是把失败提前到启动阶段（幂等，可省）
 	if err := gasync.AutoMigrate(db); err != nil {
 		panic(err)
 	}
@@ -233,3 +277,201 @@ server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务�
 | `task.run.id` | `glog.KeyRunID` | 单次运行的唯一标识（即运行记录表主键 id） |
 
 在服务启动的日志配置里将 `task.run.id` 加入 `extra_keys`，即可在任务执行日志中追踪单次运行。
+
+## 附录：手工建表 DDL
+
+下面就是 `gcron.AutoMigrate` / `gasync.AutoMigrate` 实际执行的语句，由
+`go run internal/ddlgen/main.go gcron`（`gasync` 同理）从 `model.go` 的 gorm tag 离线生成
+（**不手写**，避免 DDL 与实体漂移）。改完 gorm tag 后请重新生成并同步本节。
+
+- MySQL 8.0+：`ENGINE` / `CHARSET` 取服务端默认（InnoDB + utf8mb4）。要显式指定可在迁移前
+  `db.Set("gorm:table_options", "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")`；
+- PostgreSQL：列注释以独立 `COMMENT ON COLUMN` 下发，语句顺序与 `AutoMigrate` 一致。
+
+### gcron - MySQL
+
+```sql
+CREATE TABLE `core_cron_task` (
+  `id` varchar(128) COMMENT '任务唯一标识（业务方注册时指定）',
+  `created_at` datetime(3) NULL,
+  `updated_at` datetime(3) NULL,
+  `deleted_at` datetime(3) NULL,
+  `biz_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务 ID（如商户号、订单号），可为空',
+  `biz_type` varchar(64) NOT NULL DEFAULT '' COMMENT '业务类型（如 merchant、order），可为空',
+  `name` varchar(128) NOT NULL DEFAULT '' COMMENT '任务名称（展示用），可为空',
+  `task_type` varchar(128) NOT NULL COMMENT '任务类型',
+  `spec` varchar(64) NOT NULL COMMENT 'cron 表达式',
+  `description` varchar(256) COMMENT '任务描述',
+  `status` varchar(16) NOT NULL DEFAULT 'enabled' COMMENT '状态',
+  `last_run_at` datetime(3) NULL COMMENT '上次执行时间',
+  `next_run_at` datetime(3) NULL COMMENT '下次执行时间',
+  PRIMARY KEY (`id`),
+  INDEX `idx_core_cron_task_deleted_at` (`deleted_at`),
+  INDEX `idx_biz_type_biz_id` (`biz_id`,`biz_type`)
+);
+
+CREATE TABLE `core_cron_task_run` (
+  `id` varchar(36) COMMENT '运行唯一标识（每次运行生成 UUID）',
+  `created_at` datetime(3) NULL,
+  `task_id` varchar(128) NOT NULL COMMENT '所属任务定义 ID',
+  `start_at` datetime(3) NOT NULL COMMENT '开始时间',
+  `end_at` datetime(3) NULL COMMENT '结束时间',
+  `duration_ms` bigint NOT NULL DEFAULT 0 COMMENT '耗时毫秒',
+  `status` varchar(16) NOT NULL COMMENT '状态',
+  `error_msg` text COMMENT '错误信息',
+  `request_id` varchar(64) COMMENT '请求 ID',
+  PRIMARY KEY (`id`),
+  INDEX `idx_task_id` (`task_id`),
+  INDEX `idx_request_id` (`request_id`)
+);
+```
+
+### gcron - PostgreSQL
+
+```sql
+CREATE TABLE "core_cron_task" (
+  "id" varchar(128),
+  "created_at" timestamptz,
+  "updated_at" timestamptz,
+  "deleted_at" timestamptz,
+  "biz_id" varchar(64) NOT NULL DEFAULT '',
+  "biz_type" varchar(64) NOT NULL DEFAULT '',
+  "name" varchar(128) NOT NULL DEFAULT '',
+  "task_type" varchar(128) NOT NULL,
+  "spec" varchar(64) NOT NULL,
+  "description" varchar(256),
+  "status" varchar(16) NOT NULL DEFAULT 'enabled',
+  "last_run_at" timestamptz,
+  "next_run_at" timestamptz,
+  PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_biz_type_biz_id" ON "core_cron_task" ("biz_id","biz_type");
+CREATE INDEX IF NOT EXISTS "idx_core_cron_task_deleted_at" ON "core_cron_task" ("deleted_at");
+
+COMMENT ON COLUMN "core_cron_task"."id" IS '任务唯一标识（业务方注册时指定）';
+COMMENT ON COLUMN "core_cron_task"."biz_id" IS '业务 ID（如商户号、订单号），可为空';
+COMMENT ON COLUMN "core_cron_task"."biz_type" IS '业务类型（如 merchant、order），可为空';
+COMMENT ON COLUMN "core_cron_task"."name" IS '任务名称（展示用），可为空';
+COMMENT ON COLUMN "core_cron_task"."task_type" IS '任务类型';
+COMMENT ON COLUMN "core_cron_task"."spec" IS 'cron 表达式';
+COMMENT ON COLUMN "core_cron_task"."description" IS '任务描述';
+COMMENT ON COLUMN "core_cron_task"."status" IS '状态';
+COMMENT ON COLUMN "core_cron_task"."last_run_at" IS '上次执行时间';
+COMMENT ON COLUMN "core_cron_task"."next_run_at" IS '下次执行时间';
+
+CREATE TABLE "core_cron_task_run" (
+  "id" varchar(36),
+  "created_at" timestamptz,
+  "task_id" varchar(128) NOT NULL,
+  "start_at" timestamptz NOT NULL,
+  "end_at" timestamptz,
+  "duration_ms" bigint NOT NULL DEFAULT 0,
+  "status" varchar(16) NOT NULL,
+  "error_msg" text,
+  "request_id" varchar(64),
+  PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_request_id" ON "core_cron_task_run" ("request_id");
+CREATE INDEX IF NOT EXISTS "idx_task_id" ON "core_cron_task_run" ("task_id");
+
+COMMENT ON COLUMN "core_cron_task_run"."id" IS '运行唯一标识（每次运行生成 UUID）';
+COMMENT ON COLUMN "core_cron_task_run"."task_id" IS '所属任务定义 ID';
+COMMENT ON COLUMN "core_cron_task_run"."start_at" IS '开始时间';
+COMMENT ON COLUMN "core_cron_task_run"."end_at" IS '结束时间';
+COMMENT ON COLUMN "core_cron_task_run"."duration_ms" IS '耗时毫秒';
+COMMENT ON COLUMN "core_cron_task_run"."status" IS '状态';
+COMMENT ON COLUMN "core_cron_task_run"."error_msg" IS '错误信息';
+COMMENT ON COLUMN "core_cron_task_run"."request_id" IS '请求 ID';
+```
+
+### gasync - MySQL
+
+```sql
+CREATE TABLE `core_async_task` (
+  `id` varchar(128) COMMENT '任务类型（asynq TypeName，业务方注册时指定）',
+  `created_at` datetime(3) NULL,
+  `updated_at` datetime(3) NULL,
+  `deleted_at` datetime(3) NULL,
+  `name` varchar(128) NOT NULL DEFAULT '' COMMENT '任务名称（展示用）',
+  `description` varchar(256) COMMENT '任务描述',
+  `status` varchar(16) NOT NULL DEFAULT 'enabled' COMMENT '状态',
+  PRIMARY KEY (`id`),
+  INDEX `idx_core_async_task_deleted_at` (`deleted_at`)
+);
+
+CREATE TABLE `core_async_task_run` (
+  `id` varchar(64) COMMENT '任务实例 ID（asynq 任务唯一标识，重试复用同一行）',
+  `created_at` datetime(3) NULL,
+  `task_type` varchar(128) COMMENT '任务类型',
+  `queue` varchar(64) COMMENT '队列',
+  `status` varchar(16) NOT NULL COMMENT '状态',
+  `retried` bigint NOT NULL DEFAULT 0 COMMENT '已重试次数',
+  `max_retry` bigint NOT NULL DEFAULT 0 COMMENT '最大重试次数',
+  `start_at` datetime(3) NULL COMMENT '开始时间',
+  `end_at` datetime(3) NULL COMMENT '结束时间',
+  `duration_ms` bigint NOT NULL DEFAULT 0 COMMENT '耗时毫秒',
+  `error_msg` text COMMENT '错误信息',
+  `payload` text COMMENT '原始 payload 快照',
+  `request_id` varchar(64) COMMENT '请求 ID',
+  PRIMARY KEY (`id`),
+  INDEX `idx_task_type` (`task_type`),
+  INDEX `idx_request_id` (`request_id`)
+);
+```
+
+### gasync - PostgreSQL
+
+```sql
+CREATE TABLE "core_async_task" (
+  "id" varchar(128),
+  "created_at" timestamptz,
+  "updated_at" timestamptz,
+  "deleted_at" timestamptz,
+  "name" varchar(128) NOT NULL DEFAULT '',
+  "description" varchar(256),
+  "status" varchar(16) NOT NULL DEFAULT 'enabled',
+  PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_deleted_at" ON "core_async_task" ("deleted_at");
+
+COMMENT ON COLUMN "core_async_task"."id" IS '任务类型（asynq TypeName，业务方注册时指定）';
+COMMENT ON COLUMN "core_async_task"."name" IS '任务名称（展示用）';
+COMMENT ON COLUMN "core_async_task"."description" IS '任务描述';
+COMMENT ON COLUMN "core_async_task"."status" IS '状态';
+
+CREATE TABLE "core_async_task_run" (
+  "id" varchar(64),
+  "created_at" timestamptz,
+  "task_type" varchar(128),
+  "queue" varchar(64),
+  "status" varchar(16) NOT NULL,
+  "retried" bigint NOT NULL DEFAULT 0,
+  "max_retry" bigint NOT NULL DEFAULT 0,
+  "start_at" timestamptz,
+  "end_at" timestamptz,
+  "duration_ms" bigint NOT NULL DEFAULT 0,
+  "error_msg" text,
+  "payload" text,
+  "request_id" varchar(64),
+  PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_request_id" ON "core_async_task_run" ("request_id");
+CREATE INDEX IF NOT EXISTS "idx_task_type" ON "core_async_task_run" ("task_type");
+
+COMMENT ON COLUMN "core_async_task_run"."id" IS '任务实例 ID（asynq 任务唯一标识，重试复用同一行）';
+COMMENT ON COLUMN "core_async_task_run"."task_type" IS '任务类型';
+COMMENT ON COLUMN "core_async_task_run"."queue" IS '队列';
+COMMENT ON COLUMN "core_async_task_run"."status" IS '状态';
+COMMENT ON COLUMN "core_async_task_run"."retried" IS '已重试次数';
+COMMENT ON COLUMN "core_async_task_run"."max_retry" IS '最大重试次数';
+COMMENT ON COLUMN "core_async_task_run"."start_at" IS '开始时间';
+COMMENT ON COLUMN "core_async_task_run"."end_at" IS '结束时间';
+COMMENT ON COLUMN "core_async_task_run"."duration_ms" IS '耗时毫秒';
+COMMENT ON COLUMN "core_async_task_run"."error_msg" IS '错误信息';
+COMMENT ON COLUMN "core_async_task_run"."payload" IS '原始 payload 快照';
+COMMENT ON COLUMN "core_async_task_run"."request_id" IS '请求 ID';
+```

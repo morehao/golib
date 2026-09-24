@@ -8,6 +8,7 @@ Components:
 - [gconc](#gconc) Concurrent task pool component
 - [configkv](#configkv) Configuration management component
 - [dbaccess](#dbaccess) Database client components (supports MySQL, Redis, Elasticsearch)
+- [dict](#dict) Data dictionary component (type + code value, tree hierarchy)
 - [distlock](#distlock) Distributed lock component (non-reentrant)
 - [excel](#excel) Excel read/write component
 - [gast](#gast) AST syntax tree tool
@@ -43,6 +44,28 @@ go test ./...
 # Run sub-package tests (inject env manually)
 source .env && go test ./codegen/...
 ```
+
+## Built-in tables: migration convention
+
+`configkv`, `dict`, `filestore`, `task/gcron` and `task/gasync` own their own tables and follow one shared convention:
+
+1. **Migrate by default.** Constructors (`New` / `Init` / `NewServer`) run an idempotent `AutoMigrate`, so a caller
+   needs no extra step. Note that GORM's generated DDL has no `IF NOT EXISTS`, so replicas starting cold at the
+   same time can race and one of them may fail its first boot — use `WithoutAutoMigrate()` if that matters
+   (or run the DDL from the release pipeline).
+2. **`WithoutAutoMigrate()` when you own the DDL.** The switch is a constructor option (functional options),
+   so a shared database — or a runtime account without DDL privileges — can turn the implicit migration
+   off and let the release pipeline run `dict.Migrate(db)` / `configkv.Migrate(db)` / `filestore.Migrate(db)` /
+   `gcron.AutoMigrate(db)` / `gasync.AutoMigrate(db)` with a dedicated account. The explicit entry always runs,
+   regardless of the switch.
+3. **Every package README ships complete MySQL and PostgreSQL DDL**, generated from the gorm tags by
+   `internal/ddlgen` and asserted statement-by-statement in tests, so it cannot drift from the models.
+
+> GORM's own advice is "use versioned migrations in production, don't rely on AutoMigrate". That advice targets
+> tables **an application owns**. This library is a **reusable component** owning a few fixed tables whose schema
+> is determined by the component version, so it chooses "migrate by default + an opt-out option" and leaves the
+> "should the app touch DDL" decision to the deployment. The precedent is `casbin-gorm-adapter`'s
+> `TurnOffAutoMigrate(db)`.
 
 The `.env` file is gitignored and will not be committed. If no environment variables are set, tests fall back to default values (`127.0.0.1` with password `123456`), so CI pipelines work without any extra setup.
 
@@ -155,6 +178,23 @@ For usage examples, refer to [gconc usage](gconc/README.md)
 
 ### Usage
 For usage examples, refer to [dbaccess usage](dbaccess/README.md)
+
+## dict
+
+### Overview
+`dict` is a general-purpose data dictionary component: a **type + code-value** two-level model with an optional tree hierarchy and type-level / item-level `extra` JSON. Dictionaries become operational data instead of enums hardcoded in every service.
+
+### Features
+- Types are identified by a **globally unique `code`**, and the type table carries **no grouping / namespace column at all** (same as RuoYi, yudao and JeecgBoot) — in a shared database the `code` namespace is therefore shared, and cross-module naming relies on convention
+- Items reference their type by the natural key `type_code` and keep a materialized `path` + `level`, so a whole type is read in one query and assembled into a tree in memory
+- Fail-closed reads with distinguishable sentinel errors (`ErrTypeNotFound` / `ErrTypeDisabled` / `ErrItemNotFound` / `ErrItemDisabled`)
+- `BatchExists` validates up to 1000 code values in a single query
+- **No built-in cache** (every read hits the database), but a `Source` seam is kept for a cache decorator
+- Hard delete, a single write entry point (`AdminAPI`) that maintains every tree invariant, plus `CheckIntegrity` for drift detection
+- Tables are meant to be **shared by several services in one database**: `dict.New` auto-migrates by default (idempotent); for a shared database, or when the runtime account has no DDL privileges, pass `dict.WithoutAutoMigrate()` and let the release pipeline run `dict.Migrate(db)` instead. Since `code` is globally unique, each service must check naming before onboarding
+
+### Usage
+For usage examples, refer to [dict usage](dict/README.md)
 
 ## distlock
 
