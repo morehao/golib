@@ -2,19 +2,24 @@ package sqlite_test
 
 import (
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/morehao/golib/dbaccess/dbgorm"
-	_ "github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/glog"
 	_ "github.com/morehao/golib/glog/driver/zap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type connEntity struct {
@@ -23,6 +28,13 @@ type connEntity struct {
 }
 
 func (connEntity) TableName() string { return "conn_entities" }
+
+type timeEntity struct {
+	ID        uint `gorm:"primaryKey"`
+	CreatedAt time.Time
+}
+
+func (timeEntity) TableName() string { return "time_entities" }
 
 // newDB 通过 dbgorm 的真实入口打开 SQLite，而非直接调用 gorm.Open，
 // 以覆盖 dialector 注册、URL 解析与连接池配置的完整链路。
@@ -177,6 +189,46 @@ func TestConnMemorySharedAcrossPool(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
+// 内存库必须在连接池内的**不同连接**之间共享。
+//
+// 上面的 TestConnMemorySharedAcrossPool 只验证"计数能跑通"：AutoMigrate 与
+// Count 可能落在同一条空闲连接上，即使每条连接各是一个私有库也会通过。
+// 这里显式用两条 sql.Conn 交叉验证，才能区分"同一个库"与"恰好复用同一条连接"。
+func TestConnMemorySharedAcrossConnections(t *testing.T) {
+	db := newDB(t, "sqlite://:memory:")
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+
+	ctx := t.Context()
+	creator, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	defer func() { _ = creator.Close() }()
+	_, err = creator.ExecContext(ctx, "CREATE TABLE memory_probe (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+
+	reader, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+
+	var count int
+	require.NoError(t, reader.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='memory_probe'").Scan(&count))
+	assert.Equal(t, 1, count, "驱动编译掉了 shared cache，内存库共享只能靠 memdb VFS")
+}
+
+// 两次打开 sqlite://:memory: 必须是两个互不可见的空库。
+//
+// 匿名内存库如果共用一个固定库名，后开的库会看到先前用例遗留的表与数据
+// （实测会让 task/gasync、task/gcron、configkv 的迁移用例相互污染）。
+func TestConnMemoryIsolatedBetweenOpens(t *testing.T) {
+	first := newDB(t, "sqlite://:memory:")
+	require.NoError(t, first.AutoMigrate(&connEntity{}))
+	require.True(t, first.Migrator().HasTable("conn_entities"))
+
+	second := newDB(t, "sqlite://:memory:")
+	assert.False(t, second.Migrator().HasTable("conn_entities"), "新打开的内存库应是空库")
+}
+
 // 回归：路径含 % 时必须按字面量解析，不能被 file: URI 解码。
 func TestConnPathWithPercent(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "%41")
@@ -245,4 +297,92 @@ func chdir(t *testing.T, dir string) func() {
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(dir))
 	return func() { _ = os.Chdir(original) }
+}
+
+// 字节级不变量：时间列的落库文本必须是驱动默认的 RFC3339Nano。
+//
+// 这是"去 CGO 后时间无损"的长期门禁——对账证据是一次性归档，
+// 这个断言不需要 CGO 环境也能回归。
+func TestTimeWriteBytes(t *testing.T) {
+	db := newDB(t, "sqlite://:memory:")
+	require.NoError(t, db.AutoMigrate(&timeEntity{}))
+
+	want := time.Date(2026, 10, 12, 9, 30, 0, 123456789, time.UTC)
+	require.NoError(t, db.Create(&timeEntity{CreatedAt: want}).Error)
+
+	// 核对落库字节必须用 hex()：Scan 到 string 拿到的是驱动解码后重新
+	// 格式化的结果（_timefmt=sqlite 写入的 "2026-10-12 09:30:00" 会被显示成
+	// "2026-10-12T09:30:00Z"），足以得出完全相反的结论。
+	const text = "2026-10-12T09:30:00.123456789Z"
+	var gotHex, gotText string
+	require.NoError(t, db.Raw("SELECT hex(created_at), created_at || '' FROM time_entities").
+		Row().Scan(&gotHex, &gotText))
+
+	assert.Equal(t, strings.ToUpper(hex.EncodeToString([]byte(text))), gotHex)
+	assert.Equal(t, text, gotText)
+
+	var back timeEntity
+	require.NoError(t, db.First(&back, 1).Error)
+	assert.True(t, want.Equal(back.CreatedAt), "写入值与读回值必须等值: %s", back.CreatedAt)
+	assert.Equal(t, want.Nanosecond(), back.CreatedAt.Nanosecond(), "纳秒必须保留")
+}
+
+// 读取宽容：mattn/go-sqlite3 时期写入的时间文本（空格 + 偏移）必须无损读回。
+func TestTimeReadMattnLegacyFormat(t *testing.T) {
+	db := newDB(t, "sqlite://:memory:")
+	require.NoError(t, db.AutoMigrate(&timeEntity{}))
+
+	const legacy = "2026-10-12 09:30:00.123456789+00:00"
+	require.NoError(t, db.Exec("INSERT INTO time_entities (created_at) VALUES (?)", legacy).Error)
+
+	var got timeEntity
+	require.NoError(t, db.First(&got, 1).Error)
+	want := time.Date(2026, 10, 12, 9, 30, 0, 123456789, time.UTC)
+	assert.True(t, want.Equal(got.CreatedAt), "旧引擎写入的时间文本必须等值读回: %s", got.CreatedAt)
+	assert.Equal(t, want.Nanosecond(), got.CreatedAt.Nanosecond(), "纳秒必须保留")
+}
+
+// 唯一键冲突必须能穿透 GORM 的错误包装（errors.Is 链）。
+//
+// 注意 GORM 只在 gorm.Config.TranslateError 为真时才调用方言的 Translate
+// （gorm.go:396-402），而 dbgorm.New 没有开这个开关——这是既有现状，与引擎无关
+// （旧驱动 gorm.io/driver/sqlite 同样实现了 Translate，同样被该开关挡住）。
+// 所以这里在方言层直接验证 ncruces → gormlite 的错误识别链路本身是通的。
+func TestTimeDuplicateKeyErrorIs(t *testing.T) {
+	type uniqueEntity struct {
+		ID   uint   `gorm:"primaryKey"`
+		Code string `gorm:"uniqueIndex"`
+	}
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{
+		TranslateError: true,
+		Logger:         logger.Discard,
+	})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	require.NoError(t, db.AutoMigrate(&uniqueEntity{}))
+	require.NoError(t, db.Create(&uniqueEntity{Code: "dup"}).Error)
+
+	err = db.Create(&uniqueEntity{Code: "dup"}).Error
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, gorm.ErrDuplicatedKey), "唯一键冲突应能 errors.Is 到 gorm.ErrDuplicatedKey: %v", err)
+}
+
+// 不加 TranslateError 时方言不会改写错误，dbgorm 的既有行为即如此（见上）。
+func TestTimeDuplicateKeyWithoutTranslateError(t *testing.T) {
+	type uniqueEntity struct {
+		ID   uint   `gorm:"primaryKey"`
+		Code string `gorm:"uniqueIndex"`
+	}
+	db := newDB(t, "sqlite://:memory:")
+	require.NoError(t, db.AutoMigrate(&uniqueEntity{}))
+	require.NoError(t, db.Create(&uniqueEntity{Code: "dup"}).Error)
+
+	err := db.Create(&uniqueEntity{Code: "dup"}).Error
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, gorm.ErrDuplicatedKey),
+		"dbgorm 未开启 TranslateError，此处不应自动翻译；若为真说明上游行为已变化")
+	assert.Contains(t, err.Error(), "UNIQUE constraint failed")
 }

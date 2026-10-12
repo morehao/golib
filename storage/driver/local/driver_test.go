@@ -344,8 +344,14 @@ func TestNewRangeReader_NegativeStartClamped(t *testing.T) {
 	}
 }
 
-// TestGetObject_OutOfRangeDoesNotLeakFD 通过真实文件验证句柄不泄漏。
-func TestGetObject_OutOfRangeDoesNotLeakFD(t *testing.T) {
+// TestGetObject_RangeDoesNotLeakFD 通过真实文件验证句柄不泄漏。
+//
+// 越界区间与 S3 的 416 InvalidRange 对齐：驱动直接返回语义化错误、不会打开文件
+// （见 driver.go 中 GetObject 的说明），因此这里断言错误类型，而不是像原用例那样
+// `if err != nil { t.Fatal(err) }` 把自己判失败——那与驱动契约相反。原用例只在
+// Linux 上才真正执行（macOS 无法枚举 /dev/fd，openFDCount 会先跳过），所以这个
+// 矛盾一直没被暴露。
+func TestGetObject_RangeDoesNotLeakFD(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(storage.Config{BaseDir: dir})
 	if err != nil {
@@ -356,8 +362,19 @@ func TestGetObject_OutOfRangeDoesNotLeakFD(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := openFDCount(t)
+	// 越界：只报错，不返回结果，也不应打开文件。
 	for i := 0; i < 100; i++ {
 		res, err := s.GetObject(ctx, "bkt", "k.bin", storage.WithByteRange(1000, 2000))
+		if !errors.Is(err, storage.ErrRangeNotSatisfiable) {
+			t.Fatalf("越界 Range 应返回 ErrRangeNotSatisfiable, got res=%v err=%v", res, err)
+		}
+		if res != nil {
+			t.Fatalf("越界 Range 不应返回结果, got %+v", res)
+		}
+	}
+	// 有效区间：走 rangeReader，读取并 Close 后句柄必须归还。
+	for i := 0; i < 100; i++ {
+		res, err := s.GetObject(ctx, "bkt", "k.bin", storage.WithByteRange(2, 5))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -369,18 +386,27 @@ func TestGetObject_OutOfRangeDoesNotLeakFD(t *testing.T) {
 		}
 	}
 	if after := openFDCount(t); after > before+5 {
-		t.Fatalf("越界 Range 泄漏 fd: before=%d after=%d", before, after)
+		t.Fatalf("Range 读取泄漏 fd: before=%d after=%d", before, after)
 	}
 }
 
-// openFDCount 返回当前进程打开的 fd 数量（仅 Linux/macOS 有效）。
+// openFDCount 返回当前进程打开的 fd 数量（Linux/macOS）。
+//
+// 这里必须用 Open + Readdirnames，而不是 os.ReadDir：macOS 上 os.ReadDir("/dev/fd")
+// 在 go test 启动的进程里会报 "fstatat /dev/fd: bad file descriptor"（go run 下却正常），
+// 会让整条用例静默跳过，于是 Linux 上才暴露的问题在开发机上永远看不到。
 func openFDCount(t *testing.T) int {
 	t.Helper()
-	entries, err := os.ReadDir("/dev/fd")
+	f, err := os.Open("/dev/fd")
 	if err != nil {
 		t.Skipf("无法枚举 /dev/fd: %v", err)
 	}
-	return len(entries)
+	defer func() { _ = f.Close() }()
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		t.Skipf("无法枚举 /dev/fd: %v", err)
+	}
+	return len(names)
 }
 
 // listKeysAndPrefixes 取一页的 key 与公共前缀。

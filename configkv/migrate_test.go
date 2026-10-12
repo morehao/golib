@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -17,7 +17,7 @@ func init() {
 
 // TestNew_MigratesByDefaultAndWithoutAutoMigrate 验证默认建表与选项开关。
 func TestNew_MigratesByDefaultAndWithoutAutoMigrate(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 
 	k, err := New(db)
@@ -25,7 +25,7 @@ func TestNew_MigratesByDefaultAndWithoutAutoMigrate(t *testing.T) {
 	require.NotNil(t, k)
 	require.True(t, db.Migrator().HasTable(&ConfigEntity{}), "New 默认应建表")
 
-	fresh, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	fresh, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	_, err = New(fresh, WithoutAutoMigrate())
 	require.NoError(t, err)

@@ -61,7 +61,7 @@ db, err := dbgorm.New(&dbgorm.Config{URL: "mysql://root:pwd@127.0.0.1:3306/demo"
 
 ### 1. dbgorm - GORM 数据库客户端
 
-支持 MySQL 和 PostgreSQL 的 GORM ORM 封装，自动识别数据库类型和连接格式。
+支持 MySQL、PostgreSQL 与 SQLite 的 GORM ORM 封装，自动识别数据库类型和连接格式。
 
 #### 安装
 
@@ -105,22 +105,90 @@ type GormConfig struct {
 "sqlite:///abs/path/app.db"          // 绝对路径
 "sqlite://./data/app.db"             // 相对路径
 "sqlite://data/app.db?mode=ro"       // 附带 SQLite URI 连接参数
+"sqlite://data/app.db?_pragma=journal_mode(WAL)" // 推荐：直接写 PRAGMA 语句
 ```
 
 SQLite 的 URL 处理遵循以下约定：
 
 - scheme 大小写不敏感，`sqlite://` 与 `SQLITE://` 等价。
+- 引擎是**纯 Go 实现**（`github.com/ncruces/go-sqlite3`：SQLite 编译为 wasm 后翻译成 Go）。
+  `CGO_ENABLED=0` 下可用，交叉编译不再需要 C 工具链，可产出全静态单二进制。
 - 查询参数按 SQLite URI 参数解析，因此 `mode`、`cache`、`immutable`、`_pragma` 等都会真正生效。
+  非内存库会被统一补上 `file:` 前缀——缺少该前缀时驱动会静默忽略 `mode`、`_txlock`、
+  `_timefmt`、`_pragma`。
+- 文件库默认注入 `_pragma=busy_timeout(5000)`，对齐旧引擎 `mattn/go-sqlite3` 隐式的 5000ms。
+  该参数必须排在所有 PRAGMA 之前（驱动会把所有 `_pragma` 按顺序拼成一段脚本执行），
+  因此总会被提到最前；自行传入 `busy_timeout` 时以传入值为准。
 - 文件库默认注入 `_txlock=immediate`（事务以 `BEGIN IMMEDIATE` 开始）。SQLite 默认的
   `BEGIN DEFERRED` 在读写锁升级时不会被 `busy_timeout` 重试，会直接报
   `database is locked`；如需改回，显式传入 `_txlock=deferred` 覆盖即可。
-- 内存库统一使用 `file::memory:?cache=shared`。直接用 `:memory:` 时连接池中每条连接
-  都是独立的空库，容易报 `no such table`。
+- 内存库（`:memory:`）会被改写为 `file:/mem_<N>?vfs=memdb`。驱动编译时带
+  `SQLITE_OMIT_SHARED_CACHE`（[SQLite 官方推荐](https://sqlite.org/compile.html#omit_shared_cache)），
+  `cache=shared` 已经是空操作，共享内存库统一走官方
+  [memdb VFS](https://github.com/ncruces/go-sqlite3/discussions/97)。
+  **每次 `dbgorm.New` 都拿到一个独立的空库**（`dbgorm.New` 之外的直接 `gorm.Open` 同理）；
+  需要跨连接池共享时，用命名内存库 `sqlite://file:memdb1?mode=memory`，同名即同库。
+- 时间列使用驱动默认格式：写入 `2026-10-12T09:30:00.123456789Z`（RFC3339Nano），
+  读取为 Auto，因此旧引擎写入的 `2026-10-12 09:30:00.123456789+00:00` 也能无损读回，
+  纳秒与时区偏移都不丢；本包**不注入** `_timefmt`。显式传入 `_timefmt` 会同时收窄读格式，
+  外部工具写入的其它格式将无法 `Scan` 回 `time.Time`。
+- 旧引擎（`mattn/go-sqlite3`）专有的 URI 参数会被翻译为 `_pragma` 语句，不再被静默忽略：
+
+  | 旧参数 | 翻译结果 |
+  |---|---|
+  | `_busy_timeout=8000` | `_pragma=busy_timeout(8000)` |
+  | `_journal_mode=WAL` | `_pragma=journal_mode(WAL)` |
+  | `_synchronous=FULL` | `_pragma=synchronous(FULL)` |
+  | `_foreign_keys=1` | `_pragma=foreign_keys(1)` |
+  | `_locking_mode=EXCLUSIVE` | `_pragma=locking_mode(EXCLUSIVE)` |
+
+  其余旧参数（如 `_loc`）在新引擎下没有等价物，会被忽略；`cache=shared` 亦已失效。
 - 日志中的 `database` 字段为文件路径，建议显式设置 `Config.Service` 以获得可读的服务名。
 
 > **并发提示**：SQLite 是单写入者模型。文件库已通过 `_txlock=immediate` 规避锁升级失败；
-> 内存库在并发事务下仍可能返回 `database table is locked`，此时请将 `MaxOpenConns` 设为 `1`。
-> 需要更高读写并发时，可显式追加 `_journal_mode=WAL`。
+> 内存库（memdb VFS）在并发事务下仍可能返回 `database table is locked`，此时请将
+> `MaxOpenConns` 设为 `1`。需要更高读写并发时，可显式追加 `_journal_mode=WAL`
+>（会翻译为 `_pragma=journal_mode(WAL)`）。
+
+> **从 CGO 版本升级**：连接串无需改动，`sqlite://` 前缀、路径与查询参数语义保持一致，
+> 落地数据的字节形状与错误文本有少量变化。详见
+> [SQLite 去 CGO 迁移说明](../docs/sqlite-pure-go-migration.md)。
+
+#### SQLite 时间列存储格式
+
+| 写入方 | 落库字节（`hex()` 取值） | 纳秒 |
+|---|---|---|
+| 旧引擎 mattn | `2026-10-12 09:30:00.123456789+00:00` | 保留 |
+| 本方言（默认） | `2026-10-12T09:30:00.123456789Z` | 保留 |
+
+- 读取为驱动 Auto 模式，两种形状都能无损 `Scan` 回 `time.Time`，**纳秒与时区偏移都不丢**。
+- 本包**不注入** `_timefmt`。可选值为 `sqlite`（写 `2026-10-12 09:30:00`，丢亚秒）、
+  `rfc3339`、或自定义 layout；**显式传入会把读也收窄为同一格式**，此后外部工具写入的
+  其它形状将无法 `Scan` 回 `time.Time`。
+- 按时间列排序请用 `id`，或显式 `ORDER BY datetime(col)`；不要依赖两种形状的字典序混排。
+
+#### SQLite 存量库升级提示（重要）
+
+旧引擎写入的时间文本与新格式形状不同，**在混存库上**绑定 `time.Time` 的字符串比较会失配。
+实测：cutoff = `2026-10-12 06:00:00Z` 时 `WHERE created_at < ?` 命中 **2 行**（正确 1 行），
+即 cutoff **当天**的存量行会被判为早于 cutoff，保留/清理策略会出现静默多删。
+
+检测 SQL（mattn 形状第 11 个字符是空格）：
+
+```sql
+SELECT count(*) FROM <表> WHERE substr(<时间列>, 11, 1) = ' ';
+```
+
+命中不为 0 时，请按下述之一处理（完整脚本见迁移文档）：
+
+1. **首选**：用一次性 Go 程序把存量时间文本归一化为 RFC3339Nano
+   （`SELECT id, col` → `time.Parse` → `UPDATE ... SET col = ?` 绑定 `time.Time`）；
+2. **备选**：不改数据，改用 `_timefmt=2006-01-02 15:04:05.999999999-07:00`
+   （与存量形状一致，代价是读取被收窄为单一 layout）。
+
+> **不要**把共享查询里的 `created_at < ?` 改成 `datetime(created_at) < datetime(?)`：
+> `task/gcron`、`task/gasync` 是多后端存储（MySQL/PostgreSQL/SQLite 共用同一段 SQL），
+> `datetime()` 只在 SQLite 存在。
 
 #### 驱动注册
 
@@ -466,12 +534,13 @@ client.Get(ctx, "key")
 - `gorm.io/gorm` - GORM ORM
 - `gorm.io/driver/mysql` - MySQL 驱动
 - `gorm.io/driver/postgres` - PostgreSQL 驱动
-- `gorm.io/driver/sqlite` - SQLite 驱动
+- `github.com/ncruces/go-sqlite3` + `.../gormlite` - SQLite 驱动（纯 Go，间接依赖 `go-sqlite3-wasm/v2`、`julianday`）
 - `github.com/redis/go-redis/v9` - Redis 客户端
 - `github.com/elastic/go-elasticsearch/v8` - Elasticsearch 客户端
 - `github.com/morehao/golib/glog` - 日志库
 
-> **SQLite 与 CGO**：`gorm.io/driver/sqlite` 依赖 `github.com/mattn/go-sqlite3`，需要 CGO。
-> `CGO_ENABLED=0` 时仍能编译通过，但会在打开连接时报
-> `Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to work`，
-> 请确保构建 SQLite 版程序时开启 CGO。
+> **SQLite 与 CGO**：本方言为**纯 Go 实现**（SQLite 编译为 wasm 后翻译成 Go），
+> `CGO_ENABLED=0` 可直接编译与运行，交叉编译不需要 C 工具链。
+> 代价是二进制体积：引用本方言的最小程序实测由 11,875,186 B 增至 23,400,978 B
+> （**+10.99 MiB**，阈值 ≤12 MiB），冷编译耗时由 61.23 s 降至 29.25 s（约 −52%）。
+> 需要 SQLCipher/加密扩展时本方言不支持，须另行评估。

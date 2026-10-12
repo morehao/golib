@@ -5,9 +5,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/dbaccess/gormdao"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -49,7 +49,7 @@ type fixture struct {
 
 func newSQLiteDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
 
 	sqlDB, err := db.DB()
@@ -156,7 +156,7 @@ func contextTODO() context.Context { return context.Background() }
 // openRawSQLite 打开一个不含任何表的 sqlite 库，用于验证 DDL 纪律。
 func openRawSQLite(t *testing.T) (*gorm.DB, error) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		return nil, err
 	}

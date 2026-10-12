@@ -7,26 +7,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/dbaccess/gormdao"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 func newGasyncTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	return db
 }
 
 // newGasyncConcurrentTestDB 使用临时文件库（带 busy_timeout），允许多连接并发写（并发测试用）。
-// 注意：`:memory:` 每连接独立库、共享缓存模式又会抛 SQLITE_LOCKED，均不适合并发写场景。
+// 注意：内存库虽然经 memdb VFS 在连接间共享，但它走的是 memdb 自己的锁实现，
+// 与文件库的真实文件锁路径不同，并发写场景仍以文件库验证。
+// 这里的 `_busy_timeout=5000` 同时也是 mattn 参数翻译层的集成测试。
 func newGasyncConcurrentTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := filepath.Join(t.TempDir(), "gasync_conc.db") + "?_busy_timeout=5000"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	db, err := gorm.Open(sqlite.Open("sqlite://"+dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	return db
 }

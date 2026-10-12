@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -60,14 +60,14 @@ func TestSingleton_InitFailure_Panics(t *testing.T) {
 	resetSingleton()
 
 	dbfile := filepath.Join(t.TempDir(), "readonly.db")
-	createDB, err := gorm.Open(sqlite.Open(dbfile), &gorm.Config{})
+	createDB, err := gorm.Open(sqlite.Open("sqlite://"+dbfile), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, createDB.Exec("CREATE TABLE placeholder (id INTEGER PRIMARY KEY);").Error)
 	sqlDB, err := createDB.DB()
 	require.NoError(t, err)
 	require.NoError(t, sqlDB.Close())
 
-	roDB, err := gorm.Open(sqlite.Open("file:"+dbfile+"?mode=ro&cache=shared"), &gorm.Config{})
+	roDB, err := gorm.Open(sqlite.Open("sqlite://"+dbfile+"?mode=ro&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 
 	require.Panics(t, func() {

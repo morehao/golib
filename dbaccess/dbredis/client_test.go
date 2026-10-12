@@ -10,6 +10,7 @@ import (
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -20,6 +21,23 @@ func redisEnvConfig() (addr, password string) {
 	addr = testutil.GetEnv(testutil.RedisAddr, "127.0.0.1:6379")
 	password = testutil.GetEnv(testutil.RedisPassword, "123456")
 	return
+}
+
+// requireRedis 返回可用的真实 Redis 连接参数，服务不可达时跳过用例。
+//
+// 与 distlock/ratelimit 的集成用例同一约定：CI 环境没有 Redis，此前这里的用例
+// 会硬失败，并因为忽略 New 返回的 error 继续使用 nil 客户端而 panic。
+func requireRedis(t *testing.T) (addr, password string) {
+	t.Helper()
+	addr, password = redisEnvConfig()
+	probe, err := New(&RedisConfig{Service: "probe", Addr: addr, Password: password})
+	if err != nil {
+		t.Skipf("redis not available at %s: %v", addr, err)
+	}
+	if closeErr := probe.Close(); closeErr != nil {
+		t.Logf("failed to close probe client: %v", closeErr)
+	}
+	return addr, password
 }
 
 func TestNew(t *testing.T) {
@@ -37,7 +55,7 @@ func TestNew(t *testing.T) {
 	initLogErr := glog.InitLogger(logCfg)
 	assert.Nil(t, initLogErr)
 
-	addr, password := redisEnvConfig()
+	addr, password := requireRedis(t)
 	cfg := &RedisConfig{
 		Service:  "test",
 		Addr:     addr,
@@ -45,7 +63,7 @@ func TestNew(t *testing.T) {
 		DB:       0,
 	}
 	redisClient, err := New(cfg)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	// 创建带有 requestId 的上下文
 	ctx := context.Background()
@@ -86,7 +104,7 @@ func TestNewWithoutInitLog(t *testing.T) {
 			t.Logf("failed to close logger: %v", err)
 		}
 	}()
-	addr, _ := redisEnvConfig()
+	addr, _ := requireRedis(t)
 	cfg := &RedisConfig{
 		Service:  "test",
 		Addr:     addr,
@@ -94,7 +112,7 @@ func TestNewWithoutInitLog(t *testing.T) {
 		DB:       0,
 	}
 	redisClient, err := New(cfg)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	// 创建带有 requestId 的上下文
 	ctx := context.Background()

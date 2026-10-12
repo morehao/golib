@@ -19,10 +19,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gserver/ginserver"
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -156,7 +156,7 @@ func (m *failingPutMockStorage) PathBuilder() storage.PathBuilder {
 
 func newTestFileStore(t *testing.T) *filestore.FileStore {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	fs, err := filestore.New(db, &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
@@ -384,7 +384,7 @@ func TestHandleInitMultipartUpload_Dedup(t *testing.T) {
 
 // TestHandleListParts GET /files/:id/parts 返回分片列表与 is_truncated。
 func TestHandleListParts(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	mock := &mockStorage{listPartsOut: &storage.ListPartsOutput{
 		Parts: []storage.PartInfo{
@@ -685,7 +685,7 @@ func TestHandleDeleteFile_NotFound(t *testing.T) {
 }
 
 func TestHandleUpload_StorageFailure(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	fs, err := filestore.New(db, &failingMockStorage{}, "test-bucket")
 	require.NoError(t, err)
@@ -975,7 +975,7 @@ const testSignSecret = "test-sign-secret"
 
 func newTestFileStoreWithSignSecret(t *testing.T) *filestore.FileStore {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	fs, err := filestore.New(db, &mockStorage{}, "test-bucket", filestore.WithSignSecret(testSignSecret))
 	require.NoError(t, err)
@@ -1116,7 +1116,7 @@ func TestHandlePresignedPut(t *testing.T) {
 	})
 
 	t.Run("storage put failure", func(t *testing.T) {
-		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+		db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 		require.NoError(t, err)
 		fs, err := filestore.New(db, &failingPutMockStorage{}, "test-bucket", filestore.WithSignSecret(testSignSecret))
 		require.NoError(t, err)
