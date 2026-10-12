@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -33,7 +33,7 @@ func (testCompanyModel) TableName() string { return "test_company_models" }
 
 func setupTestDB(t *testing.T, tables ...any) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)

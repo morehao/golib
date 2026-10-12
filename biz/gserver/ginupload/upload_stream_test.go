@@ -22,11 +22,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/storage"
 	_ "github.com/morehao/golib/storage/driver/local"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -36,7 +36,7 @@ const streamTestBucket = "testbucket"
 // 暂存/提升/落盘链路。
 func newLocalFileStore(t *testing.T, dir string, opts ...filestore.StoreOption) *filestore.FileStore {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 
 	st, err := storage.New(storage.DriverLocal, storage.Config{

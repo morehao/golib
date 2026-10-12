@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -151,7 +151,7 @@ func (m *mockStorage) PathBuilder() storage.PathBuilder {
 func (m *mockStorage) Caps() storage.Caps { return m.caps }
 
 func newTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	return db
 }
