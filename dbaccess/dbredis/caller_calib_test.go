@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/internal/testutil"
 	_ "github.com/morehao/golib/glog/driver/slog"
 	_ "github.com/morehao/golib/glog/driver/zap"
+	"github.com/morehao/golib/internal/testutil"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,7 +47,7 @@ func redisCallers(t *testing.T, dir string) []string {
 }
 
 func TestRedisCallerSkipDefaultConsistent(t *testing.T) {
-	addr, password := redisEnvConfig()
+	addr, password := requireRedis(t)
 	ctx := context.Background()
 
 	for _, lt := range []glog.LoggerType{glog.LoggerTypeZap, glog.LoggerTypeSlog} {
