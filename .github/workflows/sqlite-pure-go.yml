@@ -1,0 +1,110 @@
+name: sqlite-pure-go
+
+# SQLite 方言去 CGO 门禁：纯 Go 测试、依赖卫生、交叉编译（无 C 工具链）。
+# 背景：https://github.com/morehao/golib/blob/main/docs/sqlite-pure-go-migration.md
+#
+# 刻意不建常驻 CGO job：行为对齐一次性对账证据
+#（.dsh/docs/notes/2026-10-12-sqlite-interop-evidence-notes.md）
+# 与 dbaccess/dbgorm/driver/sqlite 内的字节级断言测试（TestTimeWriteBytes）。
+
+on:
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/sqlite-pure-go.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/sqlite-pure-go.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sqlite-pure-go-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pure-go:
+    name: CGO_ENABLED=0 全仓测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # 外部服务（MySQL/PostgreSQL/Redis/ES/对象存储）用例在缺失时会自行 Skip。
+      - name: go test（无 CGO）
+        run: CGO_ENABLED=0 go test -count=1 ./...
+
+  dep-guard:
+    name: 依赖卫生（无 CGO SQLite 引擎）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: mattn/go-sqlite3 不得出现在模块图中
+        run: |
+          if go list -deps ./... | grep -q 'mattn/go-sqlite3'; then
+            echo "::error::mattn/go-sqlite3 仍在依赖图中，SQLite 方言应使用 ncruces/go-sqlite3"
+            go list -deps ./... | grep 'mattn/go-sqlite3'
+            exit 1
+          fi
+          echo "OK: 模块图中无 mattn/go-sqlite3"
+
+      - name: go.mod 不得依赖 gorm.io/driver/sqlite
+        run: |
+          if grep -q 'gorm.io/driver/sqlite' go.mod; then
+            echo "::error::go.mod 仍依赖 gorm.io/driver/sqlite"
+            exit 1
+          fi
+          echo "OK: go.mod 无 gorm.io/driver/sqlite"
+
+      - name: 测试代码不得直接 import 旧驱动
+        run: |
+          if grep -rn '"gorm\.io/driver/sqlite"' --include='*_test.go' \
+               --exclude-dir='.git' --exclude-dir='.worktrees' .; then
+            echo "::error::测试仍直接 import 旧驱动，请改用 dbaccess/dbgorm/driver/sqlite 的 Open"
+            exit 1
+          fi
+          echo "OK: 测试代码无旧驱动 import"
+
+      - name: gorm 版本必须保持 v1.31.1（本方言不要求升级）
+        run: |
+          if ! grep -q 'gorm.io/gorm v1.31.1' go.mod; then
+            echo "::error::gorm 版本已变动，gormlite v0.34.0 对齐的是 v1.31.1"
+            grep 'gorm.io/gorm ' go.mod
+            exit 1
+          fi
+          echo "OK: gorm v1.31.1"
+
+  cross-build:
+    name: 交叉编译 linux/${{ matrix.goarch }}（无 C 工具链）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...
