@@ -302,29 +302,6 @@ server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务�
   `db.Set("gorm:table_options", "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")`；
 - PostgreSQL：列注释以独立 `COMMENT ON COLUMN` 下发，语句顺序与 `AutoMigrate` 一致。
 
-### 存量表升级（索引变更）
-
-`core_cron_task_run` 使用 `idx_status_start_at`（崩溃兜底按 `status` + `start_at` 扫描）与
-`idx_created_at`（保留策略按 `created_at` 清理）两个索引，早于这两个索引建表的库需要手工补齐。
-
-大表**不要依赖服务账号的 `AutoMigrate` 建索引**：它可能直接对线上表执行 DDL 并长时间持锁。
-推荐 `gcron.WithoutAutoMigrate()` 关闭服务侧建表，改由迁移账号或 online DDL 工具
-（pt-osc / gh-ost，或 MySQL 8 的 `ALGORITHM=INPLACE, LOCK=NONE`）执行：
-
-```
-CREATE INDEX `idx_status_start_at` ON `core_cron_task_run` (`status`, `start_at`);
-CREATE INDEX `idx_created_at` ON `core_cron_task_run` (`created_at`);
-```
-
-PostgreSQL 用 `CREATE INDEX CONCURRENTLY`（需在事务外执行）：
-
-```
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_status_start_at" ON "core_cron_task_run" ("status", "start_at");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_created_at" ON "core_cron_task_run" ("created_at");
-```
-
-索引可重复创建（已存在时报错可忽略），不影响既有数据与调度语义。
-
 ### gcron - MySQL
 
 ```sql
