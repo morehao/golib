@@ -74,6 +74,10 @@ func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Opt
 	if cfg == nil {
 		cfg = defaultConfig()
 	}
+	// 选项只写入配置副本：避免 New 反向修改调用方传入的 Config（Options 是构造参数，
+	// 不应产生副作用）；此后一律使用副本。
+	cfgCopy := *cfg
+	cfg = &cfgCopy
 	o := newOptions{Config: cfg, autoMigrate: true}
 	for _, opt := range opts {
 		if opt != nil {
@@ -161,6 +165,9 @@ func (s *Scheduler) Disable(taskID string) error {
 
 // Enable 恢复被 Disable 暂停的任务：重新调度（沿用注册时的定义），并将 DB 定义标记为 enabled。
 // 任务本就处于调度中时直接返回 nil。
+//
+// 重新调度会构造新的执行闭包，即上一轮的"同实例防重叠"标记被重置：若 Disable 时仍有
+// 在途执行，恢复后的一次触发可能与它并发（分布式锁仍可兜住跨实例/跨 entry 的互斥）。
 func (s *Scheduler) Enable(taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -383,6 +390,10 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 
 		// 提前计算下次执行时间：调度器在触发该次任务时已推进 Entry.Next，
 		// 不受 handler 耗时影响；last_run_at 则推迟到执行结束后再写入。
+		//
+		// Entry 查询返回 0 只可能是"本 entry 已被移除"（AddFunc 返回时 entry 已入表，
+		// 首个 tick 必然可见），即任务在本次执行期间被 Disable/Remove：此时写 NULL 才是
+		// 准确语义（该任务已不再有下一次调度），故保持写 nil。
 		var nextRun *time.Time
 		if entry := s.cron.Entry(*entryID); entry.ID != 0 && !entry.Next.IsZero() {
 			next := entry.Next
@@ -417,21 +428,26 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 
 		err := safeRun(handlerCtx, t.Handler)
 		end := time.Now()
-		status := TaskRunSuccess
-		errMsg := ""
-		if lockLost.Load() {
+		status, errMsg := TaskRunSuccess, ""
+		switch {
+		case lockLost.Load():
+			// 锁丢失：临界区已不成立，即使 handler 正常返回也按 lock_lost 记录
 			status = TaskRunLockLost
 			errMsg = "distributed lock lost during execution"
 			if err != nil {
 				errMsg = gutil.TruncateString(errMsg+": "+err.Error(), maxErrorMsgLen)
 			}
-		} else if err != nil {
-			// handler 超时被 ctx 取消时记录 timed_out，与普通失败区分
-			if timeout > 0 && handlerCtx.Err() == context.DeadlineExceeded {
-				status = TaskRunTimedOut
+		case timeout > 0 && handlerCtx.Err() == context.DeadlineExceeded:
+			// 超时以 ctx 为准而非 err：handler 可能忽略取消、睡过 timeout 后仍返回 nil
+			status = TaskRunTimedOut
+			if err != nil {
+				errMsg = gutil.TruncateString(err.Error(), maxErrorMsgLen)
 			} else {
-				status = TaskRunFailed
+				errMsg = "handler exceeded timeout " + timeout.String()
 			}
+		case err != nil:
+			// 普通失败（含 panic 恢复）
+			status = TaskRunFailed
 			errMsg = gutil.TruncateString(err.Error(), maxErrorMsgLen)
 		}
 
@@ -567,7 +583,9 @@ func (s *Scheduler) runMaintenance() {
 	}
 }
 
-func (s *Scheduler) GetStore() *store {
+// GetStore 返回任务定义与执行记录的读写入口（查询、崩溃兜底与保留策略清理）。
+// 返回接口而非未导出类型，便于外部接收与 mock；handler 内需要自查状态时从这里取。
+func (s *Scheduler) GetStore() Store {
 	return s.store
 }
 

@@ -13,6 +13,23 @@ import (
 // maxCleanupBatches 单次 CleanupRuns 的批次数上限，避免单次调用无限循环。
 const maxCleanupBatches = 1000
 
+// Store 是 store 对外暴露的能力集，由 Scheduler.GetStore 返回。
+//
+// 存在的意义：store 是未导出类型，直接把 `*store` 作为返回值会让外部既无法命名该类型，
+// 也无法在测试里替身；接口化后 `go doc` 可见，调用方可接收、可 mock。
+// 这里覆盖 store 当前全部已导出方法，保证 GetStore() 的可用方法集合不变。
+type Store interface {
+	GetTaskByID(ctx context.Context, taskID string) (*CronTask, error)
+	ListTask(ctx context.Context, cond *CronTaskCond) ([]CronTask, int64, error)
+	DeleteTaskByID(ctx context.Context, taskID string) error
+	GetRunByID(ctx context.Context, id string) (*CronTaskRun, error)
+	ListRun(ctx context.Context, cond *CronTaskRunCond) ([]CronTaskRun, int64, error)
+	MarkStaleRunningAsFailed(ctx context.Context, cutoff time.Duration, taskID string) (int64, error)
+	CleanupRuns(ctx context.Context, before time.Time, taskID string) (int64, error)
+}
+
+var _ Store = (*store)(nil)
+
 type store struct {
 	dbGetter gormdao.DBGetter
 	taskDao  *gormdao.Dao[CronTask, []CronTask, string]
