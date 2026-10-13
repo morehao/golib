@@ -55,10 +55,19 @@ type Scheduler struct {
 
 	mu    sync.Mutex
 	tasks map[string]registeredTask
+	// skipAt 记录「任务+跳过原因」的上次落库时间与窗口内被抑制的次数，
+	// 由 s.mu 保护；仅在 Config.SkipRunMinInterval > 0 时使用。
+	skipAt map[string]skipStat
 
 	// 内置兜底/清理循环（仅当配置了 StaleRunningCutoff / RunRetention 时启动）。
 	maintainStop chan struct{}
 	maintainDone chan struct{}
+}
+
+// skipStat 是单个「任务+跳过原因」的节流状态。
+type skipStat struct {
+	last       time.Time
+	suppressed int
 }
 
 func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Option) (*Scheduler, error) {
@@ -109,6 +118,7 @@ func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Opt
 		lockFactory: lockFactory,
 		cfg:         cfg,
 		tasks:       make(map[string]registeredTask),
+		skipAt:      make(map[string]skipStat),
 	}, nil
 }
 
@@ -140,7 +150,9 @@ func (s *Scheduler) Disable(taskID string) error {
 	if !ok {
 		return ErrTaskNotFound
 	}
-	if err := s.store.updateTaskStatus(context.Background(), taskID, CronTaskDisabled); err != nil {
+	ctx, cancel := s.lifecycleCtx()
+	defer cancel()
+	if err := s.store.updateTaskStatus(ctx, taskID, CronTaskDisabled); err != nil {
 		return fmt.Errorf("gcron: disable task %q: %w", taskID, err)
 	}
 	s.cron.Remove(reg.entryID)
@@ -171,7 +183,9 @@ func (s *Scheduler) Remove(taskID string) error {
 	if !ok {
 		return ErrTaskNotFound
 	}
-	if err := s.store.DeleteTaskByID(context.Background(), taskID); err != nil {
+	ctx, cancel := s.lifecycleCtx()
+	defer cancel()
+	if err := s.store.DeleteTaskByID(ctx, taskID); err != nil {
 		return fmt.Errorf("gcron: delete task %q: %w", taskID, err)
 	}
 	s.cron.Remove(reg.entryID)
@@ -201,9 +215,11 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 	}
 
 	if enableLock && !autoRenewal {
-		s.logger.Warnw(context.Background(),
+		warnCtx, warnCancel := s.lifecycleCtx()
+		s.logger.Warnw(warnCtx,
 			"gcron task lock auto-renewal disabled; a handler running longer than lock TTL may execute concurrently on multiple instances",
 			gconstant.KeyTaskID, t.ID, "lock_ttl", lockTTL.String())
+		warnCancel()
 		// 未续期时执行超过 TTL 锁必然过期：严格模式下直接拒绝注册，避免"以为互斥其实没有"。
 		if s.cfg.StrictLockTTL && timeout > lockTTL {
 			return fmt.Errorf("%w: task %q timeout=%s > lock_ttl=%s",
@@ -218,16 +234,20 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 		return fmt.Errorf("gcron: add cron entry for task %q with spec %q: %w", t.ID, t.Spec, err)
 	}
 
+	// 生命周期 DB 操作统一带超时，避免 DB 卡住时 Register/Enable 无界挂起。
+	ctx, cancel := s.lifecycleCtx()
+	defer cancel()
+
 	if upsert {
 		// 先看是否存在（含软删除行）：status 以 DB 为准，需要据此决定本次注册是否调度。
-		prev, perr := s.store.getTaskByIDUnscoped(context.Background(), t.ID)
+		prev, perr := s.store.getTaskByIDUnscoped(ctx, t.ID)
 		if perr != nil {
 			s.cron.Remove(entryID)
 			return fmt.Errorf("gcron: load task %q before upsert: %w", t.ID, perr)
 		}
 
 		taskEntity := &CronTask{ID: t.ID, BizID: t.BizID, BizType: t.BizType, Name: t.Name, TaskType: t.TaskType, Spec: t.Spec, Description: t.Description, Status: CronTaskEnabled}
-		if uerr := s.store.upsertTask(context.Background(), taskEntity); uerr != nil {
+		if uerr := s.store.upsertTask(ctx, taskEntity); uerr != nil {
 			// 落库失败回滚调度，避免内存态与 DB 不一致
 			s.cron.Remove(entryID)
 			return fmt.Errorf("gcron: upsert task %q: %w", t.ID, uerr)
@@ -236,7 +256,7 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 		if prev != nil && prev.DeletedAt.Valid {
 			// 恢复被 Remove 掉的历史行：视作全新注册，状态重置为 enabled 并正常调度。
 			if prev.Status != CronTaskEnabled {
-				if uerr := s.store.updateTaskStatus(context.Background(), t.ID, CronTaskEnabled); uerr != nil {
+				if uerr := s.store.updateTaskStatus(ctx, t.ID, CronTaskEnabled); uerr != nil {
 					s.cron.Remove(entryID)
 					return fmt.Errorf("gcron: restore task %q: %w", t.ID, uerr)
 				}
@@ -244,14 +264,14 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 		} else if prev != nil && prev.Status == CronTaskDisabled {
 			// 运营侧已下线：本次注册只登记不调度，待显式 Enable 恢复。
 			s.cron.Remove(entryID)
-			s.logger.Warnw(context.Background(),
+			s.logger.Warnw(ctx,
 				"gcron task registered as disabled, scheduling skipped; call Enable to resume",
 				gconstant.KeyTaskID, t.ID)
 			// 保留注册记录：Enable 需要据此重新 AddFunc（entryID 已失效，Entry 查询返回 0）
 			s.tasks[t.ID] = registeredTask{task: t, entryID: entryID}
 			return nil
 		}
-	} else if uerr := s.store.updateTaskStatus(context.Background(), t.ID, CronTaskEnabled); uerr != nil {
+	} else if uerr := s.store.updateTaskStatus(ctx, t.ID, CronTaskEnabled); uerr != nil {
 		s.cron.Remove(entryID)
 		return fmt.Errorf("gcron: enable task %q: %w", t.ID, uerr)
 	}
@@ -275,12 +295,36 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 
 		taskLogger := newTaskLogger(t.ID, t.TaskType)
 
+		// skip 记录一次"跳过"（防重叠、未抢到锁、锁故障）。
+		//
+		// 跳过是高频事件：Config.RecordSkippedRuns=false 时完全不落库（只打日志），
+		// Config.SkipRunMinInterval>0 时同一任务同一原因在该窗口内只落一行，
+		// 被抑制的次数累积到下一次落库/日志里，避免高峰期把 run 表写爆。
 		skip := func(reason string) {
+			if !s.cfg.recordSkippedRuns() {
+				taskLogger.Infow(ctx, "cron task skipped, run record disabled by config",
+					gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID, "reason", reason)
+				return
+			}
+			record, suppressed := s.allowSkipRecord(t.ID, reason)
+			if !record {
+				taskLogger.Infow(ctx, "cron task skipped, run record throttled",
+					gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID,
+					"reason", reason, "suppressed", suppressed)
+				return
+			}
+			// skipped 行补齐 end_at/duration_ms，避免 UI 出现空值
+			now := time.Now()
 			if serr := s.store.insertRun(ctx, &CronTaskRun{
 				ID: runID, TaskID: t.ID,
-				StartAt: time.Now(), Status: TaskRunSkipped, RequestID: gutil.GenUUID(), ErrorMsg: reason,
+				StartAt: now, EndAt: &now, DurationMS: 0,
+				Status: TaskRunSkipped, RequestID: gutil.GenUUID(), ErrorMsg: reason,
 			}); serr != nil {
 				taskLogger.Errorw(ctx, "insert skipped run failed", gconstant.KeyRunID, runID, "error", serr)
+			} else if suppressed > 0 {
+				taskLogger.Infow(ctx, "cron task skipped, previous skips were throttled",
+					gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID,
+					"reason", reason, "suppressed", suppressed)
 			}
 		}
 
@@ -467,7 +511,7 @@ func (s *Scheduler) startMaintenance() {
 	go func() {
 		defer close(done)
 		// 启动即跑一次：崩溃残留不必等到下一个周期
-		s.runMaintenance(context.Background())
+		s.runMaintenance()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -475,7 +519,7 @@ func (s *Scheduler) startMaintenance() {
 			case <-stop:
 				return
 			case <-ticker.C:
-				s.runMaintenance(context.Background())
+				s.runMaintenance()
 			}
 		}
 	}()
@@ -495,9 +539,14 @@ func (s *Scheduler) stopMaintenance() {
 }
 
 // runMaintenance 执行一轮兜底与清理；失败只告警，不影响调度。
-func (s *Scheduler) runMaintenance(ctx context.Context) {
+//
+// 两个阶段各自使用生命周期超时：清理积压很大时可能在超时处中断，
+// 已删除的部分不会回滚，剩余部分留到下一轮继续。
+func (s *Scheduler) runMaintenance() {
 	if cutoff := s.cfg.StaleRunningCutoff; cutoff > 0 {
+		ctx, cancel := s.lifecycleCtx()
 		n, err := s.store.MarkStaleRunningAsFailed(ctx, cutoff, "")
+		cancel()
 		switch {
 		case err != nil:
 			s.logger.Errorw(ctx, "gcron reap stale running records failed", "error", err)
@@ -506,7 +555,9 @@ func (s *Scheduler) runMaintenance(ctx context.Context) {
 		}
 	}
 	if retention := s.cfg.RunRetention; retention > 0 {
+		ctx, cancel := s.lifecycleCtx()
 		n, err := s.store.CleanupRuns(ctx, time.Now().Add(-retention), "")
+		cancel()
 		switch {
 		case err != nil:
 			s.logger.Errorw(ctx, "gcron cleanup old run records failed", "error", err)
@@ -518,4 +569,36 @@ func (s *Scheduler) runMaintenance(ctx context.Context) {
 
 func (s *Scheduler) GetStore() *store {
 	return s.store
+}
+
+// lifecycleCtx 返回带超时的生命周期 DB 操作 ctx（Register/Disable/Enable/Remove
+// 与内置兜底清理），避免 DB 卡住时无界挂起；调用方必须 defer cancel。
+func (s *Scheduler) lifecycleCtx() (context.Context, context.CancelFunc) {
+	timeout := s.cfg.LifecycleTimeout
+	if timeout <= 0 {
+		timeout = defaultLifecycleTimeout
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+// allowSkipRecord 判断本次跳过是否应落库，并返回上一窗口内被抑制的次数。
+// SkipRunMinInterval<=0 时总是允许落库；否则同一任务同一原因在该间隔内只允许一次。
+func (s *Scheduler) allowSkipRecord(taskID, reason string) (record bool, suppressed int) {
+	interval := s.cfg.SkipRunMinInterval
+	if interval <= 0 {
+		return true, 0
+	}
+	key := taskID + "\x00" + reason
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.skipAt[key]
+	if ok && now.Sub(st.last) < interval {
+		st.suppressed++
+		s.skipAt[key] = st
+		return false, st.suppressed
+	}
+	s.skipAt[key] = skipStat{last: now}
+	return true, st.suppressed
 }

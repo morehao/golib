@@ -91,3 +91,20 @@ func WithRunCleanupBatchSize(n int) Option {
 func WithStrictLockTTL(v bool) Option {
 	return optionFunc(func(o *newOptions) { o.StrictLockTTL = v })
 }
+
+// WithLifecycleTimeout 配置生命周期 DB 操作超时（<=0 时取默认值 5s）。
+func WithLifecycleTimeout(d time.Duration) Option {
+	return optionFunc(func(o *newOptions) { o.LifecycleTimeout = d })
+}
+
+// WithRecordSkippedRuns 配置是否把"跳过"写入执行记录（默认 true，保持既有行为）；
+// 设为 false 时只打日志，避免任务高频跳过时的写放大。
+func WithRecordSkippedRuns(v bool) Option {
+	return optionFunc(func(o *newOptions) { o.RecordSkippedRuns = &v })
+}
+
+// WithSkipRunMinInterval 配置同一任务同一跳过原因的落库最小间隔
+//（默认 0：每次跳过都落库；>0 时窗口内只落一行）。
+func WithSkipRunMinInterval(d time.Duration) Option {
+	return optionFunc(func(o *newOptions) { o.SkipRunMinInterval = d })
+}

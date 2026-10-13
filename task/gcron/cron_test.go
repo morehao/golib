@@ -11,6 +11,7 @@ import (
 
 	"github.com/morehao/golib/distlock"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // cronWaitTimeout 是"等 1 秒粒度的 cron 触发一次"的上限。
@@ -786,4 +787,152 @@ func TestStrictLockTTLRejectsRegister(t *testing.T) {
 		EnableLock: true, AutoRenewal: true, LockTTL: time.Minute, Timeout: 2 * time.Minute,
 		Handler: func(context.Context) error { return nil },
 	}))
+}
+
+// TestSkipNotRecordedWhenDisabled 验证 RecordSkippedRuns=false 时跳过只打日志不落库。
+func TestSkipNotRecordedWhenDisabled(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	lock := &fakeLock{notLocked: true}
+	var count atomic.Int32
+	s, err := New(db, nil, nil, WithSeconds(true),
+		WithRecordSkippedRuns(false), WithLockFactory(&fakeLockFactory{lock: lock}))
+	require.NoError(t, err)
+	require.False(t, s.cfg.recordSkippedRuns())
+
+	require.NoError(t, s.Register(Task{
+		ID: "no-skip-record", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
+		Handler: func(context.Context) error { count.Add(1); return nil },
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	// 至少发生过两次跳过（抢锁次数即跳过次数）
+	require.Eventually(t, func() bool { return lock.lockCount.Load() >= 2 }, cronWaitTimeout, 20*time.Millisecond)
+	require.Zero(t, count.Load())
+	require.Empty(t, listTaskRuns(t, s, "no-skip-record"), "关闭记录后不应写入 skipped 行")
+}
+
+// TestAllowSkipRecordThrottle 直接验证节流计数：同任务同原因窗口内只允许一次，
+// 不同任务/不同原因各自独立；默认（未配置）每次都允许。
+func TestAllowSkipRecordThrottle(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithSkipRunMinInterval(time.Hour))
+	require.NoError(t, err)
+
+	rec, sup := s.allowSkipRecord("t1", "reason")
+	require.True(t, rec)
+	require.Zero(t, sup)
+
+	rec, sup = s.allowSkipRecord("t1", "reason")
+	require.False(t, rec)
+	require.Equal(t, 1, sup)
+
+	rec, sup = s.allowSkipRecord("t1", "reason")
+	require.False(t, rec)
+	require.Equal(t, 2, sup)
+
+	// 不同原因、不同任务分别计数
+	rec, _ = s.allowSkipRecord("t1", "other")
+	require.True(t, rec)
+	rec, _ = s.allowSkipRecord("t2", "reason")
+	require.True(t, rec)
+
+	// 默认配置：不节流，且默认记录 skipped
+	s2, err := New(db, nil, nil)
+	require.NoError(t, err)
+	require.True(t, s2.cfg.recordSkippedRuns())
+	rec, _ = s2.allowSkipRecord("t1", "reason")
+	require.True(t, rec)
+	rec, _ = s2.allowSkipRecord("t1", "reason")
+	require.True(t, rec)
+}
+
+// TestSkipRecordThrottledByInterval 验证节流生效时窗口内只落一行 skipped，
+// 且被抑制的次数可在内部状态中观测到；skipped 行补齐 end_at / duration_ms。
+func TestSkipRecordThrottledByInterval(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithSeconds(true),
+		WithSkipRunMinInterval(time.Hour),
+		WithLockFactory(&fakeLockFactory{lock: &fakeLock{notLocked: true}}))
+	require.NoError(t, err)
+	require.NoError(t, s.Register(Task{
+		ID: "throttle", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
+		Handler: func(context.Context) error { return nil },
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	// 等第二次同类跳过被抑制
+	require.Eventually(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for k, st := range s.skipAt {
+			if strings.Contains(k, "lock not acquired") && st.suppressed >= 1 {
+				return true
+			}
+		}
+		return false
+	}, cronWaitTimeout, 20*time.Millisecond)
+
+	runs := listTaskRuns(t, s, "throttle")
+	require.Len(t, runs, 1, "窗口内只应落一行 skipped")
+	require.Equal(t, TaskRunSkipped, runs[0].Status)
+	require.NotNil(t, runs[0].EndAt, "skipped 行应补齐 end_at")
+	require.Zero(t, runs[0].DurationMS)
+}
+
+// TestLifecycleCtxDeadline 验证生命周期 ctx 带超时：显式配置生效，
+// 零值 Config（未配置）回落到默认值，避免 DB 卡住时无界挂起。
+func TestLifecycleCtxDeadline(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithLifecycleTimeout(50*time.Millisecond))
+	require.NoError(t, err)
+	ctx, cancel := s.lifecycleCtx()
+	defer cancel()
+	dl, ok := ctx.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(50*time.Millisecond), dl, 30*time.Millisecond)
+
+	s2, err := New(db, &Config{}, nil)
+	require.NoError(t, err)
+	ctx2, cancel2 := s2.lifecycleCtx()
+	defer cancel2()
+	dl2, ok := ctx2.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(defaultLifecycleTimeout), dl2, time.Second)
+}
+
+// TestLifecycleTimeoutAbortsHangingDB 验证生命周期 DB 操作超时后返回包装错误，
+// 而不是无界挂起：让查询回调阻塞到 ctx 结束来模拟 DB 卡死。
+func TestLifecycleTimeoutAbortsHangingDB(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	// 先建好 Scheduler（其内部 AutoMigrate 不能经过下面的阻塞回调）
+	s, err := New(db, nil, nil, WithSeconds(true), WithLifecycleTimeout(100*time.Millisecond))
+	require.NoError(t, err)
+
+	db.Callback().Query().Before("gorm:query").Register("test:block_query", func(tx *gorm.DB) {
+		<-tx.Statement.Context.Done()
+		tx.AddError(tx.Statement.Context.Err())
+	})
+
+	start := time.Now()
+	rerr := s.Register(Task{
+		ID: "hang", TaskType: "report", Spec: "* * * * * *",
+		Handler: func(context.Context) error { return nil },
+	})
+	require.Error(t, rerr)
+	require.ErrorIs(t, rerr, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 5*time.Second, "应在超时后返回，而不是挂起")
 }

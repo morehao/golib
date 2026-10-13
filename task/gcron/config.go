@@ -10,6 +10,8 @@ import (
 const (
 	defaultRunCleanupInterval = time.Hour
 	defaultRunBatchSize       = 1000
+	// defaultLifecycleTimeout 生命周期 DB 操作（注册/启停/移除与兜底循环）的默认超时。
+	defaultLifecycleTimeout = 5 * time.Second
 )
 
 type Config struct {
@@ -37,9 +39,20 @@ type Config struct {
 	RunCleanupInterval time.Duration
 	// RunCleanupBatchSize 单批处理行数上限，<=0 时取默认值 1000。
 	RunCleanupBatchSize int
+
+	// LifecycleTimeout 生命周期 DB 操作（注册/启停/移除定义、内置兜底清理）的超时，
+	// <=0 时取默认值 5s；避免 DB 卡住时 Register/Disable/Enable/Remove 无界挂起。
+	LifecycleTimeout time.Duration
+	// RecordSkippedRuns 是否把"跳过"（防重叠、未抢到锁等）写入执行记录。
+	// nil 视为 true（保持既有行为）；显式设为 false 时只打日志不落库，避免高峰期写放大。
+	RecordSkippedRuns *bool
+	// SkipRunMinInterval >0 时，同一任务同一跳过原因在该间隔内只落一行 skipped 记录，
+	// 其余仅计数并打日志（默认 0：每次都写）。
+	SkipRunMinInterval time.Duration
 }
 
 func defaultConfig() *Config {
+	recordSkipped := true
 	return &Config{
 		WithSeconds:         false,
 		Location:            time.Local,
@@ -48,5 +61,12 @@ func defaultConfig() *Config {
 		AutoRenewal:         false,
 		RunCleanupInterval:  defaultRunCleanupInterval,
 		RunCleanupBatchSize: defaultRunBatchSize,
+		LifecycleTimeout:    defaultLifecycleTimeout,
+		RecordSkippedRuns:   &recordSkipped,
 	}
+}
+
+// recordSkippedRuns 返回是否记录 skipped 执行记录：未显式配置时默认为 true。
+func (c *Config) recordSkippedRuns() bool {
+	return c.RecordSkippedRuns == nil || *c.RecordSkippedRuns
 }
