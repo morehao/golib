@@ -512,7 +512,7 @@ func TestStartReapsStaleRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	stale := &CronTaskRun{ID: "stale-run", TaskID: "foo", StartAt: time.Now().Add(-2 * time.Hour), Status: TaskRunRunning}
-	require.NoError(t, s.GetStore().insertRun(context.Background(), stale))
+	require.NoError(t, s.store.insertRun(context.Background(), stale))
 
 	s.Start()
 	t.Cleanup(func() { _ = s.Stop(context.Background()) })
@@ -539,10 +539,10 @@ func TestStartCleansUpOldRuns(t *testing.T) {
 
 	ctx := context.Background()
 	old := time.Now().Add(-48 * time.Hour)
-	require.NoError(t, s.GetStore().insertRun(ctx, &CronTaskRun{
+	require.NoError(t, s.store.insertRun(ctx, &CronTaskRun{
 		ID: "old-run", TaskID: "foo", StartAt: old, CreatedAt: old, Status: TaskRunSuccess,
 	}))
-	require.NoError(t, s.GetStore().insertRun(ctx, &CronTaskRun{
+	require.NoError(t, s.store.insertRun(ctx, &CronTaskRun{
 		ID: "new-run", TaskID: "foo", StartAt: time.Now(), Status: TaskRunSuccess,
 	}))
 
@@ -935,4 +935,97 @@ func TestLifecycleTimeoutAbortsHangingDB(t *testing.T) {
 	require.Error(t, rerr)
 	require.ErrorIs(t, rerr, context.DeadlineExceeded)
 	require.Less(t, time.Since(start), 5*time.Second, "应在超时后返回，而不是挂起")
+}
+
+// TestTimedOutWithNilError 验证 handler 忽略 ctx 取消、睡过 timeout 后仍返回 nil 时，
+// 依然按 ctx 判为 timed_out 并写入可读原因（而不是被记成 success）。
+func TestTimedOutWithNilError(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithSeconds(true))
+	require.NoError(t, err)
+	require.NoError(t, s.Register(Task{
+		ID: "nil-timeout", TaskType: "report", Spec: "* * * * * *",
+		Timeout: 200 * time.Millisecond,
+		Handler: func(ctx context.Context) error {
+			time.Sleep(500 * time.Millisecond) // 故意不响应 ctx
+			return nil
+		},
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	var timedOut *CronTaskRun
+	require.Eventually(t, func() bool {
+		for _, r := range listTaskRuns(t, s, "nil-timeout") {
+			if r.Status == TaskRunTimedOut {
+				row := r
+				timedOut = &row
+				return true
+			}
+		}
+		return false
+	}, cronWaitTimeout, 20*time.Millisecond)
+
+	require.NotNil(t, timedOut)
+	require.Contains(t, timedOut.ErrorMsg, "exceeded timeout")
+	require.NotNil(t, timedOut.EndAt)
+}
+
+// TestPanicRunRecordsStack 验证 panic 被兜住并落库为 failed，且错误信息带调用栈。
+func TestPanicRunRecordsStack(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithSeconds(true))
+	require.NoError(t, err)
+	require.NoError(t, s.Register(Task{
+		ID: "panic-task", TaskType: "report", Spec: "* * * * * *",
+		Handler: func(context.Context) error { panic("boom") },
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	var failed *CronTaskRun
+	require.Eventually(t, func() bool {
+		for _, r := range listTaskRuns(t, s, "panic-task") {
+			if r.Status == TaskRunFailed {
+				row := r
+				failed = &row
+				return true
+			}
+		}
+		return false
+	}, cronWaitTimeout, 20*time.Millisecond)
+
+	require.NotNil(t, failed)
+	require.Contains(t, failed.ErrorMsg, "panic: boom")
+	require.Contains(t, failed.ErrorMsg, "goroutine", "错误信息应带调用栈")
+}
+
+// TestNewDoesNotMutateConfig 验证构造选项只作用于内部副本，不反向修改调用方的 Config，
+// 且 GetStore 的静态类型是可命名、可 mock 的 Store 接口。
+func TestNewDoesNotMutateConfig(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	cfg := &Config{}
+	s, err := New(db, cfg, nil, WithSeconds(true), WithLockTTL(3*time.Second), WithRecordSkippedRuns(false))
+	require.NoError(t, err)
+
+	require.False(t, cfg.WithSeconds, "选项不应写回调用方 Config")
+	require.Zero(t, cfg.LockTTL)
+	require.Nil(t, cfg.RecordSkippedRuns)
+	// 选项在实例上生效
+	require.True(t, s.cfg.WithSeconds)
+	require.Equal(t, 3*time.Second, s.cfg.LockTTL)
+
+	// GetStore 返回接口类型：外部可命名、可接收
+	var st Store = s.GetStore()
+	got, err := st.GetTaskByID(context.Background(), "absent")
+	require.NoError(t, err)
+	require.Nil(t, got)
 }

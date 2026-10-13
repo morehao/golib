@@ -75,7 +75,7 @@ func (CronTaskRun) TableName() string { return CronTaskRunTableName }
 type CronTaskCond struct {
 	gormdao.BaseCond
 	TaskType string
-	Status   string
+	Status   CronTaskStatus
 	BizType  string
 	BizID    string
 }
@@ -100,7 +100,7 @@ func (c *CronTaskCond) BuildCondition(db *gorm.DB, tableName string) {
 type CronTaskRunCond struct {
 	gormdao.BaseCond
 	TaskID string
-	Status string
+	Status CronTaskRunStatus
 }
 
 func (c *CronTaskRunCond) BuildCondition(db *gorm.DB, tableName string) {
