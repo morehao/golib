@@ -371,10 +371,11 @@ For usage examples, refer to [gtrace usage](gtrace/README.md)
 
 ### Features
 - Second-level cron expressions and custom timezone
-- Multi-instance distributed lock mutual exclusion (with optional auto-renewal)
+- Multi-instance distributed lock mutual exclusion (with optional auto-renewal; lock loss cancels the handler and records `lock_lost`)
 - Per-task execution timeout and in-process overlap prevention (gcron)
 - Retry, timeout, retention, and multi-queue priority
-- Automatic execution record persistence (idempotent re-registration on restart)
+- Automatic execution record persistence (idempotent re-registration on restart; re-registration never overwrites the stored `status`, so an operator `Disable` survives restarts)
+- Optional built-in stale-`running` reaper and run-record retention (`StaleRunningCutoff` / `RunRetention`, off by default)
 - Automatic TraceID/RequestID/RunID injection and logging (string primary key as task/run identifier)
 - Cross-process trace propagation
 - Graceful shutdown: `Client.Close`, `Server.ShutdownContext` (gasync), `Scheduler.Stop(ctx)` (gcron)

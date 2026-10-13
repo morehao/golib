@@ -325,9 +325,11 @@ if ok, err := lock.Lock(ctx); err != nil {
 
 ### 特性
 - 秒级 cron 表达式与自定义时区
-- 多实例分布式锁互斥（可自动续期）
+- 多实例分布式锁互斥（可自动续期；锁丢失会取消 handler 并记为 `lock_lost`）
+- 任务级执行超时与同实例防重叠（gcron）
 - 重试、超时、保留时长、多队列优先级
-- 执行记录自动落库
+- 执行记录自动落库（重启后重新注册幂等；重新注册**不覆盖**既有 `status`，运营侧 `Disable` 不会被重启抹掉）
+- 可选内置崩溃兜底与执行记录保留策略（`StaleRunningCutoff` / `RunRetention`，默认关闭）
 - 自动注入 TraceID、RequestID、RunID 与日志（字符串主键即任务/运行唯一标识）
 - 跨进程 trace 传递
 
