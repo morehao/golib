@@ -159,3 +159,46 @@ func TestCleanupRuns(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "r-new", rows[0].ID)
 }
+
+// TestUpsertTaskKeepsExistingStatus 验证 upsert 刷新定义字段但保留既有 status：
+// 重启重新注册不得抹掉运营侧的下线操作。
+func TestUpsertTaskKeepsExistingStatus(t *testing.T) {
+	s := newStoreForTest(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.upsertTask(ctx, &CronTask{ID: "foo", TaskType: "report", Spec: "*/5 * * * *", Status: CronTaskEnabled}))
+	require.NoError(t, s.updateTaskStatus(ctx, "foo", CronTaskDisabled))
+
+	// 模拟重启后重新注册：定义字段刷新，status 保持 disabled
+	require.NoError(t, s.upsertTask(ctx, &CronTask{ID: "foo", Name: "renamed", TaskType: "report", Spec: "*/2 * * * *", Status: CronTaskEnabled}))
+
+	got, err := s.GetTaskByID(ctx, "foo")
+	require.NoError(t, err)
+	require.Equal(t, CronTaskDisabled, got.Status)
+	require.Equal(t, "*/2 * * * *", got.Spec)
+	require.Equal(t, "renamed", got.Name)
+}
+
+// TestTaskStatusAndDeleteMissingRow 验证定义不存在（含已软删除）时
+// updateTaskStatus / DeleteTaskByID 返回 ErrTaskNotFound，且同状态重复更新幂等。
+func TestTaskStatusAndDeleteMissingRow(t *testing.T) {
+	s := newStoreForTest(t)
+	ctx := context.Background()
+
+	require.ErrorIs(t, s.updateTaskStatus(ctx, "nope", CronTaskDisabled), ErrTaskNotFound)
+	require.ErrorIs(t, s.DeleteTaskByID(ctx, "nope"), ErrTaskNotFound)
+
+	require.NoError(t, s.upsertTask(ctx, &CronTask{ID: "foo", TaskType: "report", Spec: "*/5 * * * *", Status: CronTaskEnabled}))
+	// 已是目标状态：幂等返回 nil（不依赖 RowsAffected，兼容 MySQL 无变化 UPDATE 报 0 行）
+	require.NoError(t, s.updateTaskStatus(ctx, "foo", CronTaskEnabled))
+	require.NoError(t, s.updateTaskStatus(ctx, "foo", CronTaskDisabled))
+
+	got, err := s.GetTaskByID(ctx, "foo")
+	require.NoError(t, err)
+	require.Equal(t, CronTaskDisabled, got.Status)
+
+	require.NoError(t, s.DeleteTaskByID(ctx, "foo"))
+	// 已软删除的行对上层等同于不存在
+	require.ErrorIs(t, s.DeleteTaskByID(ctx, "foo"), ErrTaskNotFound)
+	require.ErrorIs(t, s.updateTaskStatus(ctx, "foo", CronTaskEnabled), ErrTaskNotFound)
+}

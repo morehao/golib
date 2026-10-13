@@ -62,8 +62,8 @@ srv, err := gasync.NewServer(cfg, db, gasync.WithoutAutoMigrate())
 - 自动注入 TraceID、RequestID、RunID 与日志
 - 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`，超时记录为 timed_out）
 - 同实例防重叠：上一轮未结束时本轮跳过（记录 skipped，与分布式锁互补）
-- 注册幂等：同一任务 `ID` 已在 DB 中存在时自动 upsert 更新定义，进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
-- 运行时管理：`Disable` 暂停（定义保留）、`Enable` 恢复、`Remove` 移除（软删除定义并停止调度，可重新注册）
+- 注册幂等：同一任务 `ID` 已在 DB 中存在时自动 upsert 更新定义（**不覆盖既有 `status`**），进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
+- 运行时管理：`Disable` 暂停（定义保留）、`Enable` 恢复、`Remove` 移除（软删除定义并停止调度，可重新注册）；`status` 以 DB 为准，DB 为 `disabled` 的任务注册后只登记不调度，运营侧下线不会被重启抹掉
 - 执行记录兜底：`store.MarkStaleRunningAsFailed` 将崩溃残留的 running 记录标记为 failed；`store.CleanupRuns` 按保留策略清理旧记录
 - 任务需显式指定 `ID` 与 `TaskType`（均不允许为空）
 
@@ -140,6 +140,13 @@ s.Disable("demo-task") // 暂停：DB 标记 disabled，停止调度（定义保
 s.Enable("demo-task")  // 恢复：重新调度（沿用注册时的定义）
 s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后可重新注册同一 ID
 ```
+
+任务启停状态以 DB 为准：
+
+- 新任务以 `enabled` 创建；`Register` 对已存在的行只刷新定义字段（`biz_id` / `biz_type` / `name` / `task_type` / `spec` / `description`）并恢复软删除行，**不覆盖 `status`**，因此运营侧的 `Disable` 不会被进程重启抹掉。
+- DB 中为 `disabled` 的任务，`Register` 只登记不调度（启动时有 Warn 日志），需要 `Enable` 才恢复执行；被 `Remove` 掉的历史行在重新 `Register` 时按全新任务处理（状态重置为 `enabled`）。
+- 判定只发生在**本实例注册时**与**本地调用 `Disable` / `Enable` 时**：其他实例不会轮询 DB 状态，跨实例下线需要各实例重启或各自调用 `Disable` 才完全生效。
+- 对 DB 中不存在（含已软删除）的任务，`Disable` / `Enable` / `Remove` 返回 `ErrTaskNotFound`（可用 `errors.Is` 判定）。
 
 #### 注意事项
 
