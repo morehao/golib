@@ -106,6 +106,9 @@ func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Opt
 // Register 注册定时任务。
 // 幂等语义：同一任务（ID）在 DB 中已存在时执行 upsert 更新定义并重新调度，
 // 因此进程重启后重新注册同一任务是允许的；但同一进程内重复注册同一 ID 返回 ErrDuplicateTask。
+//
+// status 以 DB 为准：upsert 不覆盖既有状态；若既有状态为 disabled（运营侧下线过），
+// 本次注册只登记不调度，需显式 Enable 才恢复。新任务以 enabled 创建。
 // 注册后如需暂停/恢复/移除，请使用 Disable / Enable / Remove。
 func (s *Scheduler) Register(t Task) error {
 	if err := validateTask(t); err != nil {
@@ -169,6 +172,9 @@ func (s *Scheduler) Remove(taskID string) error {
 
 // addTaskLocked 在持有 s.mu 的情况下调度任务并同步 DB 状态。
 // upsert=true 时执行定义 upsert（Register 路径）；false 时仅更新状态为 enabled（Enable 路径）。
+//
+// status 以 DB 为准：upsert 不覆盖既有状态，回读到 disabled 时保留注册但不调度，
+// 避免进程重启把运营侧的 Disable 抹掉。
 func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 	enableLock := t.EnableLock || s.cfg.EnableLock
 	if enableLock && s.lockFactory == nil {
@@ -199,11 +205,37 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 	}
 
 	if upsert {
+		// 先看是否存在（含软删除行）：status 以 DB 为准，需要据此决定本次注册是否调度。
+		prev, perr := s.store.getTaskByIDUnscoped(context.Background(), t.ID)
+		if perr != nil {
+			s.cron.Remove(entryID)
+			return fmt.Errorf("gcron: load task %q before upsert: %w", t.ID, perr)
+		}
+
 		taskEntity := &CronTask{ID: t.ID, BizID: t.BizID, BizType: t.BizType, Name: t.Name, TaskType: t.TaskType, Spec: t.Spec, Description: t.Description, Status: CronTaskEnabled}
 		if uerr := s.store.upsertTask(context.Background(), taskEntity); uerr != nil {
 			// 落库失败回滚调度，避免内存态与 DB 不一致
 			s.cron.Remove(entryID)
 			return fmt.Errorf("gcron: upsert task %q: %w", t.ID, uerr)
+		}
+
+		if prev != nil && prev.DeletedAt.Valid {
+			// 恢复被 Remove 掉的历史行：视作全新注册，状态重置为 enabled 并正常调度。
+			if prev.Status != CronTaskEnabled {
+				if uerr := s.store.updateTaskStatus(context.Background(), t.ID, CronTaskEnabled); uerr != nil {
+					s.cron.Remove(entryID)
+					return fmt.Errorf("gcron: restore task %q: %w", t.ID, uerr)
+				}
+			}
+		} else if prev != nil && prev.Status == CronTaskDisabled {
+			// 运营侧已下线：本次注册只登记不调度，待显式 Enable 恢复。
+			s.cron.Remove(entryID)
+			s.logger.Warnw(context.Background(),
+				"gcron task registered as disabled, scheduling skipped; call Enable to resume",
+				gconstant.KeyTaskID, t.ID)
+			// 保留注册记录：Enable 需要据此重新 AddFunc（entryID 已失效，Entry 查询返回 0）
+			s.tasks[t.ID] = registeredTask{task: t, entryID: entryID}
+			return nil
 		}
 	} else if uerr := s.store.updateTaskStatus(context.Background(), t.ID, CronTaskEnabled); uerr != nil {
 		s.cron.Remove(entryID)

@@ -383,3 +383,79 @@ func TestTaskWithLockExecutes(t *testing.T) {
 	require.NoError(t, s.Stop(context.Background()))
 	require.GreaterOrEqual(t, count.Load(), int32(1))
 }
+
+// TestRegisterKeepsDisabledStatusAcrossRestart 验证 DB 中的 disabled 状态不会被重启后的注册覆盖，
+// 该任务也不会被调度；显式 Enable 后恢复调度。
+func TestRegisterKeepsDisabledStatusAcrossRestart(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s1, err := New(db, nil, nil, WithSeconds(true))
+	require.NoError(t, err)
+	require.NoError(t, s1.Register(Task{
+		ID: "disabled-task", TaskType: "report", Spec: "* * * * * *",
+		Handler: func(context.Context) error { return nil },
+	}))
+	require.NoError(t, s1.Disable("disabled-task"))
+
+	// 模拟重启：新进程重新注册同一任务
+	var count atomic.Int32
+	s2, err := New(db, nil, nil, WithSeconds(true))
+	require.NoError(t, err)
+	require.NoError(t, s2.Register(Task{
+		ID: "disabled-task", TaskType: "report", Spec: "* * * * * *",
+		Handler: func(context.Context) error { count.Add(1); return nil },
+	}))
+
+	got, err := s2.GetStore().GetTaskByID(context.Background(), "disabled-task")
+	require.NoError(t, err)
+	require.Equal(t, CronTaskDisabled, got.Status, "重启注册不得覆盖运营侧下线状态")
+
+	s2.Start()
+	time.Sleep(1500 * time.Millisecond)
+	require.NoError(t, s2.Stop(context.Background()))
+	require.Zero(t, count.Load(), "disabled 任务不应被调度")
+
+	// Enable：恢复调度
+	require.NoError(t, s2.Enable("disabled-task"))
+	got, err = s2.GetStore().GetTaskByID(context.Background(), "disabled-task")
+	require.NoError(t, err)
+	require.Equal(t, CronTaskEnabled, got.Status)
+
+	s2.Start()
+	t.Cleanup(func() { _ = s2.Stop(context.Background()) })
+	require.Eventually(t, func() bool { return count.Load() >= 1 }, cronWaitTimeout, 20*time.Millisecond)
+}
+
+// TestRegisterAfterRemoveResetsStatus 验证被 Remove 的历史行重新注册时按全新任务处理：
+// 即便移除前是 disabled，也应重置为 enabled 并真正被调度（否则会出现"注册成功但永远不跑"）。
+func TestRegisterAfterRemoveResetsStatus(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	var count atomic.Int32
+	s, err := New(db, nil, nil, WithSeconds(true))
+	require.NoError(t, err)
+
+	register := func() Task {
+		return Task{
+			ID: "revive", TaskType: "report", Spec: "* * * * * *",
+			Handler: func(context.Context) error { count.Add(1); return nil },
+		}
+	}
+
+	require.NoError(t, s.Register(register()))
+	require.NoError(t, s.Disable("revive"))
+	require.NoError(t, s.Remove("revive"))
+
+	// 重新注册：软删除行被恢复，status 重置为 enabled
+	require.NoError(t, s.Register(register()))
+	got, err := s.GetStore().GetTaskByID(context.Background(), "revive")
+	require.NoError(t, err)
+	require.Equal(t, CronTaskEnabled, got.Status)
+	require.False(t, got.DeletedAt.Valid)
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+	require.Eventually(t, func() bool { return count.Load() >= 1 }, cronWaitTimeout, 20*time.Millisecond)
+}
