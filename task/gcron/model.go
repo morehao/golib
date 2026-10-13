@@ -28,6 +28,8 @@ const (
 	TaskRunSkipped CronTaskRunStatus = "skipped"
 	// TaskRunTimedOut 单次执行超时（handler 超时被 ctx 取消）。
 	TaskRunTimedOut CronTaskRunStatus = "timed_out"
+	// TaskRunLockLost 执行期间分布式锁丢失（续期失败/锁过期），handler 已被取消。
+	TaskRunLockLost CronTaskRunStatus = "lock_lost"
 )
 
 // CronTask 定时任务定义。主键 id 即任务唯一标识，由业务方注册时指定

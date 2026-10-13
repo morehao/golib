@@ -19,4 +19,7 @@ var (
 	ErrNilDB = errors.New("gcron: db is nil")
 	// ErrTaskNotFound 任务未注册（Remove/Enable/Disable 操作不存在的任务）。
 	ErrTaskNotFound = errors.New("gcron: task not registered")
+	// ErrLockTTLTooShort 开启互斥且未自动续期时，单次执行超时大于锁 TTL
+	// （仅 Config.StrictLockTTL=true 时拒绝注册，否则只告警）。
+	ErrLockTTLTooShort = errors.New("gcron: task timeout exceeds lock ttl without auto renewal")
 )

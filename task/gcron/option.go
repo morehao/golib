@@ -85,3 +85,9 @@ func WithRunCleanupInterval(d time.Duration) Option {
 func WithRunCleanupBatchSize(n int) Option {
 	return optionFunc(func(o *newOptions) { o.RunCleanupBatchSize = n })
 }
+
+// WithStrictLockTTL 打开严格锁 TTL 校验：开启互斥且未自动续期时，
+// Timeout > LockTTL 的任务注册直接失败（默认 false 时仅告警）。
+func WithStrictLockTTL(v bool) Option {
+	return optionFunc(func(o *newOptions) { o.StrictLockTTL = v })
+}

@@ -2,6 +2,8 @@ package gcron
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,16 +23,55 @@ import (
 const cronWaitTimeout = 15 * time.Second
 
 // fakeLock / fakeLockFactory 用于在单测中模拟分布式锁，避免依赖真实 Redis。
-type fakeLock struct{}
+//
+// 零值语义为"抢到锁、续期正常"，保持既有用例不受影响；负向场景按需设置字段：
+// notLocked 模拟竞争未获取，lockErr 模拟存储故障，renewalFailed 触发锁丢失通知
+// （经 DistLock 的自动续期循环 close(Lost())，比直接注入 channel 更贴近真实路径）。
+type fakeLock struct {
+	notLocked     bool
+	lockErr       error
+	renewalFailed bool
 
-func (f *fakeLock) Lock(ctx context.Context) (bool, error)    { return true, nil }
-func (f *fakeLock) Unlock(ctx context.Context) (bool, error)  { return true, nil }
-func (f *fakeLock) Renewal(ctx context.Context) (bool, error) { return true, nil }
-func (f *fakeLock) Owner() string                             { return "fake" }
+	lockCount   atomic.Int32
+	unlockCount atomic.Int32
+}
 
-type fakeLockFactory struct{}
+func (f *fakeLock) Lock(ctx context.Context) (bool, error) {
+	if f.lockErr != nil {
+		return false, f.lockErr
+	}
+	f.lockCount.Add(1)
+	return !f.notLocked, nil
+}
+
+func (f *fakeLock) Unlock(ctx context.Context) (bool, error) {
+	f.unlockCount.Add(1)
+	return true, nil
+}
+
+func (f *fakeLock) Renewal(ctx context.Context) (bool, error) {
+	if f.renewalFailed {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (f *fakeLock) Owner() string { return "fake" }
+
+// fakeLockFactory 每次 NewLock 返回同一个替身（便于断言加解锁次数）；
+// lock 为 nil 时返回零值替身（抢到锁），newErr 用于模拟锁工厂故障。
+type fakeLockFactory struct {
+	lock   *fakeLock
+	newErr error
+}
 
 func (f *fakeLockFactory) NewLock(config distlock.Config) (distlock.Lock, error) {
+	if f.newErr != nil {
+		return nil, f.newErr
+	}
+	if f.lock != nil {
+		return f.lock, nil
+	}
 	return &fakeLock{}, nil
 }
 
@@ -547,4 +588,202 @@ func TestMaintenanceLifecycle(t *testing.T) {
 	s.Start()
 	require.NotNil(t, s.maintainStop)
 	require.NoError(t, s.Stop(context.Background()))
+}
+
+// listTaskRuns 读取指定任务的执行记录，供锁相关用例断言 skipped / lock_lost 落库。
+func listTaskRuns(t *testing.T, s *Scheduler, taskID string) []CronTaskRun {
+	t.Helper()
+	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskID: taskID})
+	require.NoError(t, err)
+	return runs
+}
+
+func hasRunLike(runs []CronTaskRun, status CronTaskRunStatus, msgPart string) bool {
+	for _, r := range runs {
+		if r.Status == status && strings.Contains(r.ErrorMsg, msgPart) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestOverlapCheckedBeforeLock 验证本地防重叠发生在抢锁之前：
+// 上一轮未结束时本轮不再抢锁（否则抢到即释放会把锁让出去，扩大其他实例的并发窗口）。
+func TestOverlapCheckedBeforeLock(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	lock := &fakeLock{}
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
+
+	s, err := New(db, nil, nil, WithSeconds(true), WithLockFactory(&fakeLockFactory{lock: lock}))
+	require.NoError(t, err)
+	require.NoError(t, s.Register(Task{
+		ID: "overlap-lock", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
+		Handler: func(ctx context.Context) error {
+			once.Do(func() { close(started) })
+			<-release
+			return nil
+		},
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	select {
+	case <-started:
+	case <-time.After(cronWaitTimeout):
+		t.Fatal("handler did not start")
+	}
+
+	// 至少还有一个 tick 发生：它应在抢锁前被本地防重叠拦下
+	require.Eventually(t, func() bool {
+		return hasRunLike(listTaskRuns(t, s, "overlap-lock"), TaskRunSkipped, "previous run still in progress")
+	}, cronWaitTimeout, 20*time.Millisecond)
+
+	require.Equal(t, int32(1), lock.lockCount.Load(), "重叠加持的那一轮不应再抢锁")
+	require.Zero(t, lock.unlockCount.Load(), "首轮仍在执行，锁不应被释放")
+
+	close(release)
+	require.Eventually(t, func() bool { return lock.unlockCount.Load() == 1 }, cronWaitTimeout, 20*time.Millisecond)
+}
+
+// TestLockNotAcquiredRecordsSkipped 验证"竞争未获取"记录 skipped 且不执行 handler。
+func TestLockNotAcquiredRecordsSkipped(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	var count atomic.Int32
+	s, err := New(db, nil, nil, WithSeconds(true),
+		WithLockFactory(&fakeLockFactory{lock: &fakeLock{notLocked: true}}))
+	require.NoError(t, err)
+	require.NoError(t, s.Register(Task{
+		ID: "lock-busy", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
+		Handler: func(context.Context) error { count.Add(1); return nil },
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool {
+		return hasRunLike(listTaskRuns(t, s, "lock-busy"), TaskRunSkipped, "lock not acquired")
+	}, cronWaitTimeout, 20*time.Millisecond)
+	require.Zero(t, count.Load(), "未抢到锁时不应执行 handler")
+}
+
+// TestLockErrorRecordsSkipped 验证锁存储故障（Lock 返回 error）与竞争未获取区分记录。
+func TestLockErrorRecordsSkipped(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	var count atomic.Int32
+	s, err := New(db, nil, nil, WithSeconds(true),
+		WithLockFactory(&fakeLockFactory{lock: &fakeLock{lockErr: errors.New("redis unavailable")}}))
+	require.NoError(t, err)
+	require.NoError(t, s.Register(Task{
+		ID: "lock-err", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
+		Handler: func(context.Context) error { count.Add(1); return nil },
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool {
+		return hasRunLike(listTaskRuns(t, s, "lock-err"), TaskRunSkipped, "lock store error")
+	}, cronWaitTimeout, 20*time.Millisecond)
+	require.Zero(t, count.Load())
+}
+
+// TestLockCreateErrorRecordsSkipped 验证锁工厂故障（NewLock 返回 error）记录 skipped。
+func TestLockCreateErrorRecordsSkipped(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	var count atomic.Int32
+	s, err := New(db, nil, nil, WithSeconds(true),
+		WithLockFactory(&fakeLockFactory{newErr: errors.New("factory unavailable")}))
+	require.NoError(t, err)
+	require.NoError(t, s.Register(Task{
+		ID: "lock-new-err", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
+		Handler: func(context.Context) error { count.Add(1); return nil },
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool {
+		return hasRunLike(listTaskRuns(t, s, "lock-new-err"), TaskRunSkipped, "lock create error")
+	}, cronWaitTimeout, 20*time.Millisecond)
+	require.Zero(t, count.Load())
+}
+
+// TestLockLostCancelsHandlerAndRecordsStatus 验证锁丢失（自动续期失败）时：
+// 立即取消 handler 的 ctx，并把执行记录为 lock_lost 而不是普通失败。
+func TestLockLostCancelsHandlerAndRecordsStatus(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithSeconds(true),
+		WithLockFactory(&fakeLockFactory{lock: &fakeLock{renewalFailed: true}}))
+	require.NoError(t, err)
+
+	handlerDone := make(chan struct{})
+	var once sync.Once
+	require.NoError(t, s.Register(Task{
+		ID: "lock-lost", TaskType: "report", Spec: "* * * * * *",
+		EnableLock: true, AutoRenewal: true, LockTTL: 300 * time.Millisecond,
+		Handler: func(ctx context.Context) error {
+			<-ctx.Done() // 正常情况下一直阻塞，直到锁丢失取消 ctx
+			once.Do(func() { close(handlerDone) })
+			return ctx.Err()
+		},
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	select {
+	case <-handlerDone:
+	case <-time.After(cronWaitTimeout):
+		t.Fatal("锁丢失后 handler 未被取消")
+	}
+
+	require.Eventually(t, func() bool {
+		for _, r := range listTaskRuns(t, s, "lock-lost") {
+			if r.Status == TaskRunLockLost {
+				return true
+			}
+		}
+		return false
+	}, cronWaitTimeout, 20*time.Millisecond)
+}
+
+// TestStrictLockTTLRejectsRegister 验证严格模式下 Timeout > LockTTL 且未自动续期的任务
+// 注册失败（ErrLockTTLTooShort）且不落库；开启自动续期后放行。
+func TestStrictLockTTLRejectsRegister(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithSeconds(true), WithLockFactory(&fakeLockFactory{}), WithStrictLockTTL(true))
+	require.NoError(t, err)
+
+	rerr := s.Register(Task{
+		ID: "ttl-too-short", TaskType: "report", Spec: "* * * * * *",
+		EnableLock: true, LockTTL: time.Minute, Timeout: 2 * time.Minute,
+		Handler: func(context.Context) error { return nil },
+	})
+	require.ErrorIs(t, rerr, ErrLockTTLTooShort)
+
+	got, qerr := s.GetStore().GetTaskByID(context.Background(), "ttl-too-short")
+	require.NoError(t, qerr)
+	require.Nil(t, got, "校验失败不应落库")
+
+	// 开启自动续期后不再受 TTL 限制
+	require.NoError(t, s.Register(Task{
+		ID: "ttl-ok", TaskType: "report", Spec: "* * * * * *",
+		EnableLock: true, AutoRenewal: true, LockTTL: time.Minute, Timeout: 2 * time.Minute,
+		Handler: func(context.Context) error { return nil },
+	}))
 }

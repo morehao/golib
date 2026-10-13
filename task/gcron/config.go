@@ -23,6 +23,10 @@ type Config struct {
 	// LockFactory 分布式锁工厂（推荐通过 WithLockFactory 配置；New 的位置参数为兼容旧签名）。
 	LockFactory distlock.LockFactory
 
+	// StrictLockTTL 为 true 时，开启互斥且未自动续期的任务若 Timeout > LockTTL，
+	// Register 直接返回 ErrLockTTLTooShort（默认 false：只输出告警，保持兼容）。
+	StrictLockTTL bool
+
 	// StaleRunningCutoff >0 时启用崩溃兜底：Start 后立即执行一次，并按 RunCleanupInterval
 	// 周期把 start_at 早于 now-cutoff 仍处于 running 的执行记录标记为 failed。
 	// 必须大于最长任务耗时，否则仍在运行的长任务会被误标（其 finishRun 会覆盖回真实结果）。
