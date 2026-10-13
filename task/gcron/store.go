@@ -10,17 +10,23 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// maxCleanupBatches 单次 CleanupRuns 的批次数上限，避免单次调用无限循环。
+const maxCleanupBatches = 1000
+
 type store struct {
 	dbGetter gormdao.DBGetter
 	taskDao  *gormdao.Dao[CronTask, []CronTask, string]
 	runDao   *gormdao.Dao[CronTaskRun, []CronTaskRun, string]
+	// batchSize reap / 清理单批行数上限（来自 Config.RunCleanupBatchSize）。
+	batchSize int
 }
 
 func newStore(dbGetter gormdao.DBGetter) *store {
 	return &store{
-		dbGetter: dbGetter,
-		taskDao:  gormdao.NewDao[CronTask, []CronTask, string](CronTaskTableName, "gcron_task", dbGetter),
-		runDao:   gormdao.NewDao[CronTaskRun, []CronTaskRun, string](CronTaskRunTableName, "gcron_run", dbGetter, gormdao.WithoutSoftDelete()),
+		dbGetter:  dbGetter,
+		taskDao:   gormdao.NewDao[CronTask, []CronTask, string](CronTaskTableName, "gcron_task", dbGetter),
+		runDao:    gormdao.NewDao[CronTaskRun, []CronTaskRun, string](CronTaskRunTableName, "gcron_run", dbGetter, gormdao.WithoutSoftDelete()),
+		batchSize: defaultRunBatchSize,
 	}
 }
 
@@ -87,33 +93,78 @@ func (s *store) getTaskByIDUnscoped(ctx context.Context, taskID string) (*CronTa
 // MarkStaleRunningAsFailed 将超过 cutoff 仍处于 running 的执行记录标记为 failed，
 // 作为进程崩溃/断电的兜底，避免执行状态永久停留在运行中。
 // taskID 非空时仅清理指定任务。
+//
+// 单次最多处理 s.batchSize 行（reap 是周期性任务，积压会在后续轮次继续消化）；
+// 逐行更新是为了按 start_at 补齐 duration_ms——批量 UPDATE 无法跨方言计算耗时差。
 func (s *store) MarkStaleRunningAsFailed(ctx context.Context, cutoff time.Duration, taskID string) (int64, error) {
 	if cutoff <= 0 {
 		return 0, nil
 	}
-	db := s.dbGetter(ctx).Model(&CronTaskRun{}).Table(CronTaskRunTableName).
+	q := s.dbGetter(ctx).Model(&CronTaskRun{}).Table(CronTaskRunTableName).
+		Select("id", "start_at").
 		Where("status = ?", TaskRunRunning).
-		Where("start_at < ?", time.Now().Add(-cutoff))
+		Where("start_at < ?", time.Now().Add(-cutoff)).
+		Limit(s.batchSize)
 	if taskID != "" {
-		db = db.Where("task_id = ?", taskID)
+		q = q.Where("task_id = ?", taskID)
 	}
-	res := db.Updates(map[string]any{
-		"status":    TaskRunFailed,
-		"end_at":    time.Now(),
-		"error_msg": "stale running record marked as failed by reaper",
-	})
-	return res.RowsAffected, res.Error
+	var stale []CronTaskRun
+	if err := q.Find(&stale).Error; err != nil {
+		return 0, err
+	}
+
+	now := time.Now()
+	var affected int64
+	for i := range stale {
+		res := s.dbGetter(ctx).Model(&CronTaskRun{}).Table(CronTaskRunTableName).
+			Where("id = ?", stale[i].ID).
+			// 二次确认仍为 running：并发场景下该行可能已被 finishRun 收尾
+			Where("status = ?", TaskRunRunning).
+			Updates(map[string]any{
+				"status":      TaskRunFailed,
+				"end_at":      now,
+				"duration_ms": now.Sub(stale[i].StartAt).Milliseconds(),
+				"error_msg":   "stale running record marked as failed by reaper",
+			})
+		if res.Error != nil {
+			return affected, res.Error
+		}
+		affected += res.RowsAffected
+	}
+	return affected, nil
 }
 
 // CleanupRuns 删除 before 之前创建的旧执行记录（保留策略清理）。
 // taskID 非空时仅清理指定任务。
+//
+// 分批删除（每批 s.batchSize 行，最多 maxCleanupBatches 批），避免大表上一次 DELETE
+// 长时间持锁；用"先查 id 再按 id 删"而非 DELETE ... LIMIT——后者在 PostgreSQL 上非法。
 func (s *store) CleanupRuns(ctx context.Context, before time.Time, taskID string) (int64, error) {
-	db := s.dbGetter(ctx).Table(CronTaskRunTableName).Where("created_at < ?", before)
-	if taskID != "" {
-		db = db.Where("task_id = ?", taskID)
+	var total int64
+	for i := 0; i < maxCleanupBatches; i++ {
+		idQuery := s.dbGetter(ctx).Model(&CronTaskRun{}).Table(CronTaskRunTableName).
+			Where("created_at < ?", before).
+			Limit(s.batchSize)
+		if taskID != "" {
+			idQuery = idQuery.Where("task_id = ?", taskID)
+		}
+		var ids []string
+		if err := idQuery.Pluck("id", &ids).Error; err != nil {
+			return total, err
+		}
+		if len(ids) == 0 {
+			return total, nil
+		}
+		res := s.dbGetter(ctx).Table(CronTaskRunTableName).Where("id IN ?", ids).Delete(&CronTaskRun{})
+		if res.Error != nil {
+			return total, res.Error
+		}
+		total += res.RowsAffected
+		if len(ids) < s.batchSize {
+			return total, nil
+		}
 	}
-	res := db.Delete(&CronTaskRun{})
-	return res.RowsAffected, res.Error
+	return total, nil
 }
 
 func (s *store) updateRunTimes(ctx context.Context, taskID string, lastRun, nextRun *time.Time) error {

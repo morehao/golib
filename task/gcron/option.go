@@ -63,3 +63,25 @@ func WithAutoRenewal(v bool) Option {
 func WithTimeout(d time.Duration) Option {
 	return optionFunc(func(o *newOptions) { o.Timeout = d })
 }
+
+// WithStaleRunningCutoff 启用崩溃兜底（>0 生效）：Start 后立即执行一次，并按
+// RunCleanupInterval 周期把 start_at 早于 now-cutoff 仍 running 的记录标记为 failed。
+// cutoff 必须大于最长任务耗时。
+func WithStaleRunningCutoff(d time.Duration) Option {
+	return optionFunc(func(o *newOptions) { o.StaleRunningCutoff = d })
+}
+
+// WithRunRetention 启用执行记录保留策略（>0 生效）：删除 created_at 早于 now-d 的记录。
+func WithRunRetention(d time.Duration) Option {
+	return optionFunc(func(o *newOptions) { o.RunRetention = d })
+}
+
+// WithRunCleanupInterval 配置兜底/清理循环的执行周期（<=0 时取默认值 1h）。
+func WithRunCleanupInterval(d time.Duration) Option {
+	return optionFunc(func(o *newOptions) { o.RunCleanupInterval = d })
+}
+
+// WithRunCleanupBatchSize 配置单批处理行数上限（<=0 时取默认值 1000）。
+func WithRunCleanupBatchSize(n int) Option {
+	return optionFunc(func(o *newOptions) { o.RunCleanupBatchSize = n })
+}

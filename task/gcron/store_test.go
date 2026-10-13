@@ -2,6 +2,7 @@ package gcron
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -122,6 +123,8 @@ func TestMarkStaleRunningAsFailed(t *testing.T) {
 	require.Equal(t, TaskRunFailed, got.Status)
 	require.NotNil(t, got.EndAt)
 	require.NotEmpty(t, got.ErrorMsg)
+	// 耗时按 start_at 补齐，避免统计里出现 0ms 的"秒失败"
+	require.Greater(t, got.DurationMS, int64(0))
 
 	// 新鲜记录不受影响
 	got2, err := s.GetRunByID(context.Background(), fresh.ID)
@@ -201,4 +204,56 @@ func TestTaskStatusAndDeleteMissingRow(t *testing.T) {
 	// 已软删除的行对上层等同于不存在
 	require.ErrorIs(t, s.DeleteTaskByID(ctx, "foo"), ErrTaskNotFound)
 	require.ErrorIs(t, s.updateTaskStatus(ctx, "foo", CronTaskEnabled), ErrTaskNotFound)
+}
+
+// TestCleanupRunsBatched 验证分批删除：待删行数大于单批上限时循环删除直到清空。
+func TestCleanupRunsBatched(t *testing.T) {
+	s := newStoreForTest(t)
+	s.batchSize = 100 // 缩小批量，用小数据量覆盖多批
+	ctx := context.Background()
+
+	old := time.Now().Add(-48 * time.Hour)
+	const total = 250
+	rows := make([]CronTaskRun, 0, total)
+	for i := 0; i < total; i++ {
+		rows = append(rows, CronTaskRun{
+			ID: fmt.Sprintf("r-%03d", i), TaskID: "foo",
+			StartAt: old, CreatedAt: old, Status: TaskRunSuccess,
+		})
+	}
+	require.NoError(t, s.dbGetter(ctx).CreateInBatches(&rows, 50).Error)
+
+	fresh := &CronTaskRun{ID: "r-fresh", TaskID: "foo", StartAt: time.Now(), Status: TaskRunSuccess}
+	require.NoError(t, s.insertRun(ctx, fresh))
+
+	n, err := s.CleanupRuns(ctx, time.Now().Add(-24*time.Hour), "")
+	require.NoError(t, err)
+	require.Equal(t, int64(total), n, "分批删除应清空全部过期记录")
+
+	list, _, err := s.ListRun(ctx, &CronTaskRunCond{})
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "r-fresh", list[0].ID)
+}
+
+// TestMarkStaleRunningRespectsBatch 验证单次 reap 最多处理 batchSize 行（积压留给后续轮次）。
+func TestMarkStaleRunningRespectsBatch(t *testing.T) {
+	s := newStoreForTest(t)
+	s.batchSize = 3
+	ctx := context.Background()
+
+	old := time.Now().Add(-2 * time.Hour)
+	for i := 0; i < 5; i++ {
+		require.NoError(t, s.insertRun(ctx, &CronTaskRun{
+			ID: fmt.Sprintf("stale-%d", i), TaskID: "foo", StartAt: old, Status: TaskRunRunning,
+		}))
+	}
+
+	n, err := s.MarkStaleRunningAsFailed(ctx, time.Hour, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(3), n, "单次只处理一批")
+
+	n, err = s.MarkStaleRunningAsFailed(ctx, time.Hour, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), n, "剩余积压由下一轮消化")
 }

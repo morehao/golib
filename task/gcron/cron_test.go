@@ -459,3 +459,92 @@ func TestRegisterAfterRemoveResetsStatus(t *testing.T) {
 	t.Cleanup(func() { _ = s.Stop(context.Background()) })
 	require.Eventually(t, func() bool { return count.Load() >= 1 }, cronWaitTimeout, 20*time.Millisecond)
 }
+
+// TestStartReapsStaleRunning 验证配置 StaleRunningCutoff 后 Start 会立即回收崩溃残留的
+// running 记录（并按 start_at 补齐 duration_ms），无需业务再另起定时任务。
+func TestStartReapsStaleRunning(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithStaleRunningCutoff(time.Hour))
+	require.NoError(t, err)
+
+	stale := &CronTaskRun{ID: "stale-run", TaskID: "foo", StartAt: time.Now().Add(-2 * time.Hour), Status: TaskRunRunning}
+	require.NoError(t, s.GetStore().insertRun(context.Background(), stale))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool {
+		got, err := s.GetStore().GetRunByID(context.Background(), "stale-run")
+		return err == nil && got != nil && got.Status == TaskRunFailed
+	}, cronWaitTimeout, 20*time.Millisecond)
+
+	got, err := s.GetStore().GetRunByID(context.Background(), "stale-run")
+	require.NoError(t, err)
+	require.NotNil(t, got.EndAt)
+	require.Greater(t, got.DurationMS, int64(0))
+	require.NotEmpty(t, got.ErrorMsg)
+}
+
+// TestStartCleansUpOldRuns 验证配置 RunRetention 后 Start 会清理过期执行记录，未过期的不动。
+func TestStartCleansUpOldRuns(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	s, err := New(db, nil, nil, WithRunRetention(24*time.Hour))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	old := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, s.GetStore().insertRun(ctx, &CronTaskRun{
+		ID: "old-run", TaskID: "foo", StartAt: old, CreatedAt: old, Status: TaskRunSuccess,
+	}))
+	require.NoError(t, s.GetStore().insertRun(ctx, &CronTaskRun{
+		ID: "new-run", TaskID: "foo", StartAt: time.Now(), Status: TaskRunSuccess,
+	}))
+
+	s.Start()
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool {
+		got, err := s.GetStore().GetRunByID(ctx, "old-run")
+		return err == nil && got == nil
+	}, cronWaitTimeout, 20*time.Millisecond)
+
+	got, err := s.GetStore().GetRunByID(ctx, "new-run")
+	require.NoError(t, err)
+	require.NotNil(t, got, "未过期记录不应被清理")
+}
+
+// TestMaintenanceLifecycle 验证内置兜底/清理循环的启停状态机：未配置不启动，
+// 配置后 Start 启动且不重复启动，Stop 停止且幂等。
+func TestMaintenanceLifecycle(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	// 未配置开关：不启动循环
+	plain, err := New(db, nil, nil)
+	require.NoError(t, err)
+	plain.Start()
+	require.Nil(t, plain.maintainStop, "未配置开关时不应启动兜底循环")
+	require.NoError(t, plain.Stop(context.Background()))
+
+	// 配置开关：Start 启动，重复 Start 不重复启动
+	s, err := New(db, nil, nil, WithRunRetention(time.Hour), WithRunCleanupInterval(time.Hour))
+	require.NoError(t, err)
+	s.Start()
+	require.NotNil(t, s.maintainStop)
+	firstStop := s.maintainStop
+	s.Start()
+	require.Equal(t, firstStop, s.maintainStop, "重复 Start 不应重启循环")
+
+	require.NoError(t, s.Stop(context.Background()))
+	require.Nil(t, s.maintainStop, "Stop 后循环应已停止")
+	require.NoError(t, s.Stop(context.Background()), "Stop 应幂等")
+
+	// 停止后再次 Start 可恢复
+	s.Start()
+	require.NotNil(t, s.maintainStop)
+	require.NoError(t, s.Stop(context.Background()))
+}
