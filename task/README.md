@@ -64,7 +64,7 @@ srv, err := gasync.NewServer(cfg, db, gasync.WithoutAutoMigrate())
 - 同实例防重叠：上一轮未结束时本轮跳过（记录 skipped，与分布式锁互补）
 - 注册幂等：同一任务 `ID` 已在 DB 中存在时自动 upsert 更新定义（**不覆盖既有 `status`**），进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
 - 运行时管理：`Disable` 暂停（定义保留）、`Enable` 恢复、`Remove` 移除（软删除定义并停止调度，可重新注册）；`status` 以 DB 为准，DB 为 `disabled` 的任务注册后只登记不调度，运营侧下线不会被重启抹掉
-- 执行记录兜底：`store.MarkStaleRunningAsFailed` 将崩溃残留的 running 记录标记为 failed；`store.CleanupRuns` 按保留策略清理旧记录
+- 执行记录兜底：配置 `Config.StaleRunningCutoff` / `Config.RunRetention` 后，`Start` 会启动内置循环（启动即跑一次，之后按 `RunCleanupInterval` 周期执行）回收崩溃残留的 `running` 记录、清理过期执行记录；也可继续手动调用 `store.MarkStaleRunningAsFailed` / `store.CleanupRuns`
 - 任务需显式指定 `ID` 与 `TaskType`（均不允许为空）
 
 ### 数据表
@@ -152,7 +152,8 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 - **超时依赖 handler 配合 ctx**：`Timeout` 通过 `context.WithTimeout` 取消 handler 的 ctx，但无法强杀忽略 ctx 的 handler（如泄漏的后台 goroutine）。若 handler 不响应 ctx 取消，超时后任务仍可能继续在后台执行，且防重叠标记已复位，下一轮会再次触发。handler 内应监听 `ctx.Done()`。执行记录中，超时（ctx 到期后 handler 返回错误）记为 `timed_out`，与普通失败 `failed` 区分。
 - **锁自动续期**：默认 `AutoRenewal=false`、`LockTTL=60s`。handler 执行超过 TTL 且未开启自动续期时，锁会过期，其他实例可能并发执行同一任务。开启互斥且 handler 可能长时间运行时，建议设置 `AutoRenewal: true`（注册时会输出告警日志提示）。
-- **崩溃兜底**：进程被强杀时执行记录会停留在 `running`。可通过 `store.MarkStaleRunningAsFailed(ctx, cutoff, taskCode)` 将超过 cutoff 仍为 running 的记录标记为 failed（建议由独立定时任务调用）；`store.CleanupRuns(ctx, before, taskCode)` 可删除 `before` 之前的旧执行记录，控制表增长。
+- **崩溃兜底与记录保留**：进程被强杀时执行记录会停留在 `running`。默认不启用回收（`StaleRunningCutoff=0`、`RunRetention=0`），配置后由 `Start` 启动内置循环执行：`StaleRunningCutoff` 把超过该时长仍为 `running` 的记录标记为 `failed`（并按 `start_at` 补齐 `duration_ms`），`RunRetention` 删除 `created_at` 早于 `now-RunRetention` 的记录，周期由 `RunCleanupInterval` 控制（默认 1h），单批行数由 `RunCleanupBatchSize` 控制（默认 1000，清理会分批循环直到清空，回收每轮最多处理一批）。
+  `StaleRunningCutoff` **必须大于最长任务耗时**：长任务超过该值会被误标 `failed`（其 `finishRun` 随后会覆盖回真实结果）。也可以不配置开关，自行调用 `store.MarkStaleRunningAsFailed` / `store.CleanupRuns`。
 
 ## gasync
 

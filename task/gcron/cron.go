@@ -55,6 +55,10 @@ type Scheduler struct {
 
 	mu    sync.Mutex
 	tasks map[string]registeredTask
+
+	// 内置兜底/清理循环（仅当配置了 StaleRunningCutoff / RunRetention 时启动）。
+	maintainStop chan struct{}
+	maintainDone chan struct{}
 }
 
 func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Option) (*Scheduler, error) {
@@ -93,10 +97,15 @@ func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Opt
 	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
 	logger := newTaskLogger("", "cron")
 
+	st := newStore(getDB)
+	if cfg.RunCleanupBatchSize > 0 {
+		st.batchSize = cfg.RunCleanupBatchSize
+	}
+
 	return &Scheduler{
 		cron:        c,
 		logger:      logger,
-		store:       newStore(getDB),
+		store:       st,
 		lockFactory: lockFactory,
 		cfg:         cfg,
 		tasks:       make(map[string]registeredTask),
@@ -380,18 +389,98 @@ func validateTask(t Task) error {
 	return nil
 }
 
+// Start 启动调度。
+//
+// 若配置了 Config.StaleRunningCutoff 或 Config.RunRetention，同时启动内置兜底/清理循环：
+// 启动瞬间先执行一次（回收上次进程崩溃残留的 running 记录、清理过期执行记录），
+// 之后按 Config.RunCleanupInterval 周期执行。重复调用 Start 不会重复启动循环。
 func (s *Scheduler) Start() {
 	s.cron.Start()
+	s.startMaintenance()
 }
 
 // Stop 停止调度并等待在途任务完成；ctx 先到时返回 ctx.Err()。
+// 内置兜底/清理循环先退出（并等待其当前一轮结束），避免停机过程中继续写库。
 func (s *Scheduler) Stop(ctx context.Context) error {
+	s.stopMaintenance()
 	done := s.cron.Stop()
 	select {
 	case <-done.Done():
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// startMaintenance 启动兜底/清理循环；未配置任何开关时直接返回。
+func (s *Scheduler) startMaintenance() {
+	if s.cfg.StaleRunningCutoff <= 0 && s.cfg.RunRetention <= 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.maintainStop != nil { // 已在运行
+		s.mu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	s.maintainStop, s.maintainDone = stop, done
+	s.mu.Unlock()
+
+	interval := s.cfg.RunCleanupInterval
+	if interval <= 0 {
+		interval = defaultRunCleanupInterval
+	}
+
+	go func() {
+		defer close(done)
+		// 启动即跑一次：崩溃残留不必等到下一个周期
+		s.runMaintenance(context.Background())
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				s.runMaintenance(context.Background())
+			}
+		}
+	}()
+}
+
+// stopMaintenance 停止兜底/清理循环并等待当前一轮结束；未启动或重复调用是安全的。
+func (s *Scheduler) stopMaintenance() {
+	s.mu.Lock()
+	stop, done := s.maintainStop, s.maintainDone
+	s.maintainStop, s.maintainDone = nil, nil
+	s.mu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	<-done
+}
+
+// runMaintenance 执行一轮兜底与清理；失败只告警，不影响调度。
+func (s *Scheduler) runMaintenance(ctx context.Context) {
+	if cutoff := s.cfg.StaleRunningCutoff; cutoff > 0 {
+		n, err := s.store.MarkStaleRunningAsFailed(ctx, cutoff, "")
+		switch {
+		case err != nil:
+			s.logger.Errorw(ctx, "gcron reap stale running records failed", "error", err)
+		case n > 0:
+			s.logger.Warnw(ctx, "gcron marked stale running records as failed", "rows", n)
+		}
+	}
+	if retention := s.cfg.RunRetention; retention > 0 {
+		n, err := s.store.CleanupRuns(ctx, time.Now().Add(-retention), "")
+		switch {
+		case err != nil:
+			s.logger.Errorw(ctx, "gcron cleanup old run records failed", "error", err)
+		case n > 0:
+			s.logger.Infow(ctx, "gcron cleaned up old run records", "rows", n)
+		}
 	}
 }
 

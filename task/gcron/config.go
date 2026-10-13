@@ -6,6 +6,12 @@ import (
 	"github.com/morehao/golib/distlock"
 )
 
+// 内置兜底/清理循环的默认参数。
+const (
+	defaultRunCleanupInterval = time.Hour
+	defaultRunBatchSize       = 1000
+)
+
 type Config struct {
 	WithSeconds bool
 	Location    *time.Location
@@ -16,14 +22,27 @@ type Config struct {
 	Timeout time.Duration
 	// LockFactory 分布式锁工厂（推荐通过 WithLockFactory 配置；New 的位置参数为兼容旧签名）。
 	LockFactory distlock.LockFactory
+
+	// StaleRunningCutoff >0 时启用崩溃兜底：Start 后立即执行一次，并按 RunCleanupInterval
+	// 周期把 start_at 早于 now-cutoff 仍处于 running 的执行记录标记为 failed。
+	// 必须大于最长任务耗时，否则仍在运行的长任务会被误标（其 finishRun 会覆盖回真实结果）。
+	StaleRunningCutoff time.Duration
+	// RunRetention >0 时启用执行记录保留策略：删除 created_at 早于 now-RunRetention 的记录。
+	RunRetention time.Duration
+	// RunCleanupInterval 兜底/清理循环的执行周期，<=0 时取默认值 1h。
+	RunCleanupInterval time.Duration
+	// RunCleanupBatchSize 单批处理行数上限，<=0 时取默认值 1000。
+	RunCleanupBatchSize int
 }
 
 func defaultConfig() *Config {
 	return &Config{
-		WithSeconds: false,
-		Location:    time.Local,
-		EnableLock:  false,
-		LockTTL:     60 * time.Second,
-		AutoRenewal: false,
+		WithSeconds:         false,
+		Location:            time.Local,
+		EnableLock:          false,
+		LockTTL:             60 * time.Second,
+		AutoRenewal:         false,
+		RunCleanupInterval:  defaultRunCleanupInterval,
+		RunCleanupBatchSize: defaultRunBatchSize,
 	}
 }
