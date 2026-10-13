@@ -3,6 +3,7 @@ package gcron
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -108,10 +109,8 @@ func TestRegisterAndExecute(t *testing.T) {
 	require.Error(t, s.Register(Task{ID: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error { return nil }}))
 
 	s.Start()
-	time.Sleep(2500 * time.Millisecond)
-	require.NoError(t, s.Stop(context.Background()))
-
-	require.GreaterOrEqual(t, atomic.LoadInt32(&count), int32(1))
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&count) >= 1 }, cronWaitTimeout, 20*time.Millisecond)
 
 	got, err := s.GetStore().GetTaskByID(context.Background(), "tick")
 	require.NoError(t, err)
@@ -152,9 +151,8 @@ func TestRegisterRestartIdempotent(t *testing.T) {
 		return nil
 	}}))
 	s3.Start()
-	time.Sleep(2500 * time.Millisecond)
-	require.NoError(t, s3.Stop(context.Background()))
-	require.GreaterOrEqual(t, atomic.LoadInt32(&count), int32(1))
+	t.Cleanup(func() { _ = s3.Stop(context.Background()) })
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&count) >= 1 }, cronWaitTimeout, 20*time.Millisecond)
 }
 
 // TestOverlapGuard 验证同一实例内任务未结束时，下一轮被跳过（防重叠）。
@@ -201,8 +199,20 @@ func TestOverlapGuard(t *testing.T) {
 		t.Fatal("handler did not start")
 	}
 
-	// handler 仍在运行：等待至少两个调度周期，期间触发的轮次应被跳过
-	time.Sleep(2500 * time.Millisecond)
+	// handler 仍在运行：等后续 tick 被跳过。用"出现 skipped 记录"代替固定 sleep，
+	// handler 未释放，所以等待期间不可能出现并发执行。
+	require.Eventually(t, func() bool {
+		runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskID: "slow"})
+		if err != nil {
+			return false
+		}
+		for _, r := range runs {
+			if r.Status == TaskRunSkipped {
+				return true
+			}
+		}
+		return false
+	}, cronWaitTimeout, 20*time.Millisecond)
 
 	// 释放 handler 完成本次执行
 	close(release)
@@ -287,18 +297,20 @@ func TestTaskTimeout(t *testing.T) {
 	}))
 
 	s.Start()
-	time.Sleep(2500 * time.Millisecond)
-	require.NoError(t, s.Stop(context.Background()))
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
 
-	runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskID: "slow-timeout"})
-	require.NoError(t, err)
-	var timedOut bool
-	for _, r := range runs {
-		if r.Status == TaskRunTimedOut && r.ErrorMsg != "" {
-			timedOut = true
+	require.Eventually(t, func() bool {
+		runs, _, err := s.GetStore().ListRun(context.Background(), &CronTaskRunCond{TaskID: "slow-timeout"})
+		if err != nil {
+			return false
 		}
-	}
-	require.True(t, timedOut)
+		for _, r := range runs {
+			if r.Status == TaskRunTimedOut && r.ErrorMsg != "" {
+				return true
+			}
+		}
+		return false
+	}, cronWaitTimeout, 20*time.Millisecond)
 }
 
 // TestRegisterInvalidSpecNotPersisted 验证非法 cron 表达式注册失败时不会落库（避免脏任务定义）。
@@ -359,8 +371,8 @@ func TestTaskLifecycleDisableEnableRemove(t *testing.T) {
 
 	// Enable 后能正常执行
 	s.Start()
-	time.Sleep(2500 * time.Millisecond)
-	require.GreaterOrEqual(t, count.Load(), int32(1))
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+	require.Eventually(t, func() bool { return count.Load() >= 1 }, cronWaitTimeout, 20*time.Millisecond)
 
 	// Remove：DB 定义被软删除，调度停止
 	require.NoError(t, s.Remove("lifecycle"))
@@ -421,9 +433,8 @@ func TestTaskWithLockExecutes(t *testing.T) {
 	}))
 
 	s.Start()
-	time.Sleep(2500 * time.Millisecond)
-	require.NoError(t, s.Stop(context.Background()))
-	require.GreaterOrEqual(t, count.Load(), int32(1))
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+	require.Eventually(t, func() bool { return count.Load() >= 1 }, cronWaitTimeout, 20*time.Millisecond)
 }
 
 // TestRegisterKeepsDisabledStatusAcrossRestart 验证 DB 中的 disabled 状态不会被重启后的注册覆盖，
@@ -454,6 +465,7 @@ func TestRegisterKeepsDisabledStatusAcrossRestart(t *testing.T) {
 	require.Equal(t, CronTaskDisabled, got.Status, "重启注册不得覆盖运营侧下线状态")
 
 	s2.Start()
+	// 负向断言只能用固定等待：跨过至少一个调度周期，证明 disabled 任务确实不被触发
 	time.Sleep(1500 * time.Millisecond)
 	require.NoError(t, s2.Stop(context.Background()))
 	require.Zero(t, count.Load(), "disabled 任务不应被调度")
@@ -1028,4 +1040,93 @@ func TestNewDoesNotMutateConfig(t *testing.T) {
 	got, err := st.GetTaskByID(context.Background(), "absent")
 	require.NoError(t, err)
 	require.Nil(t, got)
+}
+
+// TestStopWaitsInFlightRuns 验证 Stop 会等在途执行收尾：Stop 返回时该次运行的
+// finishRun 已落库（success + end_at），停机不会打断收尾写入。
+func TestStopWaitsInFlightRuns(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	started := make(chan struct{})
+	var once sync.Once
+	s, err := New(db, nil, nil, WithSeconds(true))
+	require.NoError(t, err)
+	require.NoError(t, s.Register(Task{
+		ID: "inflight", TaskType: "report", Spec: "* * * * * *",
+		Handler: func(ctx context.Context) error {
+			once.Do(func() { close(started) })
+			time.Sleep(2 * time.Second)
+			return nil
+		},
+	}))
+
+	s.Start()
+	select {
+	case <-started:
+	case <-time.After(cronWaitTimeout):
+		t.Fatal("handler did not start")
+	}
+
+	require.NoError(t, s.Stop(context.Background()))
+
+	runs := listTaskRuns(t, s, "inflight")
+	require.Len(t, runs, 1, "防重叠应保证只有一次在途执行")
+	require.Equal(t, TaskRunSuccess, runs[0].Status)
+	require.NotNil(t, runs[0].EndAt, "Stop 返回前收尾落库应已完成")
+}
+
+// TestConcurrentRegisterDisableEnableRemove 验证并发做生命周期操作与查询时
+// 不出现数据竞态或 panic（配合 -race 运行），且并发结束后调度器仍可用。
+//
+// DB 连接数限制为 1：sqlite 内存库无法真正并发写，这里要验证的是 Scheduler
+// 内存状态与 cron 交互的并发安全，串行化 DB 反而让断言更稳定。
+func TestConcurrentRegisterDisableEnableRemove(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	s, err := New(db, nil, nil, WithSeconds(true))
+	require.NoError(t, err)
+
+	const workers = 8
+	const rounds = 5
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("concurrent-%d", i)
+			for r := 0; r < rounds; r++ {
+				_ = s.Register(Task{ID: id, TaskType: "report", Spec: "* * * * * *", Handler: func(context.Context) error { return nil }})
+				_ = s.Disable(id)
+				_ = s.Enable(id)
+				_ = s.Remove(id)
+			}
+		}(i)
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for r := 0; r < rounds; r++ {
+				_, _, _ = s.GetStore().ListTask(context.Background(), &CronTaskCond{})
+				_, _, _ = s.GetStore().ListRun(context.Background(), &CronTaskRunCond{})
+			}
+		}()
+	}
+	wg.Wait()
+
+	// 并发结束后仍可正常注册与查询
+	require.NoError(t, s.Register(Task{
+		ID: "after-concurrency", TaskType: "report", Spec: "* * * * * *",
+		Handler: func(context.Context) error { return nil },
+	}))
+	got, err := s.GetStore().GetTaskByID(context.Background(), "after-concurrency")
+	require.NoError(t, err)
+	require.Equal(t, CronTaskEnabled, got.Status)
+	require.NoError(t, s.Stop(context.Background()))
 }
