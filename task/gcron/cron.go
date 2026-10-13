@@ -204,6 +204,11 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 		s.logger.Warnw(context.Background(),
 			"gcron task lock auto-renewal disabled; a handler running longer than lock TTL may execute concurrently on multiple instances",
 			gconstant.KeyTaskID, t.ID, "lock_ttl", lockTTL.String())
+		// 未续期时执行超过 TTL 锁必然过期：严格模式下直接拒绝注册，避免"以为互斥其实没有"。
+		if s.cfg.StrictLockTTL && timeout > lockTTL {
+			return fmt.Errorf("%w: task %q timeout=%s > lock_ttl=%s",
+				ErrLockTTLTooShort, t.ID, timeout, lockTTL)
+		}
 	}
 
 	// 先注册调度（内部解析并校验 cron 表达式），失败时不落库，避免留下永远不会被调度的脏定义。
@@ -279,8 +284,19 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 			}
 		}
 
+		// 本地防重叠先于抢锁：上一轮还在跑就没必要再抢一次分布式锁——抢到后立刻
+		// 释放会把锁短暂让出去，反而扩大其他实例进入临界区的窗口。
+		if !running.CompareAndSwap(false, true) {
+			s.logger.Infow(ctx, "cron task skipped, previous run still in progress", gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID)
+			skip("previous run still in progress (overlap prevented)")
+			return
+		}
+		defer running.Store(false)
+
+		var taskLock *distlock.DistLock
 		if enableLock {
-			taskLock, lerr := distlock.NewDistLock(s.lockFactory, &distlock.Config{
+			var lerr error
+			taskLock, lerr = distlock.NewDistLock(s.lockFactory, &distlock.Config{
 				AutoRenewal: autoRenewal,
 				TTL:         lockTTL,
 				Key:         "cron:lock:" + t.ID,
@@ -306,13 +322,6 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 			defer taskLock.Unlock(context.Background())
 		}
 
-		if !running.CompareAndSwap(false, true) {
-			s.logger.Infow(ctx, "cron task skipped, previous run still in progress", gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID)
-			skip("previous run still in progress (overlap prevented)")
-			return
-		}
-		defer running.Store(false)
-
 		ctx, span, _, requestID := buildTraceContext(ctx, t.ID)
 		defer span.End()
 		start := time.Now()
@@ -336,20 +345,43 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 			nextRun = &next
 		}
 
-		// 超时仅作用于 handler；收尾落库使用未取消的 ctx，
-		// 否则 handler 超时后 finishRun 会因 ctx 已取消而静默失败。
-		handlerCtx := ctx
+		// handler 的 ctx 统一可取消：既承载单次执行超时，也用于锁丢失时立刻终止临界区；
+		// 收尾落库仍使用未取消的 ctx，否则 handler 超时后 finishRun 会因 ctx 已取消而静默失败。
+		handlerCtx, cancelHandler := context.WithCancel(ctx)
+		defer cancelHandler()
 		if timeout > 0 {
-			var cancel context.CancelFunc
-			handlerCtx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
+			var cancelTimeout context.CancelFunc
+			handlerCtx, cancelTimeout = context.WithTimeout(handlerCtx, timeout)
+			defer cancelTimeout()
+		}
+
+		// 锁丢失（续期失败/锁过期）意味着临界区已不成立，其他实例可能已进入：
+		// 立即取消 handler，并把本次执行记为 lock_lost，与普通失败区分。
+		var lockLost atomic.Bool
+		if taskLock != nil {
+			watchDone := make(chan struct{})
+			defer close(watchDone)
+			go func() {
+				select {
+				case <-taskLock.Lost():
+					lockLost.Store(true)
+					cancelHandler()
+				case <-watchDone:
+				}
+			}()
 		}
 
 		err := safeRun(handlerCtx, t.Handler)
 		end := time.Now()
 		status := TaskRunSuccess
 		errMsg := ""
-		if err != nil {
+		if lockLost.Load() {
+			status = TaskRunLockLost
+			errMsg = "distributed lock lost during execution"
+			if err != nil {
+				errMsg = gutil.TruncateString(errMsg+": "+err.Error(), maxErrorMsgLen)
+			}
+		} else if err != nil {
 			// handler 超时被 ctx 取消时记录 timed_out，与普通失败区分
 			if timeout > 0 && handlerCtx.Err() == context.DeadlineExceeded {
 				status = TaskRunTimedOut
