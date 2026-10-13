@@ -257,3 +257,23 @@ func TestMarkStaleRunningRespectsBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(2), n, "剩余积压由下一轮消化")
 }
+
+// TestAutoMigrateRunIndexes 验证 AutoMigrate 后 run 表带上兜底/清理所需索引，
+// 且 (status, start_at) 复合索引的列顺序为 status 在前（崩溃兜底扫描条件）。
+func TestAutoMigrateRunIndexes(t *testing.T) {
+	db := newTestDB(t)
+	require.NoError(t, AutoMigrate(db))
+
+	m := db.Migrator()
+	for _, idx := range []string{"idx_status_start_at", "idx_created_at", "idx_task_id", "idx_request_id"} {
+		require.True(t, m.HasIndex(&CronTaskRun{}, idx), "缺少索引 %s", idx)
+	}
+
+	var cols []struct {
+		Name string `gorm:"column:name"`
+	}
+	require.NoError(t, db.Raw("PRAGMA index_info('idx_status_start_at')").Scan(&cols).Error)
+	require.Len(t, cols, 2)
+	require.Equal(t, "status", cols[0].Name)
+	require.Equal(t, "start_at", cols[1].Name)
+}

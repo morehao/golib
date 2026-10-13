@@ -301,6 +301,29 @@ server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务�
   `db.Set("gorm:table_options", "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")`；
 - PostgreSQL：列注释以独立 `COMMENT ON COLUMN` 下发，语句顺序与 `AutoMigrate` 一致。
 
+### 存量表升级（索引变更）
+
+`core_cron_task_run` 使用 `idx_status_start_at`（崩溃兜底按 `status` + `start_at` 扫描）与
+`idx_created_at`（保留策略按 `created_at` 清理）两个索引，早于这两个索引建表的库需要手工补齐。
+
+大表**不要依赖服务账号的 `AutoMigrate` 建索引**：它可能直接对线上表执行 DDL 并长时间持锁。
+推荐 `gcron.WithoutAutoMigrate()` 关闭服务侧建表，改由迁移账号或 online DDL 工具
+（pt-osc / gh-ost，或 MySQL 8 的 `ALGORITHM=INPLACE, LOCK=NONE`）执行：
+
+```
+CREATE INDEX `idx_status_start_at` ON `core_cron_task_run` (`status`, `start_at`);
+CREATE INDEX `idx_created_at` ON `core_cron_task_run` (`created_at`);
+```
+
+PostgreSQL 用 `CREATE INDEX CONCURRENTLY`（需在事务外执行）：
+
+```
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_status_start_at" ON "core_cron_task_run" ("status", "start_at");
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_created_at" ON "core_cron_task_run" ("created_at");
+```
+
+索引可重复创建（已存在时报错可忽略），不影响既有数据与调度语义。
+
 ### gcron - MySQL
 
 ```sql
@@ -334,7 +357,9 @@ CREATE TABLE `core_cron_task_run` (
   `error_msg` text COMMENT '错误信息',
   `request_id` varchar(64) COMMENT '请求 ID',
   PRIMARY KEY (`id`),
+  INDEX `idx_created_at` (`created_at`),
   INDEX `idx_task_id` (`task_id`),
+  INDEX `idx_status_start_at` (`status`,`start_at`),
   INDEX `idx_request_id` (`request_id`)
 );
 ```
@@ -360,17 +385,27 @@ CREATE TABLE "core_cron_task" (
 );
 
 CREATE INDEX IF NOT EXISTS "idx_biz_type_biz_id" ON "core_cron_task" ("biz_id","biz_type");
+
 CREATE INDEX IF NOT EXISTS "idx_core_cron_task_deleted_at" ON "core_cron_task" ("deleted_at");
 
 COMMENT ON COLUMN "core_cron_task"."id" IS '任务唯一标识（业务方注册时指定）';
+
 COMMENT ON COLUMN "core_cron_task"."biz_id" IS '业务 ID（如商户号、订单号），可为空';
+
 COMMENT ON COLUMN "core_cron_task"."biz_type" IS '业务类型（如 merchant、order），可为空';
+
 COMMENT ON COLUMN "core_cron_task"."name" IS '任务名称（展示用），可为空';
+
 COMMENT ON COLUMN "core_cron_task"."task_type" IS '任务类型';
+
 COMMENT ON COLUMN "core_cron_task"."spec" IS 'cron 表达式';
+
 COMMENT ON COLUMN "core_cron_task"."description" IS '任务描述';
+
 COMMENT ON COLUMN "core_cron_task"."status" IS '状态';
+
 COMMENT ON COLUMN "core_cron_task"."last_run_at" IS '上次执行时间';
+
 COMMENT ON COLUMN "core_cron_task"."next_run_at" IS '下次执行时间';
 
 CREATE TABLE "core_cron_task_run" (
@@ -387,15 +422,27 @@ CREATE TABLE "core_cron_task_run" (
 );
 
 CREATE INDEX IF NOT EXISTS "idx_request_id" ON "core_cron_task_run" ("request_id");
+
+CREATE INDEX IF NOT EXISTS "idx_status_start_at" ON "core_cron_task_run" ("status","start_at");
+
 CREATE INDEX IF NOT EXISTS "idx_task_id" ON "core_cron_task_run" ("task_id");
 
+CREATE INDEX IF NOT EXISTS "idx_created_at" ON "core_cron_task_run" ("created_at");
+
 COMMENT ON COLUMN "core_cron_task_run"."id" IS '运行唯一标识（每次运行生成 UUID）';
+
 COMMENT ON COLUMN "core_cron_task_run"."task_id" IS '所属任务定义 ID';
+
 COMMENT ON COLUMN "core_cron_task_run"."start_at" IS '开始时间';
+
 COMMENT ON COLUMN "core_cron_task_run"."end_at" IS '结束时间';
+
 COMMENT ON COLUMN "core_cron_task_run"."duration_ms" IS '耗时毫秒';
+
 COMMENT ON COLUMN "core_cron_task_run"."status" IS '状态';
+
 COMMENT ON COLUMN "core_cron_task_run"."error_msg" IS '错误信息';
+
 COMMENT ON COLUMN "core_cron_task_run"."request_id" IS '请求 ID';
 ```
 
