@@ -155,6 +155,8 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 - **锁自动续期与锁丢失**：默认 `AutoRenewal=false`、`LockTTL=60s`。handler 执行超过 TTL 且未开启自动续期时，锁会过期，其他实例可能并发执行同一任务。开启互斥且 handler 可能长时间运行时，建议设置 `AutoRenewal: true`（注册时会输出告警日志提示）；`Config.StrictLockTTL=true` 时，`Timeout > LockTTL` 且未自动续期的任务会在 `Register` 直接返回 `ErrLockTTLTooShort`（默认只告警）。
   开启自动续期后，一旦续期失败（锁被其他实例持有、Redis 故障等），本次执行会立即取消 handler 的 ctx 并把记录标为 `lock_lost`（与普通失败区分）；此时临界区已不成立，handler 应监听 `ctx.Done()` 尽快退出。
 - **同实例防重叠先于抢锁**：上一轮未结束时本轮直接跳过（记录 `skipped`），不会再去抢分布式锁——抢到即释放会把锁短暂让给其他实例，反而扩大并发窗口。抢锁未获取、锁存储故障、锁工厂故障分别以不同的 `error_msg` 记录为 `skipped`，便于区分"竞争"与"故障"。
+- **跳过记录策略**：默认每次跳过都写一行 `skipped`（补齐 `end_at`、`duration_ms=0`）。任务被高频跳过（如多实例竞争同一把锁）时会产生写放大：`Config.RecordSkippedRuns=false` 可完全不落库（仅打日志），`Config.SkipRunMinInterval>0` 可让同一任务同一原因在窗口内只落一行（被抑制的次数记入下一次日志的 `suppressed` 字段）。
+- **生命周期 DB 超时**：`Register` / `Disable` / `Enable` / `Remove` 与内置兜底清理的 DB 操作默认带 5s 超时（`Config.LifecycleTimeout` / `WithLifecycleTimeout`，`<=0` 回落默认值），DB 卡住时返回包装错误（可用 `errors.Is(err, context.DeadlineExceeded)` 判定）而不是无界挂起。handler 内部的 DB 操作不受该超时约束，仍由 `Timeout` / handler ctx 控制；清理积压很大时可能在超时处中断，剩余部分留到下一轮。
 - **崩溃兜底与记录保留**：进程被强杀时执行记录会停留在 `running`。默认不启用回收（`StaleRunningCutoff=0`、`RunRetention=0`），配置后由 `Start` 启动内置循环执行：`StaleRunningCutoff` 把超过该时长仍为 `running` 的记录标记为 `failed`（并按 `start_at` 补齐 `duration_ms`），`RunRetention` 删除 `created_at` 早于 `now-RunRetention` 的记录，周期由 `RunCleanupInterval` 控制（默认 1h），单批行数由 `RunCleanupBatchSize` 控制（默认 1000，清理会分批循环直到清空，回收每轮最多处理一批）。
   `StaleRunningCutoff` **必须大于最长任务耗时**：长任务超过该值会被误标 `failed`（其 `finishRun` 随后会覆盖回真实结果）。也可以不配置开关，自行调用 `store.MarkStaleRunningAsFailed` / `store.CleanupRuns`。
 
