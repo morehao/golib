@@ -3,13 +3,13 @@ package gormdao
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/gerror"
 	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // MaxPageSize 分页查询单页最大条数，防止误传超大 pageSize 导致全表扫描或内存暴涨。
@@ -35,9 +35,12 @@ type Entity interface {
 // 软删除约定（默认启用）：
 //   - Delete 将 deleted_at 置为当前时间，不物理删除；要求表包含 deleted_at 列
 //     （嵌入 gorm.Model 或显式声明均可）。实体声明了 deleted_by 列时同时写入操作人。
-//   - 查询方法自动追加 "deleted_at IS NULL" 过滤（表名/列名经方言引用，
-//     user、order 等保留字表名同样安全）；若实体声明了 gorm.DeletedAt，
+//   - 查询方法自动追加 "deleted_at IS NULL" 过滤；若实体声明了 gorm.DeletedAt，
 //     GORM 自身也会追加该过滤，两者叠加无害。
+//   - 追加的过滤条件与 BaseCond 生成的条件都**不做标识符引用**（只做字符串拼接）：
+//     表名撞保留字（user、order 等）时，裸表名在 PostgreSQL 下会因语法错误
+//     （SQLSTATE 42601）失败，需由调用方在 NewDao 传入已按方言引用的表名
+//     （PostgreSQL `"user"`、MySQL “`user`”）或 schema 限定名（`public.user`）。
 //   - 通过 Cond.IsDelete（或自定义 Cond 实现 IncludeDeleted 返回 true）可查询已删除记录。
 //
 // 使用 WithoutSoftDelete() 创建时，Delete 将通过 Unscoped 物理删除，
@@ -83,24 +86,7 @@ func (d *Dao[T, L, ID]) deletedScope(db *gorm.DB, cond Cond) *gorm.DB {
 	if c, ok := cond.(interface{ IncludeDeleted() bool }); ok && c.IncludeDeleted() {
 		return db.Unscoped()
 	}
-	return deletedAtIsNull(db, d.TableName)
-}
-
-// deletedAtIsNull 追加"未软删除"过滤条件。
-//
-// 表名与列名都经 clause.Column 交给 GORM 按方言引用（PostgreSQL 生成
-// "user"."deleted_at" IS NULL），不使用 fmt.Sprintf 直接拼标识符：PG 下 user、order、
-// group 等保留字作为裸标识符会直接报 SQLSTATE 42601，而 MySQL / SQLite 恰好接受
-// user.deleted_at，因此手拼标识符的缺陷只在 PG 上暴露。
-//
-// 这里显式传入 tableName（与 FROM 用的是同一个值），而不是用 clause.CurrentTable：
-// 调用方若传入预引号表名（PG 的 "user"、MySQL 的 `user`），GORM 会把它当作原始表达式、
-// Statement.Table 为空，CurrentTable 会退化成模型的默认表名，与实际 FROM 不一致。
-func deletedAtIsNull(db *gorm.DB, tableName string) *gorm.DB {
-	return db.Where(clause.Eq{
-		Column: clause.Column{Table: tableName, Name: "deleted_at"},
-		Value:  nil,
-	})
+	return db.Where(fmt.Sprintf("%s.deleted_at IS NULL", d.TableName))
 }
 
 // Insert 插入单条记录。
@@ -185,7 +171,7 @@ func (d *Dao[T, L, ID]) GetByID(ctx context.Context, id ID) (*T, error) {
 	var entity T
 	db := d.DB(ctx).Table(d.TableName)
 	if d.isSoftDelete {
-		db = deletedAtIsNull(db, d.TableName)
+		db = db.Where(fmt.Sprintf("%s.deleted_at IS NULL", d.TableName))
 	}
 	if err := db.Where("id = ?", id).Take(&entity).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
