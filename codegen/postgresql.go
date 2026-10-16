@@ -208,19 +208,30 @@ func (impl *postgresqlImpl) getIndexInfo(db *gorm.DB, schemaName, tableName stri
 	return indexMap, nil
 }
 
-// buildColumnType 构建完整的列类型字符串
+// buildColumnType 构建完整的列类型字符串（含 typmod）。
+//
+// 只有真正接受类型修饰符的类型才拼长度/精度：
+//   - numeric / decimal 用 numeric_precision（有小数位时带上 numeric_scale）；
+//   - 字符与位串（varchar / bpchar / bit / varbit）用 character_maximum_length。
+//
+// 整数（int2/int4/int8）与浮点（float4/float8）虽然 information_schema 也会给出
+// numeric_precision（bigint=64、integer=32、double precision=53），但 PostgreSQL
+// 不允许它们带 typmod，拼上去会得到 int8(64) 这种非法类型，建表时报
+// `type modifier is not allowed for type "int8"`（SQLSTATE 42601），因此必须排除。
 func (impl *postgresqlImpl) buildColumnType(col postgresqlTableColumn) string {
-	columnType := col.UdtName
-	if col.CharacterMaximumLength.Valid {
-		columnType = fmt.Sprintf("%s(%d)", col.UdtName, col.CharacterMaximumLength.Int64)
-	} else if col.NumericPrecision.Valid {
-		if col.NumericScale.Valid && col.NumericScale.Int64 > 0 {
-			columnType = fmt.Sprintf("%s(%d,%d)", col.UdtName, col.NumericPrecision.Int64, col.NumericScale.Int64)
-		} else {
-			columnType = fmt.Sprintf("%s(%d)", col.UdtName, col.NumericPrecision.Int64)
+	if col.UdtName == "numeric" || col.UdtName == "decimal" {
+		if col.NumericPrecision.Valid {
+			if col.NumericScale.Valid && col.NumericScale.Int64 > 0 {
+				return fmt.Sprintf("%s(%d,%d)", col.UdtName, col.NumericPrecision.Int64, col.NumericScale.Int64)
+			}
+			return fmt.Sprintf("%s(%d)", col.UdtName, col.NumericPrecision.Int64)
 		}
+		return col.UdtName
 	}
-	return columnType
+	if col.CharacterMaximumLength.Valid {
+		return fmt.Sprintf("%s(%d)", col.UdtName, col.CharacterMaximumLength.Int64)
+	}
+	return col.UdtName
 }
 
 var postgresqlDefaultColumnTypeMap = map[string]string{

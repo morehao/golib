@@ -330,6 +330,8 @@ func TestGenModelCodeWithPostgreSQL(t *testing.T) {
 	autoCodeTool := NewGenerator()
 	templateParam, getParamErr := autoCodeTool.AnalysisModuleTpl(db, cfg)
 	require.Nil(t, getParamErr)
+	// 回归守卫：真实库里的整数/浮点列不得被拼上 typmod（曾生成 int8(64) 导致建表报 42601）
+	assertNoBogusTypmod(t, templateParam)
 	type ModelFieldItem struct {
 		FieldName    string
 		ColumnName   string
