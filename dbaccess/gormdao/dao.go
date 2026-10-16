@@ -3,7 +3,6 @@ package gormdao
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/morehao/golib/gconstant"
@@ -37,10 +36,10 @@ type Entity interface {
 //     （嵌入 gorm.Model 或显式声明均可）。实体声明了 deleted_by 列时同时写入操作人。
 //   - 查询方法自动追加 "deleted_at IS NULL" 过滤；若实体声明了 gorm.DeletedAt，
 //     GORM 自身也会追加该过滤，两者叠加无害。
-//   - 追加的过滤条件与 BaseCond 生成的条件都**不做标识符引用**（只做字符串拼接）：
-//     表名撞保留字（user、order 等）时，裸表名在 PostgreSQL 下会因语法错误
-//     （SQLSTATE 42601）失败，需由调用方在 NewDao 传入已按方言引用的表名
-//     （PostgreSQL `"user"`、MySQL “`user`”）或 schema 限定名（`public.user`）。
+//   - 追加的过滤条件与 BaseCond 生成的条件里的表名/列名都由库交给 GORM 按当前方言引用
+//     （PostgreSQL `"user"."deleted_at"`、MySQL “`user`.`deleted_at`”），因此表名撞保留字
+//     （user、order、group 等）无需任何额外处理，NewDao 直接传逻辑表名即可；
+//     已按方言引用的表名（`"user"`）与 schema 限定名（`public.user`）同样可用（幂等）。
 //   - 通过 Cond.IsDelete（或自定义 Cond 实现 IncludeDeleted 返回 true）可查询已删除记录。
 //
 // 使用 WithoutSoftDelete() 创建时，Delete 将通过 Unscoped 物理删除，
@@ -86,7 +85,7 @@ func (d *Dao[T, L, ID]) deletedScope(db *gorm.DB, cond Cond) *gorm.DB {
 	if c, ok := cond.(interface{ IncludeDeleted() bool }); ok && c.IncludeDeleted() {
 		return db.Unscoped()
 	}
-	return db.Where(fmt.Sprintf("%s.deleted_at IS NULL", d.TableName))
+	return db.Where(notDeletedExpr(d.TableName))
 }
 
 // Insert 插入单条记录。
@@ -171,7 +170,7 @@ func (d *Dao[T, L, ID]) GetByID(ctx context.Context, id ID) (*T, error) {
 	var entity T
 	db := d.DB(ctx).Table(d.TableName)
 	if d.isSoftDelete {
-		db = db.Where(fmt.Sprintf("%s.deleted_at IS NULL", d.TableName))
+		db = db.Where(notDeletedExpr(d.TableName))
 	}
 	if err := db.Where("id = ?", id).Take(&entity).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -186,7 +185,7 @@ func (d *Dao[T, L, ID]) GetByID(ctx context.Context, id ID) (*T, error) {
 func (d *Dao[T, L, ID]) GetByCond(ctx context.Context, cond Cond) (*T, error) {
 	var entity T
 	db := d.deletedScope(d.DB(ctx).Table(d.TableName), cond)
-	cond.BuildCondition(db, d.TableName)
+	cond.BuildCondition(db, quoteTable(db, d.TableName))
 	if err := db.Take(&entity).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -200,7 +199,7 @@ func (d *Dao[T, L, ID]) GetByCond(ctx context.Context, cond Cond) (*T, error) {
 func (d *Dao[T, L, ID]) GetListByCond(ctx context.Context, cond Cond) (L, error) {
 	var entityList L
 	db := d.deletedScope(d.DB(ctx).Table(d.TableName), cond)
-	cond.BuildCondition(db, d.TableName)
+	cond.BuildCondition(db, quoteTable(db, d.TableName))
 	if err := db.Find(&entityList).Error; err != nil {
 		return nil, getDBError(gconstant.DBFindErr).Wrapf(err, "[%s] GetListByCond fail", d.daoName)
 	}
@@ -217,7 +216,7 @@ func (d *Dao[T, L, ID]) GetPageListByCond(ctx context.Context, cond Cond) (L, in
 	}
 
 	db := d.deletedScope(d.DB(ctx).Model(new(T)).Table(d.TableName), cond)
-	cond.BuildCondition(db, d.TableName)
+	cond.BuildCondition(db, quoteTable(db, d.TableName))
 
 	var count int64
 	if err := db.Count(&count).Error; err != nil {
@@ -238,7 +237,7 @@ func (d *Dao[T, L, ID]) GetPageListByCond(ctx context.Context, cond Cond) (L, in
 // CountByCond 按条件统计记录数（已排除已删除记录）。
 func (d *Dao[T, L, ID]) CountByCond(ctx context.Context, cond Cond) (int64, error) {
 	db := d.deletedScope(d.DB(ctx).Model(new(T)).Table(d.TableName), cond)
-	cond.BuildCondition(db, d.TableName)
+	cond.BuildCondition(db, quoteTable(db, d.TableName))
 
 	var count int64
 	if err := db.Count(&count).Error; err != nil {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/morehao/golib/dbaccess/gormdao"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -44,7 +45,7 @@ type AsyncTaskCond struct {
 func (c *AsyncTaskCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.Status != "" {
-		db.Where(tableName+".status = ?", c.Status)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "status"}, Value: c.Status})
 	}
 }
 
@@ -88,12 +89,12 @@ type AsyncTaskRunCond struct {
 func (c *AsyncTaskRunCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.TaskType != "" {
-		db.Where(tableName+".task_type = ?", c.TaskType)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "task_type"}, Value: c.TaskType})
 	}
 	if c.Queue != "" {
-		db.Where(tableName+".queue = ?", c.Queue)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "queue"}, Value: c.Queue})
 	}
 	if c.Status != "" {
-		db.Where(tableName+".status = ?", c.Status)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "status"}, Value: c.Status})
 	}
 }

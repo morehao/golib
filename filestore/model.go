@@ -1,11 +1,11 @@
 package filestore
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/morehao/golib/dbaccess/gormdao"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // FileStatus 上传状态机: uploading -> merging -> completed
@@ -55,10 +55,10 @@ type fileCond struct {
 func (c *fileCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.ContentHash != "" {
-		db.Where(fmt.Sprintf("%s.content_hash = ?", tableName), c.ContentHash)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "content_hash"}, Value: c.ContentHash})
 	}
 	if c.StorageURI != "" {
-		db.Where(fmt.Sprintf("%s.storage_uri = ?", tableName), c.StorageURI)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "storage_uri"}, Value: c.StorageURI})
 	}
 }
 
@@ -72,12 +72,12 @@ type fileUploadCond struct {
 func (c *fileUploadCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.FileID != "" {
-		db.Where(fmt.Sprintf("%s.file_id = ?", tableName), c.FileID)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "file_id"}, Value: c.FileID})
 	}
 	if c.UploadID != "" {
-		db.Where(fmt.Sprintf("%s.upload_id = ?", tableName), c.UploadID)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "upload_id"}, Value: c.UploadID})
 	}
 	if c.Status != "" {
-		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "status"}, Value: c.Status})
 	}
 }

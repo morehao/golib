@@ -1,10 +1,9 @@
 package configkv
 
 import (
-	"fmt"
-
 	"github.com/morehao/golib/dbaccess/gormdao"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ValueType 配置值的数据类型
@@ -67,19 +66,19 @@ type ConfigCond struct {
 func (c *ConfigCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.Group != "" {
-		db.Where(fmt.Sprintf("%s.group_name = ?", tableName), c.Group)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "group_name"}, Value: c.Group})
 	}
 	if c.Key != "" {
 		if c.ExactKey {
-			db.Where(fmt.Sprintf("%s.key = ?", tableName), c.Key)
+			db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "key"}, Value: c.Key})
 		} else {
-			db.Where(fmt.Sprintf("%s.key LIKE ?", tableName), "%"+c.Key+"%")
+			db.Where(clause.Like{Column: clause.Column{Table: tableName, Name: "key"}, Value: "%" + c.Key + "%"})
 		}
 	}
 	if c.ValueType != "" {
-		db.Where(fmt.Sprintf("%s.value_type = ?", tableName), c.ValueType)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "value_type"}, Value: c.ValueType})
 	}
 	if c.Status != "" {
-		db.Where(fmt.Sprintf("%s.status = ?", tableName), c.Status)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "status"}, Value: c.Status})
 	}
 }

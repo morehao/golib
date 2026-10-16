@@ -6,15 +6,15 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // OrCondGroup 单个 OR 分支内的一项条件。
 //
 // Query 是调用方给出的自由 SQL 片段（如 "name LIKE ?"），拼接时按
-// "<tableName>.<Query>" 的形式原样拼入，**不做任何标识符引用**：
-//   - 表名撞保留字（user、order、group 等）时，由调用方在 NewDao 传入已按方言引用的
-//     表名（PostgreSQL `"user"`、MySQL “`user`”）或 schema 限定名（见 Dao 的软删除约定）；
-//   - 片段内部的列名同样原样拼入，列名本身是保留字时需调用方自己写成 `"order" = ?`。
+// "<已引用的表名>.<Query>" 的形式拼入：
+//   - 表名前缀由库按当前方言引用（`"user".` / “`user`.），调用方无需关心保留字；
+//   - 片段内部完全原样拼入，列名本身是保留字时需调用方自己写成 `"order" = ?`。
 type OrCondGroup struct {
 	Query string
 	Args  []any
@@ -24,6 +24,17 @@ type OrCond struct {
 	CondGroups []OrCondGroup
 }
 
+// Cond 通用查询条件接口：自定义 Cond 通常内嵌 BaseCond 复用通用条件，
+// 并在 BuildCondition 里追加自己的条件。
+//
+// 推荐用结构化写法，表名与列名都交给 GORM 按方言引用：
+//
+//	db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "status"}, Value: v})
+//
+// 也可以只用 tableName 拼前缀：它已经是当前方言下的引用形式（PostgreSQL `"user"`、
+// MySQL “`user`”，schema 限定名形如 `"public"."user"`），与 FROM 子句中的写法一致，
+// 所以 tableName+".col = ?" 直接可用，**不要再手动引用一次**。
+// 两种写法的边界（schema 限定表、保留字列）见包文档。
 type Cond interface {
 	BuildCondition(db *gorm.DB, tableName string)
 	GetPageInfo() (page int, pageSize int)
@@ -69,31 +80,52 @@ func (c *BaseCond) IncludeDeleted() bool {
 	return c != nil && c.IsDelete
 }
 
+// quoteTable 返回 tableName 在当前方言下的引用形式，与 db.Table(tableName) 在 FROM 子句中
+// 渲染出的写法完全一致。
+//
+// 三种输入都是幂等的，因此调用方传逻辑名（user）、已引用名（PostgreSQL `"user"`、
+// MySQL “`user`”）或 schema 限定名（`public.user`）都能得到同一份合法前缀。
+// 含空白字符时按 db.Table 的语义当作表别名/表达式，原样返回、不做引用。
+func quoteTable(db *gorm.DB, tableName string) string {
+	if db == nil || db.Statement == nil || strings.ContainsAny(tableName, " \t") {
+		return tableName
+	}
+	return db.Statement.Quote(tableName)
+}
+
+// colRef 是全库唯一产生标识符引用的地方：所有进入 SQL 的表名/列名都必须经过它，
+// 引用本身交给 GORM 的 Dialector.QuoteTo 按方言处理。
+func colRef(tableName, column string) clause.Column {
+	return clause.Column{Table: tableName, Name: column}
+}
+
+// notDeletedExpr 软删除过滤条件：<table>.deleted_at IS NULL。
+func notDeletedExpr(tableName string) clause.Expression {
+	return clause.Eq{Column: colRef(tableName, "deleted_at"), Value: nil}
+}
+
+// BuildBaseCondition 把 BaseCond 的条件追加到 db 上。
+//
+// tableName 既可以是逻辑名也可以是已引用名：标识符相关的部分统一经 colRef 交给 GORM 引用，
+// 因此两种形态都安全；OrConditions 的自由 SQL 片段则直接拼在引用后的表名之后。
 func BuildBaseCondition(db *gorm.DB, tableName string, cond *BaseCond) {
 	if !isZeroAny(cond.ID) {
-		query := fmt.Sprintf("%s.id = ?", tableName)
-		db.Where(query, cond.ID)
+		db.Where(clause.Eq{Column: colRef(tableName, "id"), Value: cond.ID})
 	}
 	if len(cond.IDs) > 0 {
-		query := fmt.Sprintf("%s.id IN (?)", tableName)
-		db.Where(query, cond.IDs)
+		db.Where(clause.IN{Column: colRef(tableName, "id"), Values: cond.IDs})
 	}
 	if cond.CreatedAtStart > 0 {
-		query := fmt.Sprintf("%s.created_at >= ?", tableName)
-		db.Where(query, time.Unix(cond.CreatedAtStart, 0))
+		db.Where(clause.Gte{Column: colRef(tableName, "created_at"), Value: time.Unix(cond.CreatedAtStart, 0)})
 	}
 	if cond.CreatedAtEnd > 0 {
-		query := fmt.Sprintf("%s.created_at <= ?", tableName)
-		db.Where(query, time.Unix(cond.CreatedAtEnd, 0))
-	}
-	if cond.IsDelete {
-		db.Unscoped()
+		db.Where(clause.Lte{Column: colRef(tableName, "created_at"), Value: time.Unix(cond.CreatedAtEnd, 0)})
 	}
 	if cond.OrderField != "" {
 		db.Order(cond.OrderField)
 	}
 	if len(cond.OrConditions) > 0 {
-		query, args := buildOrClause(tableName, cond.OrConditions)
+		query, args := buildOrClause(quoteTable(db, tableName), cond.OrConditions)
 		if query != "" {
 			db.Where(query, args...)
 		}
