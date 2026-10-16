@@ -5,6 +5,7 @@ import (
 
 	"github.com/morehao/golib/dbaccess/gormdao"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -83,16 +84,16 @@ type CronTaskCond struct {
 func (c *CronTaskCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.TaskType != "" {
-		db.Where(tableName+".task_type = ?", c.TaskType)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "task_type"}, Value: c.TaskType})
 	}
 	if c.Status != "" {
-		db.Where(tableName+".status = ?", c.Status)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "status"}, Value: c.Status})
 	}
 	if c.BizType != "" {
-		db.Where(tableName+".biz_type = ?", c.BizType)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "biz_type"}, Value: c.BizType})
 	}
 	if c.BizID != "" {
-		db.Where(tableName+".biz_id = ?", c.BizID)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "biz_id"}, Value: c.BizID})
 	}
 }
 
@@ -106,9 +107,9 @@ type CronTaskRunCond struct {
 func (c *CronTaskRunCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.TaskID != "" {
-		db.Where(tableName+".task_id = ?", c.TaskID)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "task_id"}, Value: c.TaskID})
 	}
 	if c.Status != "" {
-		db.Where(tableName+".status = ?", c.Status)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "status"}, Value: c.Status})
 	}
 }

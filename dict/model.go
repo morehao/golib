@@ -7,6 +7,7 @@ import (
 
 	"github.com/morehao/golib/dbaccess/gormdao"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -91,10 +92,10 @@ type TypeCond struct {
 func (c *TypeCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.Code != "" {
-		db.Where(tableName+".code = ?", c.Code)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "code"}, Value: c.Code})
 	}
 	if c.Status != "" {
-		db.Where(tableName+".status = ?", c.Status)
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "status"}, Value: c.Status})
 	}
 }
 
