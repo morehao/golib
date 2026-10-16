@@ -83,7 +83,7 @@ func TestPostgres_RoundTrip(t *testing.T) {
 
 func openPostgres(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testutil.GetEnv(testutil.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
+	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)

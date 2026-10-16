@@ -40,14 +40,14 @@ func pingOrSkip(t *testing.T, db *gorm.DB, kind string, err error) *gorm.DB {
 
 func openMySQLForTest(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testutil.GetEnv(testutil.MySQLDSN, "root:123456@tcp(127.0.0.1:3306)/demo?charset=utf8mb4&parseTime=True")
+	dsn := testutil.GetEnv(testutil.MySQLDSN, testutil.DefaultMySQLDSN)
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	return pingOrSkip(t, db, "mysql", err)
 }
 
 func openPostgresForTest(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testutil.GetEnv(testutil.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
+	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	db = pingOrSkip(t, db, "postgres", err)
 	// 仓库里没有任何迁移/SQL 文件为 demo 库建表（已核实：无 *.sql、无 AutoMigrate），

@@ -72,7 +72,7 @@ func TestStoreSet_Upsert(t *testing.T) {
 // 重复 Set 在 PG 上报 "duplicate key value violates unique constraint"，
 // 现改为按 (group_name, key) ON CONFLICT upsert。事务内执行并回滚。
 func TestStoreSet_UpsertPostgres(t *testing.T) {
-	dsn := testutil.GetEnv(testutil.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
+	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)

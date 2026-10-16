@@ -6,13 +6,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// quotedCompany 模拟已由方言引用过的表名（PostgreSQL: "company"，MySQL: `company`）。
+// buildOrClause 只负责拼接调用方给出的自由片段，标识符引用由调用方（BuildBaseCondition）完成。
+const quotedCompany = `"company"`
+
 func TestBuildOrClause_SingleConditionPerGroup(t *testing.T) {
 	groups := []OrCond{
 		{CondGroups: []OrCondGroup{{Query: "type = ?", Args: []any{1}}}},
 		{CondGroups: []OrCondGroup{{Query: "code = ?", Args: []any{"zzds"}}}},
 	}
-	query, args := buildOrClause("company", groups)
-	assert.Equal(t, "(company.type = ? OR company.code = ?)", query)
+	query, args := buildOrClause(quotedCompany, groups)
+	assert.Equal(t, `("company".type = ? OR "company".code = ?)`, query)
 	t.Logf("query: %v", query)
 	assert.Equal(t, []any{1, "zzds"}, args)
 }
@@ -23,8 +27,8 @@ func TestBuildOrClause_MultiConditionInGroup(t *testing.T) {
 		{CondGroups: []OrCondGroup{{Query: "name = ?", Args: []any{"2"}}, {Query: "seq = ?", Args: []any{2}}}},
 		{CondGroups: []OrCondGroup{{Query: "code = ?", Args: []any{"zzds"}}}},
 	}
-	query, args := buildOrClause("company", groups)
-	assert.Equal(t, "(company.type = ? OR (company.name = ? AND company.seq = ?) OR company.code = ?)", query)
+	query, args := buildOrClause(quotedCompany, groups)
+	assert.Equal(t, `("company".type = ? OR ("company".name = ? AND "company".seq = ?) OR "company".code = ?)`, query)
 	t.Logf("query: %v", query)
 	assert.Equal(t, []any{1, "2", 2, "zzds"}, args)
 }
@@ -34,8 +38,8 @@ func TestBuildOrClause_AllMultiConditionGroups(t *testing.T) {
 		{CondGroups: []OrCondGroup{{Query: "name = ?", Args: []any{"a"}}, {Query: "seq = ?", Args: []any{1}}}},
 		{CondGroups: []OrCondGroup{{Query: "name = ?", Args: []any{"b"}}, {Query: "seq = ?", Args: []any{2}}}},
 	}
-	query, args := buildOrClause("company", groups)
-	assert.Equal(t, "((company.name = ? AND company.seq = ?) OR (company.name = ? AND company.seq = ?))", query)
+	query, args := buildOrClause(quotedCompany, groups)
+	assert.Equal(t, `(("company".name = ? AND "company".seq = ?) OR ("company".name = ? AND "company".seq = ?))`, query)
 	t.Logf("query: %v", query)
 	assert.Equal(t, []any{"a", 1, "b", 2}, args)
 }
@@ -44,8 +48,8 @@ func TestBuildOrClause_SingleGroupSingleCondition(t *testing.T) {
 	groups := []OrCond{
 		{CondGroups: []OrCondGroup{{Query: "type = ?", Args: []any{1}}}},
 	}
-	query, args := buildOrClause("company", groups)
-	assert.Equal(t, "(company.type = ?)", query)
+	query, args := buildOrClause(quotedCompany, groups)
+	assert.Equal(t, `("company".type = ?)`, query)
 	t.Logf("query: %v", query)
 	assert.Equal(t, []any{1}, args)
 }
@@ -55,8 +59,8 @@ func TestBuildOrClause_EmptyConditionsInGroup(t *testing.T) {
 		{CondGroups: []OrCondGroup{{Query: "type = ?", Args: []any{1}}}},
 		{CondGroups: []OrCondGroup{}},
 	}
-	query, args := buildOrClause("company", groups)
-	assert.Equal(t, "(company.type = ?)", query)
+	query, args := buildOrClause(quotedCompany, groups)
+	assert.Equal(t, `("company".type = ?)`, query)
 	t.Logf("query: %v", query)
 	assert.Equal(t, []any{1}, args)
 }
@@ -66,13 +70,13 @@ func TestBuildOrClause_AllEmptyGroups(t *testing.T) {
 		{CondGroups: []OrCondGroup{}},
 		{CondGroups: nil},
 	}
-	query, args := buildOrClause("company", groups)
+	query, args := buildOrClause(quotedCompany, groups)
 	assert.Equal(t, "", query)
 	assert.Nil(t, args)
 
 	// 空条件不应生成非法的 "()" SQL
 	groups = []OrCond{{}}
-	query, args = buildOrClause("company", groups)
+	query, args = buildOrClause(quotedCompany, groups)
 	assert.Equal(t, "", query)
 	assert.Nil(t, args)
 }

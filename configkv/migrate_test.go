@@ -47,7 +47,7 @@ func TestNew_MigratesByDefaultAndWithoutAutoMigrate(t *testing.T) {
 // （MySQL longtext / PG text），两侧建表均应成功。
 // 事务内执行并回滚，不残留表结构。
 func TestConfigEntity_AutoMigratePostgres(t *testing.T) {
-	dsn := testutil.GetEnv(testutil.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
+	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)
