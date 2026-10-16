@@ -265,7 +265,7 @@ func TestAutoMigrateRunIndexes(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	m := db.Migrator()
-	for _, idx := range []string{"idx_status_start_at", "idx_created_at", "idx_task_id", "idx_request_id"} {
+	for _, idx := range []string{"idx_status_start_at", "idx_created_at", "idx_task_id", "idx_core_cron_task_run_request_id"} {
 		require.True(t, m.HasIndex(&CronTaskRun{}, idx), "缺少索引 %s", idx)
 	}
 

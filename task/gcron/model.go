@@ -57,17 +57,21 @@ func (CronTask) TableName() string { return CronTaskTableName }
 // CronTaskRun 定时任务执行记录。主键 id 即单次运行的唯一标识
 // （等价于原 run_code 列）；task_id 为所属任务定义的主键 id。
 type CronTaskRun struct {
-	ID        string `gorm:"column:id;primaryKey;type:varchar(36);comment:运行唯一标识（每次运行生成 UUID）"`
+	ID string `gorm:"column:id;primaryKey;type:varchar(36);comment:运行唯一标识（每次运行生成 UUID）"`
 	// CreatedAt 单独索引：保留策略清理按 created_at 范围删除，避免全表扫描。
-	CreatedAt  time.Time         `gorm:"column:created_at;index:idx_created_at"`
-	TaskID     string            `gorm:"column:task_id;type:varchar(128);not null;index:idx_task_id;comment:所属任务定义 ID"`
-	StartAt    time.Time         `gorm:"column:start_at;not null;index:idx_status_start_at,priority:2;comment:开始时间"`
-	EndAt      *time.Time        `gorm:"column:end_at;comment:结束时间"`
-	DurationMS int64             `gorm:"column:duration_ms;not null;default:0;comment:耗时毫秒"`
+	CreatedAt  time.Time  `gorm:"column:created_at;index:idx_created_at"`
+	TaskID     string     `gorm:"column:task_id;type:varchar(128);not null;index:idx_task_id;comment:所属任务定义 ID"`
+	StartAt    time.Time  `gorm:"column:start_at;not null;index:idx_status_start_at,priority:2;comment:开始时间"`
+	EndAt      *time.Time `gorm:"column:end_at;comment:结束时间"`
+	DurationMS int64      `gorm:"column:duration_ms;not null;default:0;comment:耗时毫秒"`
 	// Status 与 StartAt 组成复合索引（status 在前）：崩溃兜底按 status=running AND start_at<cutoff 扫描。
-	Status    CronTaskRunStatus `gorm:"column:status;type:varchar(16);not null;index:idx_status_start_at,priority:1;comment:状态"`
-	ErrorMsg  string            `gorm:"column:error_msg;type:text;comment:错误信息"`
-	RequestID string            `gorm:"column:request_id;type:varchar(64);index:idx_request_id;comment:请求 ID"`
+	Status   CronTaskRunStatus `gorm:"column:status;type:varchar(16);not null;index:idx_status_start_at,priority:1;comment:状态"`
+	ErrorMsg string            `gorm:"column:error_msg;type:text;comment:错误信息"`
+	// RequestID 的索引名必须带表名前缀：索引名在 PostgreSQL 是 schema 级唯一（MySQL 是表级），
+	// 内置表按共库部署设计，短名 idx_request_id 会与 core_async_task_run 的同名索引撞名，
+	// 后建的表在 PG 上会静默拿不到索引（驱动发 CREATE INDEX IF NOT EXISTS，PG 直接跳过）。
+	// 名称沿用 GORM 对无名 index tag 的自动命名，回归用例见 internal/automigrateverify。
+	RequestID string `gorm:"column:request_id;type:varchar(64);index:idx_core_cron_task_run_request_id;comment:请求 ID"`
 }
 
 func (CronTaskRun) TableName() string { return CronTaskRunTableName }

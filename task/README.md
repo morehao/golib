@@ -39,6 +39,27 @@ srv, err := gasync.NewServer(cfg, db, gasync.WithoutAutoMigrate())
 - 要交给 DBA 手工执行，用文末[附录：手工建表 DDL](#附录手工建表-ddl)，或
   `go run internal/ddlgen/main.go gcron`（`gasync` 同理）从 `model.go` 的 gorm tag 重新生成。
 
+### 升级注意：request_id 索引改名（旧库需手工清理）
+
+`core_cron_task_run` / `core_async_task_run` 的 request_id 索引原名 `idx_request_id`，
+现改为 `idx_core_cron_task_run_request_id` / `idx_core_async_task_run_request_id`。
+
+原因是**索引名的唯一性范围在两个方言下不同**：MySQL 是表级，PostgreSQL 是 **schema 级**。
+内置表按共库部署设计（同一个库放两个组件的表），短名撞名时 PostgreSQL 下后建的那张表会
+**静默拿不到索引**——驱动发的是 `CREATE INDEX IF NOT EXISTS`，PG 见到同名索引直接跳过、不报错，
+而 GORM 的 `HasIndex` 按「表 + 索引名」查，以为已经建好了。
+
+`AutoMigrate` 只增不删，所以从旧版升级时：
+
+- 新索引会自动补上，升级本身不报错；
+- 旧库里可能残留旧名索引（同一列上的冗余索引，只增加写入开销）——MySQL 上**两张表各有一个**，
+  PostgreSQL 上只可能在其中一张（取决于当初谁先迁移）。确认后手工删除：
+  MySQL 需要两条：``DROP INDEX `idx_request_id` ON `core_cron_task_run`;`` 与
+  ``DROP INDEX `idx_request_id` ON `core_async_task_run`;``；
+  PostgreSQL 一条即可：`DROP INDEX "idx_request_id";`（索引名在 schema 内唯一，不必关心它挂在哪张表上）。
+
+给这两张表加索引时请一律用带表名前缀的 `idx_<table>_<column>`，与 GORM 对无名 `index` tag 的自动命名一致。
+
 > **为什么组件敢在构造函数里建表？** GORM 官方建议"生产环境改用版本化迁移，别依赖 AutoMigrate"，
 > 那条建议针对的是**应用自己**的表（表多、变更频繁、需要可回滚的版本历史）。本组件只拥有两张固定的小表，
 > schema 完全由组件版本决定，升级组件本就该跟着升级表结构。同类先例是
@@ -338,7 +359,7 @@ CREATE TABLE `core_cron_task_run` (
   INDEX `idx_created_at` (`created_at`),
   INDEX `idx_task_id` (`task_id`),
   INDEX `idx_status_start_at` (`status`,`start_at`),
-  INDEX `idx_request_id` (`request_id`)
+  INDEX `idx_core_cron_task_run_request_id` (`request_id`)
 );
 ```
 
@@ -399,7 +420,7 @@ CREATE TABLE "core_cron_task_run" (
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX IF NOT EXISTS "idx_request_id" ON "core_cron_task_run" ("request_id");
+CREATE INDEX IF NOT EXISTS "idx_core_cron_task_run_request_id" ON "core_cron_task_run" ("request_id");
 
 CREATE INDEX IF NOT EXISTS "idx_status_start_at" ON "core_cron_task_run" ("status","start_at");
 
@@ -455,7 +476,7 @@ CREATE TABLE `core_async_task_run` (
   `request_id` varchar(64) COMMENT '请求 ID',
   PRIMARY KEY (`id`),
   INDEX `idx_task_type` (`task_type`),
-  INDEX `idx_request_id` (`request_id`)
+  INDEX `idx_core_async_task_run_request_id` (`request_id`)
 );
 ```
 
@@ -497,7 +518,7 @@ CREATE TABLE "core_async_task_run" (
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX IF NOT EXISTS "idx_request_id" ON "core_async_task_run" ("request_id");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_request_id" ON "core_async_task_run" ("request_id");
 CREATE INDEX IF NOT EXISTS "idx_task_type" ON "core_async_task_run" ("task_type");
 
 COMMENT ON COLUMN "core_async_task_run"."id" IS '任务实例 ID（asynq 任务唯一标识，重试复用同一行）';

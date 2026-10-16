@@ -73,7 +73,11 @@ type AsyncTaskRun struct {
 	DurationMS int64              `gorm:"column:duration_ms;not null;default:0;comment:耗时毫秒"`
 	ErrorMsg   string             `gorm:"column:error_msg;type:text;comment:错误信息"`
 	Payload    string             `gorm:"column:payload;type:text;comment:原始 payload 快照"`
-	RequestID  string             `gorm:"column:request_id;type:varchar(64);index:idx_request_id;comment:请求 ID"`
+	// RequestID 的索引名必须带表名前缀：索引名在 PostgreSQL 是 schema 级唯一（MySQL 是表级），
+	// 内置表按共库部署设计，短名 idx_request_id 会与 core_cron_task_run 的同名索引撞名，
+	// 后建的表在 PG 上会静默拿不到索引（驱动发 CREATE INDEX IF NOT EXISTS，PG 直接跳过）。
+	// 名称沿用 GORM 对无名 index tag 的自动命名，回归用例见 internal/automigrateverify。
+	RequestID string `gorm:"column:request_id;type:varchar(64);index:idx_core_async_task_run_request_id;comment:请求 ID"`
 }
 
 func (AsyncTaskRun) TableName() string { return AsyncTaskRunTableName }
