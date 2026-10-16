@@ -18,9 +18,20 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// 本文件钉住"标识符引用由调用方负责"这一契约（#119 曾在 gormdao 内部用
+// clause.Column 引用标识符，该实现已回滚）：
+//
+//   - 裸表名：gormdao 只做字符串拼接，生成裸标识符。PostgreSQL 上
+//     `user.deleted_at` 处于 ColId 位置、user 是保留字，会直接报 SQLSTATE 42601；
+//     MySQL / SQLite 恰好接受这种写法——所以该缺陷只在 PG 方言下暴露。
+//   - 调用方绕法一：向 NewDao 传**已按方言引用**的表名（PG `"user"`、MySQL “`user`”），
+//     拼接结果就是 `"user".deleted_at`，各读路径均可用。
+//   - 调用方绕法二：传 schema 限定名（`public.user`）。PG 里点号后的保留字位于
+//     ColLabel 位置，`public.user.deleted_at` 合法。
+//
+// 若将来又在 gormdao 内部恢复标识符引用，下面断言"必须出现裸标识符"的用例会立刻失败。
+
 // reservedEntity 的表名取自 PostgreSQL 保留字：pg_get_keywords() 中 user 的 catcode 为 'R'。
-// MySQL / SQLite 恰好接受 user.deleted_at 这种裸引用，所以该缺陷只在 PostgreSQL 方言下暴露：
-// dao_test.go 里基于 sqlite 内存库的用例无论怎么写都抓不到它。
 type reservedEntity struct {
 	ID        uint       `gorm:"primarykey"`
 	Name      string     `gorm:"column:name"`
@@ -30,9 +41,8 @@ type reservedEntity struct {
 
 func (reservedEntity) TableName() string { return "user" }
 
-// reservedCond 演示调用方的自定义 Cond 不需要 import "gorm.io/gorm/clause"：
-// 不给列名手拼表名前缀（单表查询下裸列名与加表名前缀等价），
-// 保留字表名就不会影响调用方写的条件。
+// reservedCond 是调用方自定义 Cond 的样本：gormdao 不替调用方引用标识符，
+// 因此它的自由片段按原样拼入（列名是保留字时要调用方自己写 `"order" = ?`）。
 type reservedCond struct {
 	BaseCond
 	Name string
@@ -45,8 +55,11 @@ func (c *reservedCond) BuildCondition(db *gorm.DB, tableName string) {
 	}
 }
 
+// quotedUserTable 是调用方传给 NewDao 的预引号表名（PostgreSQL 方言）。
+const quotedUserTable = `"user"`
+
 // sqlRecorder 记录 GORM 渲染出的 SQL。配合 DryRun，既不需要数据库，断言的又是
-// "方言渲染后的最终 SQL"——正是手拼标识符出问题的那一层。
+// "方言渲染后的最终 SQL"——正是标识符引用与否的那一层。
 type sqlRecorder struct {
 	logger.Interface
 	mu   sync.Mutex
@@ -100,17 +113,68 @@ func newMySQLDryRunDB(t *testing.T, recorder logger.Interface) *gorm.DB {
 	return db
 }
 
-// TestDao_TableNameVariants_DryRunSQL 覆盖调用方传不同 tableName 的向后兼容性：
-// 无论裸表名、预引号表名（旧绕法）还是 schema 限定名，WHERE 里的表前缀都必须与 FROM 一致，
-// 且标识符按方言引用。
-//
-// 预引号两种写法此前是"表名撞保留字"的绕法，不能因为本次修复而失效：
-//   - PostgreSQL 传 `"user"`（双引号）
-//   - MySQL 传 “`user`”（反引号）
-//
-// 这两者会让 GORM 把表名当原始表达式、Statement.Table 为空，因此实现里不能用
-// clause.CurrentTable 取表名（详见 deletedAtIsNull 注释）。
-func TestDao_TableNameVariants_DryRunSQL(t *testing.T) {
+// TestDao_NoInternalQuoting_DryRunSQL 断言裸表名会被原样拼进 WHERE：出现裸标识符
+// user.deleted_at / user.id，且绝不出现已引用的 "user"."deleted_at"。
+// 这正是"保留字表名在 PG 上失败、由调用方处理"的契约。
+func TestDao_NoInternalQuoting_DryRunSQL(t *testing.T) {
+	recorder := newSQLRecorder()
+	dao := NewDao[reservedEntity, []reservedEntity, uint]("user", "reserved", func(ctx context.Context) *gorm.DB {
+		return newPostgresDryRunDB(t, recorder)
+	})
+	ctx := context.Background()
+
+	_, err := dao.GetByID(ctx, 1)
+	require.NoError(t, err)
+
+	_, err = dao.GetByCond(ctx, &reservedCond{BaseCond: BaseCond{ID: 1}})
+	require.NoError(t, err)
+
+	_, err = dao.GetListByCond(ctx, &reservedCond{
+		BaseCond: BaseCond{
+			IDs:            []any{1, 2},
+			CreatedAtStart: 1700000000,
+			CreatedAtEnd:   1700003600,
+			OrderField:     "id DESC",
+			OrConditions:   []OrCond{{CondGroups: []OrCondGroup{{Query: "name = ?", Args: []any{"a"}}}}},
+		},
+		Name: "a",
+	})
+	require.NoError(t, err)
+
+	count, err := dao.CountByCond(ctx, &BaseCond{})
+	require.NoError(t, err)
+	require.Zero(t, count)
+
+	_, _, err = dao.GetPageListByCond(ctx, &BaseCond{Page: 1, PageSize: 10})
+	require.NoError(t, err)
+
+	statements := recorder.statements()
+	require.NotEmpty(t, statements)
+
+	for _, sql := range statements {
+		// FROM 由 GORM 的 Table 子句渲染，始终按方言引用
+		assert.Contains(t, sql, `FROM "user"`, sql)
+		// WHERE 里的表前缀由 gormdao 拼接，不做引用
+		assert.NotContains(t, sql, `"user"."`, "gormdao 不再引用标识符: %s", sql)
+	}
+
+	all := strings.Join(statements, "\n")
+	assert.Contains(t, all, `user.deleted_at IS NULL`)
+	assert.Contains(t, all, `user.id = 1`)
+	assert.Contains(t, all, `user.id IN (1,2)`)
+	assert.Contains(t, all, `user.created_at >= `)
+	assert.Contains(t, all, `user.created_at <= `)
+	assert.Contains(t, all, `(user.name = 'a')`)
+	// 调用方自定义 Cond 的片段同样原样拼入
+	assert.Contains(t, all, `AND name = 'a'`)
+	// OrderField 是原始片段，原样透传
+	assert.Contains(t, all, `ORDER BY id DESC`)
+}
+
+// TestDao_CallerQuotedTableName_DryRunSQL 覆盖调用方传不同 tableName 的绕法：
+// 预引号（PG 双引号 / MySQL 反引号）与 schema 限定名都必须生成与 FROM 一致的
+// 表前缀，且都能在各读路径上使用。
+func TestDao_CallerQuotedTableName_DryRunSQL(t *testing.T) {
 	cases := []struct {
 		name      string
 		dialect   string
@@ -118,28 +182,20 @@ func TestDao_TableNameVariants_DryRunSQL(t *testing.T) {
 		want      string
 	}{
 		{
-			name: "postgres-裸表名", dialect: "postgres", tableName: "user",
-			want: `SELECT * FROM "user" WHERE "user"."deleted_at" IS NULL AND "user"."id" = 1 LIMIT 1`,
-		},
-		{
-			name: "postgres-预引号(双引号)", dialect: "postgres", tableName: `"user"`,
-			want: `SELECT * FROM "user" WHERE "user"."deleted_at" IS NULL AND "user"."id" = 1 LIMIT 1`,
+			name: "postgres-预引号(双引号)", dialect: "postgres", tableName: quotedUserTable,
+			want: `SELECT * FROM "user" WHERE "user".deleted_at IS NULL AND "user".id = 1 LIMIT 1`,
 		},
 		{
 			name: "postgres-schema限定", dialect: "postgres", tableName: "public.user",
-			want: `SELECT * FROM "public"."user" WHERE "public"."user"."deleted_at" IS NULL AND "public"."user"."id" = 1 LIMIT 1`,
-		},
-		{
-			name: "mysql-裸表名", dialect: "mysql", tableName: "user",
-			want: "SELECT * FROM `user` WHERE `user`.`deleted_at` IS NULL AND `user`.`id` = 1 LIMIT 1",
+			want: `SELECT * FROM "public"."user" WHERE public.user.deleted_at IS NULL AND public.user.id = 1 LIMIT 1`,
 		},
 		{
 			name: "mysql-预引号(反引号)", dialect: "mysql", tableName: "`user`",
-			want: "SELECT * FROM `user` WHERE `user`.`deleted_at` IS NULL AND `user`.`id` = 1 LIMIT 1",
+			want: "SELECT * FROM `user` WHERE `user`.deleted_at IS NULL AND `user`.id = 1 LIMIT 1",
 		},
 		{
 			name: "mysql-schema限定", dialect: "mysql", tableName: "demo.user",
-			want: "SELECT * FROM `demo`.`user` WHERE `demo`.`user`.`deleted_at` IS NULL AND `demo`.`user`.`id` = 1 LIMIT 1",
+			want: "SELECT * FROM `demo`.`user` WHERE demo.user.deleted_at IS NULL AND demo.user.id = 1 LIMIT 1",
 		},
 	}
 
@@ -158,116 +214,69 @@ func TestDao_TableNameVariants_DryRunSQL(t *testing.T) {
 
 			statements := recorder.statements()
 			require.Len(t, statements, 1)
+			t.Logf("%s => %s", c.name, statements[0])
 			assert.Equal(t, c.want, statements[0])
 		})
 	}
 }
 
-// TestDao_ReservedWordTableName_DryRunSQL 断言保留字表名在各个读路径上都以
-// 方言引用的形式出现（"user"."deleted_at"），而不是裸标识符（user.deleted_at）。
-func TestDao_ReservedWordTableName_DryRunSQL(t *testing.T) {
-	recorder := newSQLRecorder()
-	dao := NewDao[reservedEntity, []reservedEntity, uint]("user", "reserved", func(ctx context.Context) *gorm.DB {
-		return newPostgresDryRunDB(t, recorder)
-	})
-	ctx := context.Background()
-
-	// 这些读路径此前都会拼出 user.deleted_at IS NULL / user.id = ? 之类的裸标识符
-	// 注：DryRun 不取结果集，因此这里只断言 SQL 文本，不校验返回值。
-	_, err := dao.GetByID(ctx, 1)
-	require.NoError(t, err)
-
-	_, err = dao.GetByCond(ctx, &reservedCond{BaseCond: BaseCond{ID: 1}})
-	require.NoError(t, err)
-
-	_, err = dao.GetListByCond(ctx, &reservedCond{
-		BaseCond: BaseCond{
-			IDs:            []any{1, 2},
-			CreatedAtStart: 1700000000,
-			CreatedAtEnd:   1700003600,
-			OrderByFields:  []OrderByField{{Field: "id", Desc: true}},
-			OrConditions:   []OrCond{{CondGroups: []OrCondGroup{{Query: "name = ?", Args: []any{"a"}}}}},
-		},
-		Name: "a",
-	})
-	require.NoError(t, err)
-
-	count, err := dao.CountByCond(ctx, &BaseCond{})
-	require.NoError(t, err)
-	require.Zero(t, count)
-
-	_, _, err = dao.GetPageListByCond(ctx, &BaseCond{Page: 1, PageSize: 10})
-	require.NoError(t, err)
-
-	statements := recorder.statements()
-	require.NotEmpty(t, statements)
-
-	for _, sql := range statements {
-		assert.Contains(t, sql, `"user"`, "保留字表名必须被引用: %s", sql)
-		// 裸的 user.<col> 在 PG 上是 SQLSTATE 42601 (syntax error at or near ".")
-		assert.NotRegexp(t, `(^|[\s(,])user\.`, sql, "出现未引用的保留字标识符: %s", sql)
+// TestDao_OrderField_RawPassthrough_DryRunSQL 钉住 OrderField 的原始片段语义：
+// 标识符不做引用，保留字列名要调用方自己写已引用的形式。
+func TestDao_OrderField_RawPassthrough_DryRunSQL(t *testing.T) {
+	cases := []struct {
+		name       string
+		orderField string
+		wantOrder  string
+	}{
+		{"调用方自行引用", `"order" DESC`, `ORDER BY "order" DESC`},
+		{"未引用则原样透传", "order DESC", `ORDER BY order DESC`},
 	}
 
-	all := strings.Join(statements, "\n")
-	assert.Contains(t, all, `"user"."deleted_at" IS NULL`)
-	assert.Contains(t, all, `"user"."id" = `)
-	assert.Contains(t, all, `"user"."id" IN (`)
-	assert.Contains(t, all, `"user"."created_at" >= `)
-	assert.Contains(t, all, `"user"."created_at" <= `)
-	assert.Contains(t, all, `ORDER BY "user"."id" DESC`)
-	// 自定义 Cond 的裸列名条件照常生效；调用方无需 import clause，也无需给列名加表前缀
-	assert.Contains(t, all, `AND name = 'a'`)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			recorder := newSQLRecorder()
+			dao := NewDao[reservedEntity, []reservedEntity, uint](quotedUserTable, "reserved", func(ctx context.Context) *gorm.DB {
+				return newPostgresDryRunDB(t, recorder)
+			})
+
+			_, err := dao.GetListByCond(context.Background(), &reservedCond{
+				BaseCond: BaseCond{OrderField: c.orderField},
+			})
+			require.NoError(t, err)
+
+			statements := recorder.statements()
+			require.Len(t, statements, 1)
+			assert.Contains(t, statements[0], c.wantOrder)
+		})
+	}
 }
 
-// TestDao_OrderField_WithOrderByFields_DryRunSQL 钉住"历史原始排序片段与结构化排序共存"的行为：
-// OrderField 必须继续生效，OrderByFields 追加在其后。
-//
-// 该行为依赖 GORM 对 Order(string) 的实现方式：v1.31 起 string 形式被包装成
-// OrderByColumn{Column:{Name: v, Raw: true}}，所以 OrderBy.MergeClause 做的是列追加；
-// 若将来升级到把 string 实现为 OrderBy.Expression 的版本，MergeClause 末尾的
-// clause.Expression = orderBy 会静默丢弃先前的原始片段——届时这条用例会立刻失败。
-func TestDao_OrderField_WithOrderByFields_DryRunSQL(t *testing.T) {
-	recorder := newSQLRecorder()
-	dao := NewDao[reservedEntity, []reservedEntity, uint]("user", "reserved", func(ctx context.Context) *gorm.DB {
-		return newPostgresDryRunDB(t, recorder)
-	})
+// TestDao_OrConditions_TableNamePrefix_DryRunSQL 钉住 OrCondGroup 的拼接规则：
+// 表名前缀按调用方传入的形式原样拼入（不额外引用、也不去引用）。
+func TestDao_OrConditions_TableNamePrefix_DryRunSQL(t *testing.T) {
+	cond := &reservedCond{BaseCond: BaseCond{
+		OrConditions: []OrCond{{CondGroups: []OrCondGroup{{Query: "name = ?", Args: []any{"a"}}}}},
+	}}
 
-	_, err := dao.GetListByCond(context.Background(), &reservedCond{BaseCond: BaseCond{
-		OrderField:    "raw_expr DESC",
-		OrderByFields: []OrderByField{{Field: "id", Desc: true}},
-	}})
-	require.NoError(t, err)
+	for _, tableName := range []string{"user", quotedUserTable} {
+		recorder := newSQLRecorder()
+		dao := NewDao[reservedEntity, []reservedEntity, uint](tableName, "reserved", func(ctx context.Context) *gorm.DB {
+			return newPostgresDryRunDB(t, recorder)
+		})
 
-	statements := recorder.statements()
-	require.Len(t, statements, 1)
-	assert.Contains(t, statements[0], `ORDER BY raw_expr DESC,"user"."id" DESC`)
+		_, err := dao.GetListByCond(context.Background(), cond)
+		require.NoError(t, err)
+
+		statements := recorder.statements()
+		require.Len(t, statements, 1)
+		assert.Contains(t, statements[0], fmt.Sprintf("(%s.name = 'a')", tableName), statements[0])
+	}
 }
 
-// TestDao_OrderByFields_MySQL_DryRunSQL 覆盖 mysql 方言下 OrderByFields 的引用形式，
-// 同时覆盖 OrderByField.Table 显式指定的分支（Table 为空时回落到 DAO 传入的表名）。
-func TestDao_OrderByFields_MySQL_DryRunSQL(t *testing.T) {
-	recorder := newSQLRecorder()
-	dao := NewDao[reservedEntity, []reservedEntity, uint]("user", "reserved", func(ctx context.Context) *gorm.DB {
-		return newMySQLDryRunDB(t, recorder)
-	})
-
-	_, err := dao.GetListByCond(context.Background(), &reservedCond{BaseCond: BaseCond{
-		OrderByFields: []OrderByField{
-			{Field: "id", Desc: true},
-			{Table: "user", Field: "name"},
-		},
-	}})
-	require.NoError(t, err)
-
-	statements := recorder.statements()
-	require.Len(t, statements, 1)
-	assert.Contains(t, statements[0], "ORDER BY `user`.`id` DESC,`user`.`name`")
-}
-
-// TestDao_ReservedWordTableName_Postgres 在真实 PostgreSQL 上回归同一缺陷：
-// DryRun 只能断言 SQL 文本，真库才能证明这条 SQL 真的能执行。
-// 表建在独立 schema 内并通过 search_path 以裸表名 user 暴露，DAO 收到的 tableName
-// 仍是保留字本身（与出问题时的调用方式一致）；schema 用完即删，不触碰库里其它对象。
+// TestDao_ReservedWordTableName_Postgres 在真实 PostgreSQL 上验证回滚后的契约：
+// 预引号表名可用、schema 限定名可用，而裸保留字表名确实失败（错误交回调用方）。
+// tableName 的两种可用形态都建在独立 schema 内并通过 search_path 暴露，
+// schema 用完即删，不触碰库里其它对象。
 func TestDao_ReservedWordTableName_Postgres(t *testing.T) {
 	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
 	admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
@@ -289,20 +298,21 @@ func TestDao_ReservedWordTableName_Postgres(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&reservedEntity{}))
 
 	ctx := context.Background()
-	dao := NewDao[reservedEntity, []reservedEntity, uint]("user", "reserved", func(ctx context.Context) *gorm.DB { return db })
+	// 调用方传入预引号表名：这是保留字表名在 PG 上可用的前提
+	dao := NewDao[reservedEntity, []reservedEntity, uint](quotedUserTable, "reserved", func(ctx context.Context) *gorm.DB { return db })
 
 	created := &reservedEntity{Name: "alice"}
 	require.NoError(t, dao.Insert(ctx, created))
 	require.NotZero(t, created.ID)
 
-	// 读路径：软删除过滤 + 主键 + 自定义 Cond + 结构化排序
+	// 读路径：软删除过滤 + 主键 + 自定义 Cond + 原始排序片段
 	got, err := dao.GetByID(ctx, created.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, "alice", got.Name)
 
 	list, err := dao.GetListByCond(ctx, &reservedCond{
-		BaseCond: BaseCond{OrderByFields: []OrderByField{{Field: "id", Desc: true}}},
+		BaseCond: BaseCond{OrderField: "id DESC"},
 		Name:     "alice",
 	})
 	require.NoError(t, err)
@@ -316,7 +326,7 @@ func TestDao_ReservedWordTableName_Postgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 
-	// schema 限定表名（三段引用）也走一遍真库：WHERE 前缀与 FROM 一致，PG 上合法
+	// schema 限定表名是另一种调用方绕法：裸名即可用（点号后的 user 处于 ColLabel 位置）
 	qualifiedDao := NewDao[reservedEntity, []reservedEntity, uint](schema+".user", "reserved", func(ctx context.Context) *gorm.DB { return db })
 	got, err = qualifiedDao.GetByID(ctx, created.ID)
 	require.NoError(t, err)
@@ -325,7 +335,14 @@ func TestDao_ReservedWordTableName_Postgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), qualifiedCount)
 
-	// 软删除写路径 + 读路径过滤
+	// 裸保留字表名仍会失败，且失败的是调用方（gormdao 不做兜底引用）：
+	// PostgreSQL 在 ColId 位置遇到保留字 user 后紧跟点号，报 SQLSTATE 42601。
+	bareDao := NewDao[reservedEntity, []reservedEntity, uint]("user", "reserved", func(ctx context.Context) *gorm.DB { return db })
+	_, err = bareDao.GetByID(ctx, created.ID)
+	require.Error(t, err, "裸保留字表名应由调用方处理，gormdao 不做标识符引用")
+	assert.Contains(t, err.Error(), "42601", "期望 PG 语法错误: %v", err)
+
+	// 软删除写路径 + 读路径过滤（写路径不拼表前缀，保留字表名不影响）
 	require.NoError(t, dao.Delete(ctx, created.ID, 7))
 	got, err = dao.GetByID(ctx, created.ID)
 	require.NoError(t, err)
