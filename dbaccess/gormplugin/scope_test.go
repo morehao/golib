@@ -178,7 +178,7 @@ func (pgScopeTestModel) TableName() string { return "gormplugin_pg_scope_test" }
 // "syntax error at or near"（SQLite 恰好接受反引号，单测无法暴露该问题）。
 func openPostgresForTest(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testutil.GetEnv(testutil.PostgresDSN, "host=127.0.0.1 user=postgres password=123456 dbname=demo port=5432 sslmode=disable TimeZone=Asia/Shanghai")
+	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)
