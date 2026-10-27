@@ -61,22 +61,23 @@ func TestSetTenantScopeNilRequest(t *testing.T) {
 	require.NotPanics(t, func() { SetTenantScope(c, gcontext.CurrentScope("t-1")) })
 }
 
-// TestSetTenantScopeProjectionSemantics 钉住投影语义（含已知取舍）：只有 Current 写
-// gin Keys，All/Explicit 不改写投影，因此身份读取点看到的仍是最后一次 Current 的值。
-// 数据隔离以类型化作用域为准；投影滞后是"兼容历史读取点"付出的代价，详见
-// SetTenantScope 的注释。
-func TestSetTenantScopeProjectionSemantics(t *testing.T) {
+// TestGetTenantIDReadsTypedScope 钉住 controller 侧租户读取的优先级：类型化作用域优先，
+// gin Keys 投影只做兜底。All/Explicit 不改写投影，但读取点也不会再看到过期值。
+func TestGetTenantIDReadsTypedScope(t *testing.T) {
 	runInEngine(t, true, func(c *gin.Context) {
 		SetTenantScope(c, gcontext.CurrentScope("t-current"))
 		require.Equal(t, "t-current", GetTenantIDString(c))
+		require.Equal(t, "t-current", c.GetString(gcontext.KeyTenantID))
 
 		SetTenantScope(c, gcontext.AllScope())
-		require.Equal(t, "t-current", GetTenantIDString(c), "All 不改写投影")
+		require.Empty(t, GetTenantIDString(c), "All 没有单一租户 ID，也不能回落到过期投影")
+		require.Equal(t, "t-current", c.GetString(gcontext.KeyTenantID), "投影本身保持旧值")
 
 		SetTenantScope(c, gcontext.ExplicitScope("t-target"))
-		require.Equal(t, "t-current", GetTenantIDString(c), "Explicit 不改写投影，身份读取仍是当前租户")
+		require.Equal(t, "t-target", GetTenantIDString(c), "显式声明的目标租户优先于投影")
+		require.Equal(t, "t-current", c.GetString(gcontext.KeyTenantID), "Explicit 不改写投影")
 
-		// 但数据层看到的是显式声明的目标租户，而不是投影：
+		// 数据层看到的是显式声明的目标租户，而不是投影：
 		value, inject, declared := gcontext.TenantScopeFilter(c.Request.Context())
 		require.Equal(t, "t-target", value)
 		require.True(t, inject)

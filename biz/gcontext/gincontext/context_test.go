@@ -2,6 +2,7 @@ package gincontext
 
 import (
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -73,6 +74,29 @@ func TestGenericGettersString(t *testing.T) {
 	assertEqual(t, "GetUint", GetUint(c, gcontext.KeyUserID), uint(22))
 	assertEqual(t, "GetUint64", GetUint64(c, gcontext.KeyUserID), uint64(22))
 	assertEqual(t, "GetString", GetString(c, gcontext.KeyUserID), "22")
+}
+
+// TestGetTenantIDStringPrefersTypedScope 验证 controller 的租户读取以请求上下文里的
+// 类型化作用域为准：即使中间件只写了作用域、没有投影 gin Keys，也能读到。
+func TestGetTenantIDStringPrefersTypedScope(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request = c.Request.WithContext(
+		gcontext.WithTenantScope(c.Request.Context(), gcontext.CurrentScope("t-scope")))
+
+	assertEqual(t, "GetTenantIDString", GetTenantIDString(c), "t-scope")
+}
+
+// TestGetTenantIDStringAllScopeIgnoresStaleProjection 验证 AllScope 不回落到
+// 可能过期的 gin Keys 投影（"全租户"没有单一租户 ID）。
+func TestGetTenantIDStringAllScopeIgnoresStaleProjection(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Set(gcontext.KeyTenantID, "stale-tenant")
+	c.Request = c.Request.WithContext(
+		gcontext.WithTenantScope(c.Request.Context(), gcontext.AllScope()))
+
+	assertEqual(t, "GetTenantIDString", GetTenantIDString(c), "")
 }
 
 // TestAppErrorContext 验证渲染层写出的业务错误能被访问日志这类横切组件读到，

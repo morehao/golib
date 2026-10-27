@@ -9,11 +9,12 @@
 多租户隔离的正确性问题往往不是「怎么写过滤条件」，而是「这次数据访问到底该不该过滤、按谁过滤」没有被显式表达。典型反例：
 
 ```go
-userDao.GetListByCond(ctx, cond)                   // 注入 tenant_id = 当前租户
-userDao.GetListByCond(ctx.Request.Context(), cond) // 不过滤、全租户 —— 且不报错
+userDao.GetListByCond(ctx, cond)                                   // 注入 tenant_id = 当前租户
+userDao.GetListByCond(context.Background(), cond)                  // 无作用域：全租户（或 fail-closed 报错）
+userDao.GetListByCond(gcontext.WithTenantScope(ctx, gcontext.AllScope()), cond) // 显式全租户
 ```
 
-同一个方法因为**传了哪种 ctx** 而语义不同，失败还是静默的。`gcontext` 的做法是把作用域变成随 `context.Context` 传递的**显式值**，任何 ctx（gin ctx / 纯 ctx / 跨 `http.Handler` 的 `req.Context()`）解析结果一致。
+同一个方法在**ctx 丢失或未声明作用域**时语义不同，失败还是静默的。`gcontext` 的做法是把作用域变成随 `context.Context` 传递的**显式值**：只要 ctx 携带该值，gin ctx / 纯 ctx / 跨 `http.Handler` 的 `req.Context()` 解析结果一致；没声明就按未声明处理，而不是猜一个默认值。
 
 ---
 
@@ -59,36 +60,69 @@ plugin, err := gormplugin.New(&gormplugin.ScopeConfig{
 
 ## gin 集成（`biz/gcontext/gincontext`）
 
-| 函数 | 用途 |
-|---|---|
-| `SetTenantScope(ctx *gin.Context, scope)` | 把作用域写入**请求上下文**（规范存储），并把 `Current` 的租户 ID 投影到 gin Keys |
-| `AsyncContext(ctx) context.Context` | 异步/后台续跑：保留取值与作用域、去掉取消与超时，且不持有会被复用的 `*gin.Context` |
-| `AsyncContextWithTimeout(ctx, d)` | 上述的超时版本 |
-| `WithRequestValue(ctx, key, value)` | 跨 `http.Handler` 边界（如 OIDC provider 只拿得到 `*http.Request`）搬运单键值 |
+`gincontext` 是 gin 边界的适配层，**只给 controller / middleware 用**。service / dao / 协议层收 `context.Context`，不 import 本包。
+
+| 函数 | 用途 | 调用方 |
+|---|---|---|
+| `SetTenantScope(ctx, scope)` | 把作用域写入**请求上下文**（规范存储），`Current` 时投影 `KeyTenantID` | 鉴权中间件 |
+| `GetXxxString(ctx)` / `GetClientIP(ctx)` | 从 gin Keys 读取身份与元数据，填进请求 DTO | controller |
+| `AsyncContext(ctx)` / `AsyncContextWithTimeout` | 异步续跑：保留取值与作用域、去掉取消，不持有会被复用的 `*gin.Context` | controller |
+| `WithRequestValue(ctx, key, value)` | 跨 `http.Handler` 边界（如 OIDC provider 只拿得到 `*http.Request`）搬运单键值 | middleware / 协议层 |
+
+### 身份不经过 context
+
+身份是业务输入，不是横切状态。**controller 从 gin ctx 取出来，填进请求 DTO 的字段；service 只读 DTO。** 这样 service 不依赖 gin、不需要构造 ctx 就能单测，也不会出现"传 gin ctx 还是纯 ctx 结果不同"的分支。
+
+```go
+// controller：唯一接触身份的地方
+req.UserID   = gincontext.GetUserIDString(c)
+req.TenantID = gincontext.GetTenantIDString(c)
+req.ClientIP = gincontext.GetClientIP(c)
+res, err := userSvc.List(c.Request.Context(), &req)
+
+// service：身份是普通字段（DTO 里用 json:"-" 防止客户端伪造）
+func (s *userSvc) List(ctx context.Context, req *dto.ListReq) (*dto.ListResp, error) {
+    if req.UserID == "" {
+        return nil, code.GetError(code.UnauthorizedErr)
+    }
+    // ... req.UserID / req.TenantID
+}
+
+// 数据层：ctx 只承载取消、超时、trace 和租户作用域
+list, err := userDao.GetListByCond(ctx, cond)   // 租户条件由插件自动注入
+```
+
+同一个 `TenantID` 有两个去向，但只有一份真相（令牌里的 claims）：一份进 DTO 供业务判断归属，一份写成 `TenantScope` 供 DAO 过滤。跨租户/全租户访问仍然显式声明：
+
+```go
+crossCtx := gcontext.WithTenantScope(ctx, gcontext.AllScope())
+joinCtx := gcontext.WithTenantScope(ctx, gcontext.ExplicitScope(targetTenantID))
+```
 
 ### 两个必须知道的点
 
-1. **`ContextWithFallback` 是承重开关**：gin 只在 `engine.ContextWithFallback = true` 时把 `Value/Done/Err` 转发到 `c.Request.Context()`。业务侧一路直传 `*gin.Context` 时，关掉该开关会让类型化作用域在 gin ctx 上**不可见**（被判定为未声明）。生产引擎请显式开启；回归测试见 `gincontext` 包内 `TestTenantScopeFromGinContextDependsOnFallback`。
+1. **业务侧不再依赖 `ContextWithFallback`**：controller 用 `c.Request.Context()` 转换一次，service/dao 拿到的是纯 ctx，`Value/Done/Err` 与引擎开关无关。只有把 gin ctx 直接传给 DAO 的历史代码才需要该开关。
 
-2. **gin Keys 投影是兼容载体，也是兜底隔离依据**：`SetTenantScope` 只对 `Current` 写 `KeyTenantID`，`All/Explicit` 不改写投影。因此当类型化作用域不可见时（引擎漏开开关、或调用方手上只有写过 gin Keys 的历史上下文），隔离结果会由投影决定；而 `All/Explicit` 之后投影仍保留最后一次 `Current` 的值。**结论：跨租户/全租户访问用 `WithTenantScope` 在派生 ctx 上声明，不要依赖 `SetTenantScope` 改写身份投影**；投影的滞后性已由 `TestSetTenantScopeProjectionSemantics` 钉住。
+2. **gin Keys 投影是 controller 的读取源，不是隔离依据**：`SetTenantScope` 只对 `Current` 写 `KeyTenantID`，`All/Explicit` 不改写投影。`GetTenantIDString` 以请求上下文里的类型化作用域为准（All 返回空串），再回落到投影，因此 controller 不会读到过期值；隔离结果始终由类型化作用域决定。
 
 ---
 
 ## 使用示例
 
 ```go
-// 认证中间件：写入当前租户
+// 认证中间件：写入当前租户（context 里唯一的业务值）
 gincontext.SetTenantScope(c, gcontext.CurrentScope(claims.TenantID))
 
-// 业务：直传 gin ctx，数据层自动按租户过滤
-list, err := userDao.GetListByCond(c, cond)
+// controller：身份填 DTO，然后把纯 ctx 交给 service
+req.UserID = gincontext.GetUserIDString(c)
+list, err := userSvc.List(c.Request.Context(), &req)
 
 // 跨租户：显式声明，而不是「没有作用域」
-crossCtx := gcontext.WithTenantScope(c, gcontext.AllScope())
+crossCtx := gcontext.WithTenantScope(ctx, gcontext.AllScope())
 invite, err := inviteDao.GetByCond(crossCtx, &dao.InviteCond{Code: req.InviteCode})
 
 // 指定目标租户
-joinCtx := gcontext.WithTenantScope(c, gcontext.ExplicitScope(tenantID))
+joinCtx := gcontext.WithTenantScope(ctx, gcontext.ExplicitScope(tenantID))
 
 // 异步续跑
 go func() {
@@ -97,4 +131,4 @@ go func() {
 }()
 ```
 
-> 不要写 `c.Request.Context()`：业务侧一路直传 `*gin.Context`，异步用 `AsyncContext`，跨 `http.Handler` 的搬运用 `WithRequestValue`。
+> controller 做一次 `c.Request.Context()` 转换；service 不出现 gin 类型，异步用 `AsyncContext`，跨 `http.Handler` 的搬运用 `WithRequestValue`。
