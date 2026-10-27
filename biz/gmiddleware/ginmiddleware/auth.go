@@ -64,13 +64,22 @@ func JWTAuth(secretKey string, opts ...AuthOption) gin.HandlerFunc {
 			return
 		}
 
+		// 身份投影到 gin Keys：controller 从这里读出后填进请求 DTO。
+		// 身份本身不进 context —— service 收 DTO，不读 ctx。
 		ctx.Set(gcontext.KeyOrgID, claims.CustomData.OrgID)
-		ctx.Set(gcontext.KeyTenantID, claims.CustomData.TenantID)
 		ctx.Set(gcontext.KeyPersonID, claims.CustomData.PersonID)
 		ctx.Set(gcontext.KeyUserID, claims.CustomData.UserID)
 		ctx.Set(gcontext.KeyDeptID, claims.CustomData.DeptID)
 		ctx.Set(gcontext.KeyUserType, claims.CustomData.UserType)
 		ctx.Set(gcontext.KeyAuthToken, tokenStr)
+
+		// 租户作用域是 context 里唯一的业务值，供 DAO 隔离插件读取。
+		// 走 SetTenantScope 而不是直接 ctx.Set，保证"当前租户"只有一条写入路径，
+		// 同时完成 gin Keys 投影（controller 的 GetTenantIDString 也依赖它兜底）。
+		// 令牌没有租户（平台/机器主体）时不写，由数据层按 fail-closed 处理。
+		if tenantID := claims.CustomData.TenantID; tenantID != "" {
+			gincontext.SetTenantScope(ctx, gcontext.CurrentScope(tenantID))
+		}
 
 		ctx.Next()
 	}

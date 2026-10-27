@@ -17,9 +17,10 @@ import (
 //   - 当类型化作用域不可见时（例如引擎未开 ContextWithFallback，或调用方手上只有
 //     写过 gin Keys 的历史上下文），投影会成为**兜底的隔离依据**。因此投影是安全
 //     相关状态：它一旦写入就不会被后续调用改写；
-//   - All/Explicit 不改写投影，读取点看到的仍是最后一次 Current 的值。跨租户/全租户
-//     访问请用 gcontext.WithTenantScope 在派生 ctx 上显式声明（gcontext.AllScope()/
-//     gcontext.ExplicitScope(id)），而不是依赖本函数改写身份投影。
+//   - All/Explicit 不改写投影：gin Keys 里保留最后一次 Current 的值，但
+//     GetTenantIDString 以类型化作用域为准（All 返回空串），因此 controller 不会读到过期值。
+//     跨租户/全租户访问请用 gcontext.WithTenantScope 在派生 ctx 上显式声明
+//     （gcontext.AllScope()/gcontext.ExplicitScope(id)），而不是依赖本函数改写身份投影。
 func SetTenantScope(ctx *gin.Context, scope gcontext.TenantScope) {
 	if ctx == nil || ctx.Request == nil {
 		return
@@ -34,7 +35,7 @@ func SetTenantScope(ctx *gin.Context, scope gcontext.TenantScope) {
 //
 // 用于必须跨过 http.Handler 边界的协议层：zitadel 等 op.Provider 只能看到 *http.Request
 // 的 context，看不到 gin Keys，因此这类 hint 必须在透传前搬运到请求上下文。
-// 业务代码不要直接写 c.Request.Context()：请把本函数当作业务侧唯一的请求上下文写入口。
+// 只供中间件或协议层搬运单键值；handler/service 不调用（业务值通过 DTO 显式传递）。
 // （golib 自身的中间件如 ginmiddleware.Trace/access_log 需要链式替换整个 ctx，
 // 走各自的实现，不经过这里。）
 //
@@ -54,7 +55,7 @@ func WithRequestValue(ctx *gin.Context, key, value any) {
 // 异步路径因此只继承请求上下文里的值：类型化租户作用域会被带走，
 // 而 gin Keys 里的身份投影不会被带走（需要读身份请传显式的值，而不是依赖 gin ctx）。
 //
-// 业务代码因此不需要出现 ctx.Request.Context()：异步路径统一用本函数派生。
+// controller 派发 goroutine 时用本函数派生；不要在 service 里派生（service 只收 ctx）。
 func AsyncContext(ctx *gin.Context) context.Context {
 	if ctx == nil || ctx.Request == nil {
 		return context.Background()
