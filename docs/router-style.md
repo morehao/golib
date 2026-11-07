@@ -24,6 +24,7 @@
 | `biz/gserver/ginserver/router.go` | `RouterGroups` 版本化分组抽象 | 新框架（未使用） |
 | `biz/gserver/ginserver/const.go` | `ApiVersionV1..V5` 版本常量 | 常量 |
 | `biz/gserver/ginupload/router.go` | 文件服务路由注册 | 模块 `Register` 风格 |
+| `biz/gserver/ginsetting/router.go` | 配置中心（gsetting）管理面 CRUD 路由注册 | 模块 `Register` 风格，RESTful 资源式 |
 | `biz/gserver/ginupload/*_handler.go` | handler 工厂函数 + swagger 注解 | handler 约定 |
 | `biz/gserver/gindocs/swagger.go` | Swagger/ReDoc 文档路由 | 模块 `Register` 风格 |
 | `biz/gmiddleware/ginmiddleware/` | JWT/CORS/AccessLog/Token 黑名单 | 中间件约定 |
