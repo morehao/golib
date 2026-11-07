@@ -70,7 +70,7 @@ func New(db *gorm.DB, opts ...Option) (*Dict, error) {
 	return &Dict{store: newStore(getDB, cfg.maxLevel, cfg.source)}, nil
 }
 
-// Init 初始化全局单例，重复调用返回首个实例（与 configkv.Init 一致的语义）。
+// Init 初始化全局单例，重复调用返回首个实例（与 gsetting.Init 一致的语义）。
 // 单例对测试与多数据源不友好，新代码优先用 New + 显式注入。
 func Init(db *gorm.DB, opts ...Option) (*Dict, error) {
 	initMu.Lock()

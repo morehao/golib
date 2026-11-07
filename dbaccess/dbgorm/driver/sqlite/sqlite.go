@@ -86,7 +86,7 @@ var memorySeq atomic.Uint64
 //   - 同一个连接池内的连接共享同一个库，否则会间歇性报 "no such table"；
 //   - 不同 Open 之间互不串库。:memory: 的语义就是"每次打开一个空库"，
 //     固定库名会让后开的库看到先前测试遗留的表和数据（实测会让
-//     task/gasync、task/gcron、configkv 的迁移用例相互污染）。
+//     task/gasync、task/gcron、gsetting 的迁移用例相互污染）。
 func newMemoryName() string {
 	return memoryNamePrefix + strconv.FormatUint(memorySeq.Add(1), 10)
 }

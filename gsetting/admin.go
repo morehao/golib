@@ -1,4 +1,4 @@
-package configkv
+package gsetting
 
 import (
 	"context"
@@ -47,7 +47,7 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 		value = ciphertext
 	}
 
-	entity := &ConfigEntity{
+	entity := &SettingEntity{
 		GroupName:      req.Group,
 		Key:            req.Key,
 		ValueType:      valueType,
@@ -106,7 +106,7 @@ func (a *AdminAPI) Delete(ctx context.Context, id string) error {
 	return a.store.DeleteByID(ctx, id)
 }
 
-func (a *AdminAPI) GetByID(ctx context.Context, id string) (*ConfigInfo, error) {
+func (a *AdminAPI) GetByID(ctx context.Context, id string) (*SettingInfo, error) {
 	entity, err := a.store.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func (a *AdminAPI) GetByID(ctx context.Context, id string) (*ConfigInfo, error) 
 		return nil, err
 	}
 
-	return &ConfigInfo{
+	return &SettingInfo{
 		ID:             entity.ID,
 		GroupName:      entity.GroupName,
 		Key:            entity.Key,
@@ -131,15 +131,15 @@ func (a *AdminAPI) GetByID(ctx context.Context, id string) (*ConfigInfo, error) 
 	}, nil
 }
 
-func (a *AdminAPI) ListPage(ctx context.Context, cond *ConfigCond) (*ConfigListResp, error) {
+func (a *AdminAPI) ListPage(ctx context.Context, cond *SettingCond) (*SettingListResp, error) {
 	list, count, err := a.store.ListPage(ctx, cond)
 	if err != nil {
 		return nil, err
 	}
 
-	items := make([]*ConfigInfo, 0, len(list))
+	items := make([]*SettingInfo, 0, len(list))
 	for _, entity := range list {
-		items = append(items, &ConfigInfo{
+		items = append(items, &SettingInfo{
 			ID:             entity.ID,
 			GroupName:      entity.GroupName,
 			Key:            entity.Key,
@@ -153,5 +153,5 @@ func (a *AdminAPI) ListPage(ctx context.Context, cond *ConfigCond) (*ConfigListR
 		})
 	}
 
-	return &ConfigListResp{List: items, Total: count}, nil
+	return &SettingListResp{List: items, Total: count}, nil
 }

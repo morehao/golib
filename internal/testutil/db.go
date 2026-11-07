@@ -17,7 +17,7 @@ import (
 //
 // 与既有集成用例（dbaccess/dbgorm/driver/*）的差别：那些用例直接在共享的 demo 库里
 // 建/删自己的表；本助手改为在**独立库**上工作，因为内置表建表验证需要反复 DROP
-// 组件表（core_file / core_config / core_cron_task* / core_async_task*），
+// 组件表（core_file / core_setting / core_cron_task* / core_async_task*），
 // 放在共享库里既可能踩到别人正在用的同名表，也让「空库首启」这类场景无法构造。
 //
 // 约定与既有用例一致：连不上 docker 时 t.Skipf，不让本地没起库的人红。

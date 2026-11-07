@@ -1,4 +1,4 @@
-package configkv
+package gsetting
 
 import (
 	"github.com/morehao/golib/dbaccess/gormdao"
@@ -35,8 +35,8 @@ const (
 	EncryptionModeEncrypted EncryptionMode = "encrypted" // 加密存储
 )
 
-// ConfigEntity 配置项
-type ConfigEntity struct {
+// SettingEntity 配置项
+type SettingEntity struct {
 	gormdao.BaseEntity
 	GroupName      string         `gorm:"column:group_name;type:varchar(64);not null;default:'default';uniqueIndex:uk_group_key;comment:配置分组，用于业务隔离，如 payment、notification，默认 default"`
 	Key            string         `gorm:"column:key;type:varchar(128);not null;uniqueIndex:uk_group_key;comment:配置键名，同一分组内唯一"`
@@ -50,11 +50,11 @@ type ConfigEntity struct {
 	Status         Status         `gorm:"column:status;type:varchar(32);not null;default:'enabled';comment:状态，可选 enabled/disabled，默认 enabled"`
 }
 
-func (ConfigEntity) TableName() string {
-	return "core_config"
+func (SettingEntity) TableName() string {
+	return "core_setting"
 }
 
-type ConfigCond struct {
+type SettingCond struct {
 	gormdao.BaseCond
 	Group     string
 	Key       string
@@ -63,7 +63,7 @@ type ConfigCond struct {
 	ExactKey  bool
 }
 
-func (c *ConfigCond) BuildCondition(db *gorm.DB, tableName string) {
+func (c *SettingCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.Group != "" {
 		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "group_name"}, Value: c.Group})

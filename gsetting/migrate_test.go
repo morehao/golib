@@ -1,4 +1,4 @@
-package configkv
+package gsetting
 
 import (
 	"fmt"
@@ -23,17 +23,17 @@ func TestNew_MigratesByDefaultAndWithoutAutoMigrate(t *testing.T) {
 	k, err := New(db)
 	require.NoError(t, err)
 	require.NotNil(t, k)
-	require.True(t, db.Migrator().HasTable(&ConfigEntity{}), "New 默认应建表")
+	require.True(t, db.Migrator().HasTable(&SettingEntity{}), "New 默认应建表")
 
 	fresh, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	_, err = New(fresh, WithoutAutoMigrate())
 	require.NoError(t, err)
-	require.False(t, fresh.Migrator().HasTable(&ConfigEntity{}), "WithoutAutoMigrate 后不应建表")
+	require.False(t, fresh.Migrator().HasTable(&SettingEntity{}), "WithoutAutoMigrate 后不应建表")
 
 	// 显式 Migrate 不受选项影响
 	require.NoError(t, Migrate(fresh))
-	require.True(t, fresh.Migrator().HasTable(&ConfigEntity{}))
+	require.True(t, fresh.Migrator().HasTable(&SettingEntity{}))
 
 	// nil 安全
 	_, err = New(nil)
@@ -41,12 +41,12 @@ func TestNew_MigratesByDefaultAndWithoutAutoMigrate(t *testing.T) {
 	require.Error(t, Migrate(nil))
 }
 
-// TestConfigEntity_AutoMigratePostgres 回归场景：
+// TestSettingEntity_AutoMigratePostgres 回归场景：
 // Value 字段原声明 type:mediumtext（MySQL 专属类型），在 PG 上 AutoMigrate
 // 报 "type mediumtext does not exist"；现移除 type 后由 GORM 按方言映射
 // （MySQL longtext / PG text），两侧建表均应成功。
 // 事务内执行并回滚，不残留表结构。
-func TestConfigEntity_AutoMigratePostgres(t *testing.T) {
+func TestSettingEntity_AutoMigratePostgres(t *testing.T) {
 	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -55,7 +55,7 @@ func TestConfigEntity_AutoMigratePostgres(t *testing.T) {
 
 	var migrateErr error
 	db.Transaction(func(tx *gorm.DB) error {
-		migrateErr = tx.AutoMigrate(&ConfigEntity{})
+		migrateErr = tx.AutoMigrate(&SettingEntity{})
 		// 无论成功与否都回滚，保持库干净
 		return fmt.Errorf("rollback:keep-clean")
 	})

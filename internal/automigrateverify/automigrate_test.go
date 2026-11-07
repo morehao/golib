@@ -4,7 +4,7 @@
 // 为什么单独放一个包：既有用例把 A1/A2/A3 建在 SQLite 内存库上——建表语句能跑通，
 // 但 SQLite 不校验 MySQL/PG 的方言细节（列类型、索引、NOT NULL），也验证不了
 // 「空库首启」「组件升级补列」这两条真实部署里最常发生的路径。本包补的就是这一段：
-// 同一份机制 × {mysql, postgres} × {filestore, configkv, gcron, gasync} 全矩阵真库执行。
+// 同一份机制 × {mysql, postgres} × {filestore, gsetting, gcron, gasync} 全矩阵真库执行。
 //
 // 期望值全部来自各模型的 gorm tag（parseModel），不在测试里另抄一份列名/索引清单；
 // 库内实况一律从 information_schema / pg_catalog 读回（introspect_test.go），
@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/configkv"
 	"github.com/morehao/golib/dict"
 	"github.com/morehao/golib/filestore"
+	"github.com/morehao/golib/gsetting"
 	"github.com/morehao/golib/gutil"
 	"github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/task/gasync"
@@ -55,7 +55,7 @@ func (c columnTypeCheck) want(dialectName string) string {
 type component struct {
 	name   string
 	models []any
-	// migrate 显式建表入口（filestore/configkv 叫 Migrate，task 两个包叫 AutoMigrate）。
+	// migrate 显式建表入口（filestore/gsetting 叫 Migrate，task 两个包叫 AutoMigrate）。
 	migrate func(*gorm.DB) error
 	// withAuto 走「默认自动建表」的构造函数。
 	withAuto func(t *testing.T, db *gorm.DB) error
@@ -93,19 +93,19 @@ var components = []component{
 		},
 	},
 	{
-		name:    "configkv",
-		models:  configkv.SchemaModels(),
-		migrate: configkv.Migrate,
+		name:    "gsetting",
+		models:  gsetting.SchemaModels(),
+		migrate: gsetting.Migrate,
 		withAuto: func(t *testing.T, db *gorm.DB) error {
-			_, err := configkv.New(db)
+			_, err := gsetting.New(db)
 			return err
 		},
 		withoutAuto: func(t *testing.T, db *gorm.DB) error {
-			_, err := configkv.New(db, configkv.WithoutAutoMigrate())
+			_, err := gsetting.New(db, gsetting.WithoutAutoMigrate())
 			return err
 		},
 		typeChecks: map[string][]columnTypeCheck{
-			"core_config": {
+			"core_setting": {
 				// 本列是这套机制里最典型的方言坑：曾在 tag 上写死 mediumtext
 				// （MySQL 专属），PG 上报 "type mediumtext does not exist"；
 				// 现在去掉 type 由 GORM 按方言映射，这里把两个方言的落点钉住。

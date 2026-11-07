@@ -1,6 +1,6 @@
-package configkv
+package gsetting
 
-type ConfigInfo struct {
+type SettingInfo struct {
 	ID             string
 	GroupName      string
 	Key            string
@@ -13,8 +13,8 @@ type ConfigInfo struct {
 	UpdatedAt      int64
 }
 
-type ConfigListResp struct {
-	List  []*ConfigInfo
+type SettingListResp struct {
+	List  []*SettingInfo
 	Total int64
 }
 

@@ -1,4 +1,4 @@
-package configkv
+package gsetting
 
 // Option 是 New / Init 的构造选项。
 type Option func(*options)
@@ -20,11 +20,11 @@ func defaultOptions() *options {
 //   - 运行时账号无 DDL 权限：服务账号只有 DML，建表由专用迁移账号完成。
 //
 //     // 发布流程（专用账号，有 DDL 权限）
-//     if err := configkv.Migrate(db); err != nil { ... }
+//     if err := gsetting.Migrate(db); err != nil { ... }
 //     // 服务侧（只有 DML 权限）
-//     k, err := configkv.New(db, configkv.WithoutAutoMigrate())
+//     k, err := gsetting.New(db, gsetting.WithoutAutoMigrate())
 //
-// 只影响 New/Init 的隐式建表；显式调用 configkv.Migrate 永远执行。
+// 只影响 New/Init 的隐式建表；显式调用 gsetting.Migrate 永远执行。
 func WithoutAutoMigrate() Option {
 	return func(o *options) { o.autoMigrate = false }
 }
