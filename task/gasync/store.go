@@ -14,6 +14,20 @@ type store struct {
 	runDao   *gormdao.Dao[AsyncTaskRun, []AsyncTaskRun, string]
 }
 
+// Store 是 gasync 管理面（含 HTTP 路由适配层）可用的只读查询接口：任务定义与
+// 执行记录的列表/单条查询。通过 Server.GetStore 获取，供外部（如 ginasync 路由）
+// 在不触碰内部 store 实现的前提下读取运行态数据。
+type Store interface {
+	GetTaskByType(ctx context.Context, taskType string) (*AsyncTask, error)
+	ListTask(ctx context.Context, cond *AsyncTaskCond) ([]AsyncTask, int64, error)
+	GetRunByID(ctx context.Context, id string) (*AsyncTaskRun, error)
+	ListRun(ctx context.Context, cond *AsyncTaskRunCond) ([]AsyncTaskRun, int64, error)
+	MarkStaleProcessingAsFailed(ctx context.Context, cutoff time.Duration, taskType string) (int64, error)
+	CleanupRuns(ctx context.Context, before time.Time, taskType string) (int64, error)
+}
+
+var _ Store = (*store)(nil)
+
 func newStore(dbGetter gormdao.DBGetter) *store {
 	return &store{
 		dbGetter: dbGetter,

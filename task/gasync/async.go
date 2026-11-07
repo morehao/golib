@@ -258,6 +258,6 @@ func (s *Server) ShutdownContext(ctx context.Context) error {
 	}
 }
 
-func (s *Server) GetStore() *store {
+func (s *Server) GetStore() Store {
 	return s.store
 }
