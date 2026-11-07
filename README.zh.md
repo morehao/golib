@@ -5,7 +5,7 @@
 - [biz](#biz) 业务组件包
 - [codegen](#codegen) 代码生成工具
 - [gconc](#gconc) 并发任务池组件
-- [configkv](#configkv) 配置管理组件
+- [gsetting](#gsetting) 配置管理组件
 - [dbaccess](#dbaccess) 数据库客户端组件（支持 MySQL、Redis、Elasticsearch）
 - [dict](#dict) 数据字典组件（类型 + 码值，支持树形层级）
 - [distlock](#distlock) 分布式锁组件（不支持可重入）
@@ -29,14 +29,14 @@ go get github.com/morehao/golib
 
 # 内置表的建表与迁移（统一约定）
 
-`configkv`、`dict`、`filestore`、`task/gcron`、`task/gasync` 拥有自己的内置表，统一遵循同一套约定：
+`gsetting`、`dict`、`filestore`、`task/gcron`、`task/gasync` 拥有自己的内置表，统一遵循同一套约定：
 
 1. **默认建表**：创建实例（`New` / `Init` / `NewServer`）时自动执行幂等的 `AutoMigrate`，调用方零配置即可跑起来。
    注意 GORM 生成的 DDL 不含 `IF NOT EXISTS`，所以多副本在**空库上同时冷启动**时可能有一个副本首次启动失败
    （重启即恢复）。在意这一点就用 `WithoutAutoMigrate()` 关掉隐式建表，改由发布流程建表。
 2. **需要自己掌控 DDL 时传 `WithoutAutoMigrate()`**：开关是构造选项（函数式选项模式），
    因此在共库、或运行时账号没有 DDL 权限的部署里，可以关掉隐式建表，改由发布流程用专用账号显式执行
-   `dict.Migrate(db)` / `configkv.Migrate(db)` / `filestore.Migrate(db)` / `gcron.AutoMigrate(db)` / `gasync.AutoMigrate(db)`。
+   `dict.Migrate(db)` / `gsetting.Migrate(db)` / `filestore.Migrate(db)` / `gcron.AutoMigrate(db)` / `gasync.AutoMigrate(db)`。
    显式入口永远执行，不受开关影响。
 3. **每个包的 README 都给出 MySQL 与 PostgreSQL 的完整 DDL**：由 `internal/ddlgen` 从 gorm tag 生成，
    并由测试逐语句校验，因此不会与实体漂移，可直接交给 DBA 手工执行。
@@ -104,10 +104,10 @@ go get github.com/morehao/golib
 ### 使用
 使用示例参照 [gconc 使用说明](gconc/README.md)
 
-## configkv
+## gsetting
 
 ### 简介
-`configkv` 是配置管理组件，基于数据库的配置键值存储，支持多种数据类型和加密。
+`gsetting` 是配置管理组件，基于数据库的配置键值存储，支持多种数据类型和加密。
 
 ### 特性
 - 支持 json/toml/yaml/string/int/bool/float 类型

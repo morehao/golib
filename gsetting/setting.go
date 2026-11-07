@@ -1,4 +1,4 @@
-package configkv
+package gsetting
 
 import (
 	"context"
@@ -10,13 +10,16 @@ import (
 )
 
 var (
-	defaultKV   *kv
-	adminAPI    *AdminAPI
-	initMu      sync.Mutex
-	initialized bool
+	defaultSetting *Setting
+	adminAPI       *AdminAPI
+	initMu         sync.Mutex
+	initialized    bool
 )
 
-type kv struct {
+// Setting 是配置中心的读写句柄，由 New 创建。读侧提供 GetValue/GetString/
+// GetInt64/GetFloat64/GetBool 等按值类型取值的方法；写侧通过 GetAdmin 返回的
+// AdminAPI 操作。
+type Setting struct {
 	store *store
 }
 
@@ -27,7 +30,7 @@ type kv struct {
 //
 //	k, err := New(db)                              // 自动建表
 //	k, err := New(db, WithoutAutoMigrate())        // 不建表，DDL 由发布流程显式执行
-func New(db *gorm.DB, opts ...Option) (*kv, error) {
+func New(db *gorm.DB, opts ...Option) (*Setting, error) {
 	if db == nil {
 		return nil, errDBRequired
 	}
@@ -51,7 +54,7 @@ func New(db *gorm.DB, opts ...Option) (*kv, error) {
 
 	c, err := newAESCrypto()
 	if err != nil {
-		return nil, fmt.Errorf("configkv: init crypto: %w", err)
+		return nil, fmt.Errorf("gsetting: init crypto: %w", err)
 	}
 
 	getDB := func(ctx context.Context) *gorm.DB {
@@ -59,14 +62,14 @@ func New(db *gorm.DB, opts ...Option) (*kv, error) {
 	}
 	s := newStore(getDB, registry, c)
 	adminAPI = newAdmin(s)
-	return &kv{store: s}, nil
+	return &Setting{store: s}, nil
 }
 
-func (k *kv) GetStore() *store {
+func (k *Setting) GetStore() *store {
 	return k.store
 }
 
-func (k *kv) GetValue(ctx context.Context, group, key string, dest any) error {
+func (k *Setting) GetValue(ctx context.Context, group, key string, dest any) error {
 	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return err
@@ -86,7 +89,7 @@ func (k *kv) GetValue(ctx context.Context, group, key string, dest any) error {
 	}
 }
 
-func (k *kv) GetString(ctx context.Context, group, key string) (string, error) {
+func (k *Setting) GetString(ctx context.Context, group, key string) (string, error) {
 	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return "", err
@@ -94,7 +97,7 @@ func (k *kv) GetString(ctx context.Context, group, key string) (string, error) {
 	return cfg.Value, nil
 }
 
-func (k *kv) GetInt64(ctx context.Context, group, key string) (int64, error) {
+func (k *Setting) GetInt64(ctx context.Context, group, key string) (int64, error) {
 	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return 0, err
@@ -102,7 +105,7 @@ func (k *kv) GetInt64(ctx context.Context, group, key string) (int64, error) {
 	return strconv.ParseInt(cfg.Value, 10, 64)
 }
 
-func (k *kv) GetFloat64(ctx context.Context, group, key string) (float64, error) {
+func (k *Setting) GetFloat64(ctx context.Context, group, key string) (float64, error) {
 	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return 0, err
@@ -110,7 +113,7 @@ func (k *kv) GetFloat64(ctx context.Context, group, key string) (float64, error)
 	return strconv.ParseFloat(cfg.Value, 64)
 }
 
-func (k *kv) GetBool(ctx context.Context, group, key string) (bool, error) {
+func (k *Setting) GetBool(ctx context.Context, group, key string) (bool, error) {
 	cfg, err := k.store.Get(ctx, group, key)
 	if err != nil {
 		return false, err
@@ -120,54 +123,54 @@ func (k *kv) GetBool(ctx context.Context, group, key string) (bool, error) {
 
 // Init 初始化包级单例，重复调用返回首个实例（与 dict.Init 一致的语义）。
 // 单例对测试与多数据源不友好，新代码优先用 New + 显式注入。
-func Init(db *gorm.DB, opts ...Option) (*kv, error) {
+func Init(db *gorm.DB, opts ...Option) (*Setting, error) {
 	initMu.Lock()
 	defer initMu.Unlock()
 	if initialized {
-		return defaultKV, nil
+		return defaultSetting, nil
 	}
 	instance, err := New(db, opts...)
 	if err != nil {
 		return nil, err
 	}
-	defaultKV = instance
+	defaultSetting = instance
 	initialized = true
 	return instance, nil
 }
 
 func GetValue(ctx context.Context, group, key string, dest any) error {
-	if defaultKV == nil {
+	if defaultSetting == nil {
 		return errNotInitialized
 	}
-	return defaultKV.GetValue(ctx, group, key, dest)
+	return defaultSetting.GetValue(ctx, group, key, dest)
 }
 
 func GetString(ctx context.Context, group, key string) (string, error) {
-	if defaultKV == nil {
+	if defaultSetting == nil {
 		return "", errNotInitialized
 	}
-	return defaultKV.GetString(ctx, group, key)
+	return defaultSetting.GetString(ctx, group, key)
 }
 
 func GetInt64(ctx context.Context, group, key string) (int64, error) {
-	if defaultKV == nil {
+	if defaultSetting == nil {
 		return 0, errNotInitialized
 	}
-	return defaultKV.GetInt64(ctx, group, key)
+	return defaultSetting.GetInt64(ctx, group, key)
 }
 
 func GetFloat64(ctx context.Context, group, key string) (float64, error) {
-	if defaultKV == nil {
+	if defaultSetting == nil {
 		return 0, errNotInitialized
 	}
-	return defaultKV.GetFloat64(ctx, group, key)
+	return defaultSetting.GetFloat64(ctx, group, key)
 }
 
 func GetBool(ctx context.Context, group, key string) (bool, error) {
-	if defaultKV == nil {
+	if defaultSetting == nil {
 		return false, errNotInitialized
 	}
-	return defaultKV.GetBool(ctx, group, key)
+	return defaultSetting.GetBool(ctx, group, key)
 }
 
 func GetAdmin() *AdminAPI {

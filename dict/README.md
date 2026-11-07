@@ -20,7 +20,7 @@ ok, err := d.Exists(ctx, "order_status", input) // false 必带 sentinel
 | 硬删 + `CheckIntegrity` 巡检 | 不做软删：表里没有 `deleted_at` |
 | 只有 `code` 一种类型身份 | 不做分组/命名空间列（主流实现也没有）、不做多租户列：`tenant_id` 由接入方按需评估 |
 
-与 `configkv` 的分工见文末「与 configkv 的边界」。
+与 `gsetting` 的分工见文末「与 gsetting 的边界」。
 
 ## 快速接入
 
@@ -192,9 +192,9 @@ cities, _ := d.GetChildren(ctx, "region", provinceID)   // 市级
 
 `BuildTree` 同理只适合中小字典；大字典请用 `GetChildren` + 前端懒加载。
 
-## 与 configkv 的边界
+## 与 gsetting 的边界
 
-| | `configkv` | `dict` |
+| | `gsetting` | `dict` |
 |---|---|---|
 | 存什么 | 配置键值（部署/运行时开关、连接串、限流阈值） | 业务枚举（码值、展示名、层级、排序） |
 | 结构 | 单表 `(group_name, key)`，无层级 | 两表 `code` → 项，有树层级与顺序 |
@@ -202,7 +202,7 @@ cities, _ := d.GetChildren(ctx, "region", provinceID)   // 市级
 | 校验 | 取值类型/编解码、加密 | 码值是否存在且启用、父子关系与层级不变量 |
 | 变更频率 | 低，改完通常需重启或刷新 | 中，运营随时增删（应停用而非删除） |
 
-`configkv` 的 `group_name` 是"取哪一份配置"的**必要参数**；`dict` 连这个字段都没有。
+`gsetting` 的 `group_name` 是"取哪一份配置"的**必要参数**；`dict` 连这个字段都没有。
 不要把一个的用法套到另一个上。
 
 ## 未实现（按需再评估）

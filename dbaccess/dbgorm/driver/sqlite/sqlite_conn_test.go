@@ -219,7 +219,7 @@ func TestConnMemorySharedAcrossConnections(t *testing.T) {
 // 两次打开 sqlite://:memory: 必须是两个互不可见的空库。
 //
 // 匿名内存库如果共用一个固定库名，后开的库会看到先前用例遗留的表与数据
-// （实测会让 task/gasync、task/gcron、configkv 的迁移用例相互污染）。
+// （实测会让 task/gasync、task/gcron、gsetting 的迁移用例相互污染）。
 func TestConnMemoryIsolatedBetweenOpens(t *testing.T) {
 	first := newDB(t, "sqlite://:memory:")
 	require.NoError(t, first.AutoMigrate(&connEntity{}))

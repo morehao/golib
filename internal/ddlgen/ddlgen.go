@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/morehao/golib/configkv"
 	"github.com/morehao/golib/dict"
 	"github.com/morehao/golib/filestore"
+	"github.com/morehao/golib/gsetting"
 	"github.com/morehao/golib/task/gasync"
 	"github.com/morehao/golib/task/gcron"
 	"gorm.io/driver/mysql"
@@ -48,7 +48,7 @@ type Group struct {
 // 因此新增一张表只需要改一处，README 校验测试会立刻发现漏同步。
 var Groups = []Group{
 	{"dict", dict.SchemaModels()},
-	{"configkv", configkv.SchemaModels()},
+	{"gsetting", gsetting.SchemaModels()},
 	{"filestore", filestore.SchemaModels()},
 	{"gcron", gcron.SchemaModels()},
 	{"gasync", gasync.SchemaModels()},

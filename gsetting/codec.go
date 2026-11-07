@@ -1,4 +1,4 @@
-package configkv
+package gsetting
 
 import (
 	"encoding/json"

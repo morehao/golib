@@ -1,4 +1,4 @@
-package configkv
+package gsetting
 
 import (
 	"context"
@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	tableName = "core_config"
+	tableName = "core_setting"
 )
 
 type store struct {
 	dbGetter      gormdao.DBGetter
-	dao           *gormdao.Dao[*ConfigEntity, []*ConfigEntity, string]
+	dao           *gormdao.Dao[*SettingEntity, []*SettingEntity, string]
 	codecRegistry map[ValueType]Codec
 	crypto        *aesCrypto
 }
@@ -23,7 +23,7 @@ type store struct {
 func newStore(dbGetter gormdao.DBGetter, codecRegistry map[ValueType]Codec, crypto *aesCrypto) *store {
 	return &store{
 		dbGetter:      dbGetter,
-		dao:           gormdao.NewDao[*ConfigEntity, []*ConfigEntity, string](tableName, "configkv", dbGetter, gormdao.WithoutSoftDelete()),
+		dao:           gormdao.NewDao[*SettingEntity, []*SettingEntity, string](tableName, "gsetting", dbGetter, gormdao.WithoutSoftDelete()),
 		codecRegistry: codecRegistry,
 		crypto:        crypto,
 	}
@@ -73,7 +73,7 @@ func (s *store) marshalValue(valueType ValueType, val any) (string, error) {
 	}
 }
 
-func (s *store) Set(ctx context.Context, entity *ConfigEntity) error {
+func (s *store) Set(ctx context.Context, entity *SettingEntity) error {
 	if entity.GroupName == "" || entity.Key == "" {
 		return errGroupAndKeyRequired
 	}
@@ -115,7 +115,7 @@ func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType V
 		return fmt.Errorf("encrypt failed: %w", err)
 	}
 
-	entity := &ConfigEntity{
+	entity := &SettingEntity{
 		GroupName:      group,
 		Key:            key,
 		ValueType:      valueType,
@@ -126,30 +126,30 @@ func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType V
 	return s.Set(ctx, entity)
 }
 
-func (s *store) Get(ctx context.Context, group, key string) (*ConfigEntity, error) {
+func (s *store) Get(ctx context.Context, group, key string) (*SettingEntity, error) {
 	if group == "" || key == "" {
 		return nil, errGroupAndKeyRequired
 	}
 
-	cond := &ConfigCond{Group: group, Key: key, ExactKey: true}
+	cond := &SettingCond{Group: group, Key: key, ExactKey: true}
 	entity, err := s.dao.GetByCond(ctx, cond)
 	if err != nil {
 		return nil, err
 	}
 	if entity == nil || (*entity).ID == "" {
-		return &ConfigEntity{}, nil
+		return &SettingEntity{}, nil
 	}
 
 	return s.decryptEntity(*entity), nil
 }
 
-func (s *store) GetByID(ctx context.Context, id string) (*ConfigEntity, error) {
+func (s *store) GetByID(ctx context.Context, id string) (*SettingEntity, error) {
 	entity, err := s.dao.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if entity == nil {
-		return &ConfigEntity{}, nil
+		return &SettingEntity{}, nil
 	}
 	return s.decryptEntity(*entity), nil
 }
@@ -159,7 +159,7 @@ func (s *store) DeleteByGroupKey(ctx context.Context, group, key string) error {
 		return errGroupAndKeyRequired
 	}
 
-	cond := &ConfigCond{Group: group, Key: key, ExactKey: true}
+	cond := &SettingCond{Group: group, Key: key, ExactKey: true}
 	entity, err := s.dao.GetByCond(ctx, cond)
 	if err != nil {
 		return err
@@ -179,7 +179,7 @@ func (s *store) UpdateByID(ctx context.Context, id string, updateMap map[string]
 	return s.dao.UpdateMap(ctx, id, updateMap)
 }
 
-func (s *store) ListPage(ctx context.Context, cond *ConfigCond) ([]*ConfigEntity, int64, error) {
+func (s *store) ListPage(ctx context.Context, cond *SettingCond) ([]*SettingEntity, int64, error) {
 	list, count, err := s.dao.GetPageListByCond(ctx, cond)
 	if err != nil {
 		return nil, 0, err
@@ -192,7 +192,7 @@ func (s *store) ListPage(ctx context.Context, cond *ConfigCond) ([]*ConfigEntity
 	return list, count, nil
 }
 
-func (s *store) decryptEntity(config *ConfigEntity) *ConfigEntity {
+func (s *store) decryptEntity(config *SettingEntity) *SettingEntity {
 	if config.EncryptionMode == EncryptionModeEncrypted {
 		if s.crypto == nil {
 			return config

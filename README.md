@@ -6,7 +6,7 @@ Components:
 - [biz](#biz) Business components
 - [codegen](#codegen) Code generation tools
 - [gconc](#gconc) Concurrent task pool component
-- [configkv](#configkv) Configuration management component
+- [gsetting](#gsetting) Configuration management component
 - [dbaccess](#dbaccess) Database client components (supports MySQL, Redis, Elasticsearch)
 - [dict](#dict) Data dictionary component (type + code value, tree hierarchy)
 - [distlock](#distlock) Distributed lock component (non-reentrant)
@@ -47,7 +47,7 @@ source .env && go test ./codegen/...
 
 ## Built-in tables: migration convention
 
-`configkv`, `dict`, `filestore`, `task/gcron` and `task/gasync` own their own tables and follow one shared convention:
+`gsetting`, `dict`, `filestore`, `task/gcron` and `task/gasync` own their own tables and follow one shared convention:
 
 1. **Migrate by default.** Constructors (`New` / `Init` / `NewServer`) run an idempotent `AutoMigrate`, so a caller
    needs no extra step. Note that GORM's generated DDL has no `IF NOT EXISTS`, so replicas starting cold at the
@@ -55,7 +55,7 @@ source .env && go test ./codegen/...
    (or run the DDL from the release pipeline).
 2. **`WithoutAutoMigrate()` when you own the DDL.** The switch is a constructor option (functional options),
    so a shared database — or a runtime account without DDL privileges — can turn the implicit migration
-   off and let the release pipeline run `dict.Migrate(db)` / `configkv.Migrate(db)` / `filestore.Migrate(db)` /
+   off and let the release pipeline run `dict.Migrate(db)` / `gsetting.Migrate(db)` / `filestore.Migrate(db)` /
    `gcron.AutoMigrate(db)` / `gasync.AutoMigrate(db)` with a dedicated account. The explicit entry always runs,
    regardless of the switch.
 3. **Every package README ships complete MySQL and PostgreSQL DDL**, generated from the gorm tags by
@@ -150,10 +150,10 @@ Provides a single `*Pool` type with:
 ### Usage
 For usage examples, refer to [gconc usage](gconc/README.md)
 
-## configkv
+## gsetting
 
 ### Overview
-`configkv` is a configuration management component based on database key-value storage, supporting multiple data types and encryption.
+`gsetting` is a configuration management component based on database key-value storage, supporting multiple data types and encryption.
 
 ### Features
 - Supports json/toml/yaml/string/int/bool/float types

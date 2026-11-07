@@ -23,7 +23,7 @@ var readmeCases = []struct {
 	sections []section
 }{
 	{"dict/README.md", []section{{"dict", MySQL}, {"dict", Postgres}}},
-	{"configkv/README.md", []section{{"configkv", MySQL}, {"configkv", Postgres}}},
+	{"gsetting/README.md", []section{{"gsetting", MySQL}, {"gsetting", Postgres}}},
 	{"filestore/README.md", []section{{"filestore", MySQL}, {"filestore", Postgres}}},
 	{"task/README.md", []section{
 		{"gcron", MySQL}, {"gcron", Postgres},
