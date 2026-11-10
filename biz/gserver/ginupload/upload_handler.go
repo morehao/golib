@@ -20,7 +20,7 @@ const maxFormFieldBytes = 1 << 20 // 1MB
 // @accept multipart/form-data
 // @Produce application/json
 // @Param file formData file true "上传文件"
-// @Param content_hash formData string false "内容哈希(SHA256)，用于去重"
+// @Param req formData uploadRequest true "表单字段"
 // @Success 200 {object} gincontext.DtoRender{data=fileRecordResponse}
 // @Router /files [post]
 //

@@ -41,10 +41,12 @@ type fileRecordResponse struct {
 // --- upload ---
 
 // uploadRequest 描述 /files 的 multipart 表单字段契约。
-// handler 采用流式解析（multipart.Reader）而非 ShouldBind，此结构体仅作文档用途，
-// 与 swagger 注解保持一致。
+// handler 采用流式解析（multipart.Reader）而非 ShouldBind，此结构体仅作文档用途：
+// swagger 注解以 @Param req formData uploadRequest 引用它，字段名与 required 由
+// form/binding tag 推导（binding:"required" → 文档 required:true），保证文档与
+// handler 的必填校验一致，不要在注解里另行手写这些字段。
 type uploadRequest struct {
-	ContentHash string `form:"content_hash" binding:"required"` // 内容哈希
+	ContentHash string `form:"content_hash" binding:"required"` // 内容哈希(SHA256)，用于去重
 }
 
 type checkExistRequest struct {

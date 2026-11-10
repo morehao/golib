@@ -21,8 +21,26 @@ func Register(routerGroup *gin.RouterGroup, appName string) {
 	}
 	swaggerURL := path.Join(basePath, "docs", "doc.json")
 
-	routerGroup.GET(docsPath, ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.InstanceName(appName)))
+	routerGroup.GET(docsPath, swaggerHandler(ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.InstanceName(appName))))
 	routerGroup.GET(redocsPath, reDocHandler(appName, swaggerURL))
+}
+
+// swaggerHandler 补上 Swagger UI 的目录入口页。
+//
+// ginSwagger.WrapHandler 以 RequestURI 中是否出现文件名（index.html / doc.json /
+// swagger-ui*.js 等）来分发，不含文件名的请求一律 404；而访问 /docs（无尾斜杠）会被
+// gin 的 RedirectTrailingSlash 301 到 /docs/，于是 /docs/ 命中 404，形成「301 → 404」
+// 死链。这里把通配符为空或 "/" 的请求在内部改写成 index.html 再交给上游 handler，
+// 让 /docs/ 直接返回 Swagger UI 入口；入口里的静态资源仍是 ./ 相对路径，浏览器按
+// /docs/ 解析，不受影响。
+func swaggerHandler(upstream gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if any := c.Param("any"); any == "" || any == "/" {
+			c.Request.URL.Path = path.Join(c.Request.URL.Path, "index.html")
+			c.Request.RequestURI = c.Request.URL.RequestURI()
+		}
+		upstream(c)
+	}
 }
 
 func reDocHandler(appName, swaggerURL string) gin.HandlerFunc {
