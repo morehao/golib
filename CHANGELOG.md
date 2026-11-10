@@ -9,6 +9,22 @@
   `core_setting` (derived index becomes `idx_core_setting_deleted_at`). No upstream consumers yet,
   so no compatibility alias is provided.
 
+## [v1.34.2] - 2026-11-10
+
+### Bug Fixes
+
+- **gserver/gindocs**: `/docs` 存在「301 → 404」死链——无尾斜杠的 `/docs` 被 gin 的
+  `RedirectTrailingSlash` 301 到 `/docs/`，而 `ginSwagger.WrapHandler` 只按 RequestURI 里的
+  文件名（`index.html` / `doc.json` / `swagger-ui*.js` 等）分发，`/docs/` 直接 404。
+  现在把通配符为空或 `/` 的请求内部改写成 `index.html`，`/docs/` 返回 Swagger UI 入口，
+  `/docs` 跟随 301 后可用；另外两个入口 `/docs/index.html`、`/docs/redocs` 行为不变。
+- **gserver/ginupload**: swagger 文档中上传接口的 `content_hash` 被标为非必填，而 handler
+  实际要求必填（缺省返回 `content_hash is required`），文档与运行时校验矛盾。注解改为
+  `@Param req formData uploadRequest true`，由文档 DTO 的 `form`/`binding:"required"` tag
+  推导字段名与 required，避免两处各写一份；重新生成的 docs 中该字段为 `required: true`。
+
+**Full Changelog**: https://github.com/morehao/golib/compare/v1.34.1...v1.34.2
+
 ## [v1.34.1] - 2026-11-10
 
 ### Bug Fixes
