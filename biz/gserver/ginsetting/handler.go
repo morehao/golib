@@ -71,7 +71,7 @@ func handleCreate(setting *gsetting.Setting) gin.HandlerFunc {
 		}
 
 		if err := admin(setting).Create(c.Request.Context(), req.toCreateReq()); err != nil {
-			gincontext.Fail(c, err)
+			failSettingOp(c, err)
 			return
 		}
 		gincontext.Success(c, nil)
@@ -111,7 +111,7 @@ func handleList(setting *gsetting.Setting) gin.HandlerFunc {
 
 		page, err := admin(setting).ListPage(c.Request.Context(), cond)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failSettingOp(c, err)
 			return
 		}
 
@@ -142,7 +142,7 @@ func handleGetByID(setting *gsetting.Setting) gin.HandlerFunc {
 
 		info, err := admin(setting).GetByID(c.Request.Context(), uri.ID)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failSettingOp(c, err)
 			return
 		}
 		gincontext.Success(c, toResponse(info))
@@ -174,7 +174,7 @@ func handleUpdate(setting *gsetting.Setting) gin.HandlerFunc {
 		}
 
 		if err := admin(setting).Update(c.Request.Context(), uri.ID, req.toUpdateReq()); err != nil {
-			gincontext.Fail(c, err)
+			failSettingOp(c, err)
 			return
 		}
 		gincontext.Success(c, nil)
@@ -199,7 +199,7 @@ func handleDelete(setting *gsetting.Setting) gin.HandlerFunc {
 		}
 
 		if err := admin(setting).Delete(c.Request.Context(), uri.ID); err != nil {
-			gincontext.Fail(c, err)
+			failSettingOp(c, err)
 			return
 		}
 		gincontext.Success(c, nil)

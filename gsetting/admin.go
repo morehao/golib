@@ -28,6 +28,10 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 		return err
 	}
 
+	if err := validateStatus(req.Status); err != nil {
+		return err
+	}
+
 	status := StatusEnabled
 	if req.Status != "" {
 		status = Status(req.Status)
@@ -63,6 +67,13 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 func (a *AdminAPI) Update(ctx context.Context, id string, req *UpdateReq) error {
 	entity, err := a.store.GetByID(ctx, id)
 	if err != nil {
+		return err
+	}
+	if entity == nil {
+		return ErrSettingNotFound
+	}
+
+	if err := validateStatus(req.Status); err != nil {
 		return err
 	}
 
@@ -110,6 +121,9 @@ func (a *AdminAPI) GetByID(ctx context.Context, id string) (*SettingInfo, error)
 	entity, err := a.store.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if entity == nil {
+		return nil, ErrSettingNotFound
 	}
 
 	decrypted, err := a.store.Get(ctx, entity.GroupName, entity.Key)

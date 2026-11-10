@@ -143,13 +143,17 @@ func (s *store) Get(ctx context.Context, group, key string) (*SettingEntity, err
 	return s.decryptEntity(*entity), nil
 }
 
+// GetByID 按 ID 查询配置项；不存在（含软删除）时返回 (nil, nil)。
+//
+// 这里不返回零值实体的原因：上层若拿 &SettingEntity{} 继续走，会得到
+// "group and key are required" 这类与真实原因（不存在）完全无关的误导性错误。
 func (s *store) GetByID(ctx context.Context, id string) (*SettingEntity, error) {
 	entity, err := s.dao.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if entity == nil {
-		return &SettingEntity{}, nil
+		return nil, nil
 	}
 	return s.decryptEntity(*entity), nil
 }

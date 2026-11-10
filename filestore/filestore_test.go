@@ -203,6 +203,15 @@ func TestCheckExist_Found(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, hit)
 	require.Equal(t, "abc123", found.ContentHash)
+
+	// 命中时必须是「上传维度」的完整详情：HTTP 层把 FileUploadID 当作对外的 file_id，
+	// Name/MimeType/Status 也取自上传记录。只填物理文件字段会让响应退化成空 file 对象。
+	require.Equal(t, detail.FileUploadID, found.FileUploadID)
+	require.NotEmpty(t, found.FileUploadID)
+	require.Equal(t, "test.txt", found.Name)
+	require.Equal(t, FileStatusCompleted, found.Status)
+	require.Equal(t, detail.FileID, found.FileID)
+	require.Equal(t, int64(100), found.Size)
 }
 
 // TestUploadAndRecord_SameContentHash_DifferentName 同 content_hash 不同 name：

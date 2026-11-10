@@ -62,12 +62,11 @@ func Abort(ctx *gin.Context, err error) {
 func buildErrorResponse(ctx *gin.Context, err error) gcontext.ResponseRender {
 	r := gcontext.NewResponseRender()
 	r.SetRequestID(GetRequestID(ctx))
-	var gErr gerror.Error
 	code := -1
 	msg := ""
-	if errors.As(err, &gErr) {
-		code = gErr.Code
-		msg = gErr.Msg
+	if bizCode, bizMsg, ok := businessError(err); ok {
+		code = bizCode
+		msg = bizMsg
 	} else {
 		msg = gerror.Cause(err).Error()
 	}
@@ -78,4 +77,25 @@ func buildErrorResponse(ctx *gin.Context, err error) gcontext.ResponseRender {
 	r.SetMsg(msg)
 	r.SetData(gin.H{})
 	return r
+}
+
+// businessError 从错误链里提取业务错误码与文案。
+//
+// 必须同时兼容 gerror.Error 的**值**与**指针**两种形态：
+//   - errors.As 要求错误链上的动态类型可赋值给目标类型，单向匹配会静默失败；
+//   - gerror.Error 的方法集全是值接收者，调用方既可能传值（哨兵值），
+//     也可能传 *gerror.Error（如历史上 GetError 返回指针的实现），两者都算业务错误；
+//   - gerror 包装错误（newWrapped）实现了 As(*Error)，值形态分支即可命中。
+//
+// 未命中时返回 ok=false，由调用方回落到 gerror.Cause(err).Error()。
+func businessError(err error) (code int, msg string, ok bool) {
+	var valueErr gerror.Error
+	if errors.As(err, &valueErr) {
+		return valueErr.Code, valueErr.Msg, true
+	}
+	var ptrErr *gerror.Error
+	if errors.As(err, &ptrErr) && ptrErr != nil {
+		return ptrErr.Code, ptrErr.Msg, true
+	}
+	return 0, "", false
 }
