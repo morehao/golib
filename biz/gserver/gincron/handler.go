@@ -40,7 +40,7 @@ func handleListTasks(s *gcron.Scheduler) gin.HandlerFunc {
 		cond.PageSize = req.PageSize
 		list, total, err := s.GetStore().ListTask(c.Request.Context(), cond)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failCronOp(c, err)
 			return
 		}
 		gincontext.Success(c, &taskListResponse{List: toTaskResponses(list), Total: total})
@@ -65,7 +65,13 @@ func handleGetTask(s *gcron.Scheduler) gin.HandlerFunc {
 		}
 		t, err := s.GetStore().GetTaskByID(c.Request.Context(), uri.ID)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failCronOp(c, err)
+			return
+		}
+		// 详情查询命中软删除/不存在的任务时 store 返回 (nil, nil)：
+		// 必须在这里收口成 ErrTaskNotFound，否则 toTaskResponse 会对 nil 取值而 panic。
+		if t == nil {
+			failCronOp(c, gcron.ErrTaskNotFound)
 			return
 		}
 		gincontext.Success(c, toTaskResponse(t))
@@ -105,7 +111,7 @@ func handleSetTaskStatus(s *gcron.Scheduler) gin.HandlerFunc {
 			return
 		}
 		if err != nil {
-			gincontext.Fail(c, err)
+			failCronOp(c, err)
 			return
 		}
 		gincontext.Success(c, nil)
@@ -129,7 +135,7 @@ func handleRemoveTask(s *gcron.Scheduler) gin.HandlerFunc {
 			return
 		}
 		if err := s.Remove(uri.ID); err != nil {
-			gincontext.Fail(c, err)
+			failCronOp(c, err)
 			return
 		}
 		gincontext.Success(c, nil)
@@ -165,7 +171,7 @@ func handleListRuns(s *gcron.Scheduler) gin.HandlerFunc {
 		cond.PageSize = req.PageSize
 		list, total, err := s.GetStore().ListRun(c.Request.Context(), cond)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failCronOp(c, err)
 			return
 		}
 		gincontext.Success(c, &runListResponse{List: toRunResponses(list), Total: total})
@@ -190,7 +196,12 @@ func handleGetRun(s *gcron.Scheduler) gin.HandlerFunc {
 		}
 		r, err := s.GetStore().GetRunByID(c.Request.Context(), uri.ID)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failCronOp(c, err)
+			return
+		}
+		// 同上：运行记录不存在时 store 返回 (nil, nil)，toRunResponse 会 nil-deref。
+		if r == nil {
+			failCronOp(c, gcron.ErrRunNotFound)
 			return
 		}
 		gincontext.Success(c, toRunResponse(r))
@@ -221,7 +232,7 @@ func handleMarkStale(s *gcron.Scheduler) gin.HandlerFunc {
 		}
 		affected, err := s.GetStore().MarkStaleRunningAsFailed(c.Request.Context(), time.Duration(req.CutoffSeconds)*time.Second, uri.ID)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failCronOp(c, err)
 			return
 		}
 		gincontext.Success(c, &affectedResponse{Affected: affected})
@@ -252,7 +263,7 @@ func handleCleanupRuns(s *gcron.Scheduler) gin.HandlerFunc {
 		}
 		affected, err := s.GetStore().CleanupRuns(c.Request.Context(), time.Unix(req.BeforeUnix, 0), uri.ID)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failCronOp(c, err)
 			return
 		}
 		gincontext.Success(c, &affectedResponse{Affected: affected})

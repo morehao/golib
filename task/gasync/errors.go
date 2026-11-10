@@ -15,4 +15,6 @@ var (
 	ErrDuplicateTaskType = errors.New("gasync: duplicate task type")
 	// ErrTaskNotFound 任务定义不存在（Disable/Enable 目标类型未注册过，或定义已被删除）。
 	ErrTaskNotFound = errors.New("gasync: task not found")
+	// ErrRunNotFound 运行记录不存在（详情查询传入未知 ID）。
+	ErrRunNotFound = errors.New("gasync: run not found")
 )

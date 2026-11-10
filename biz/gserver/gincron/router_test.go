@@ -2,6 +2,7 @@ package gincron
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -85,4 +86,25 @@ func TestMarkStaleAndCleanup(t *testing.T) {
 
 	code, env = doJSON(t, engine, "DELETE", "/cron-tasks/task-a/runs", map[string]any{"before_unix": 1})
 	requireOK(t, code, env, "清理运行记录")
+}
+
+// TestGetTaskNotFound 不存在的任务详情：必须返回 404 + JSON envelope，而不是 500/空 body。
+// 历史缺陷：store 返回 (nil, nil) 后直接进 toTaskResponse，nil 取值 panic。
+func TestGetTaskNotFound(t *testing.T) {
+	engine, _ := setupRouter(t)
+
+	code, env := doJSON(t, engine, "GET", "/cron-tasks/not-a-real-task", nil)
+	require.Equal(t, http.StatusNotFound, code, "不存在任务应 404: %v", env)
+	require.EqualValues(t, -1, env["code"])
+	require.Contains(t, env["msg"], "task not registered")
+}
+
+// TestGetRunNotFound 不存在的运行记录详情：同样必须 404 而非 panic。
+func TestGetRunNotFound(t *testing.T) {
+	engine, _ := setupRouter(t)
+
+	code, env := doJSON(t, engine, "GET", "/cron-runs/not-a-real-run", nil)
+	require.Equal(t, http.StatusNotFound, code, "不存在运行记录应 404: %v", env)
+	require.EqualValues(t, -1, env["code"])
+	require.Contains(t, env["msg"], "run not found")
 }

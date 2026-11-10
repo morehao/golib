@@ -193,6 +193,12 @@ func (s *FileStore) Open(ctx context.Context, id string) (io.ReadCloser, *FileDe
 	return result.Body, detail, nil
 }
 
+// CheckExist 按 content_hash 查询内容是否已存在。
+//
+// 命中时返回的 FileDetail 以「上传记录」为主维度（与 Upload/Detail 的返回保持同一形状）：
+// 对外的 file_id 指 core_file_upload.id，而不是物理文件 core_file.id。只填物理文件字段
+// 会让 HTTP 层响应退化成 {"file_id":"","name":"","mime_type":"","status":""}，
+// 秒传/去重场景拿到空 ID 后无法继续 presign/serve。
 func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileDetail, bool, error) {
 	fh, err := s.fileDao.GetByCond(ctx, &fileCond{ContentHash: contentHash})
 	if err != nil {
@@ -202,12 +208,30 @@ func (s *FileStore) CheckExist(ctx context.Context, contentHash string) (*FileDe
 		return nil, false, nil
 	}
 
-	return &FileDetail{
-		FileID:      fh.ID,
-		ContentHash: fh.ContentHash,
-		Size:        fh.Size,
-		StorageURI:  fh.StorageURI,
-	}, true, nil
+	// 同一份内容可能被多次上传（否则会命中已有文件），取最近一次 completed 的记录作为代表。
+	rec, err := s.uploadDao.GetByCond(ctx, &fileUploadCond{
+		BaseCond: gormdao.BaseCond{OrderField: `"created_at" DESC`},
+		FileID:   fh.ID,
+		Status:   FileStatusCompleted,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("filestore.CheckExist: %w", err)
+	}
+	if rec == nil {
+		// 物理文件在、但没有 completed 的上传记录（历史脏数据或被清理）：退回物理维度信息。
+		return &FileDetail{
+			FileID:      fh.ID,
+			ContentHash: fh.ContentHash,
+			Size:        fh.Size,
+			StorageURI:  fh.StorageURI,
+		}, true, nil
+	}
+
+	detail, err := s.fillFileDetail(ctx, rec)
+	if err != nil {
+		return nil, false, fmt.Errorf("filestore.CheckExist: %w", err)
+	}
+	return detail, true, nil
 }
 
 func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequest) (*FileDetail, error) {

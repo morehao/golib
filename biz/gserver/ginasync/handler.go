@@ -32,7 +32,7 @@ func handleListTasks(s *gasync.Server) gin.HandlerFunc {
 		cond.PageSize = req.PageSize
 		list, total, err := s.GetStore().ListTask(c.Request.Context(), cond)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failAsyncOp(c, err)
 			return
 		}
 		gincontext.Success(c, &taskListResponse{List: toTaskResponses(list), Total: total})
@@ -57,11 +57,11 @@ func handleGetTask(s *gasync.Server) gin.HandlerFunc {
 		}
 		t, err := s.GetStore().GetTaskByType(c.Request.Context(), uri.Type)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failAsyncOp(c, err)
 			return
 		}
 		if t == nil {
-			gincontext.Fail(c, gasync.ErrTaskNotFound)
+			failAsyncOp(c, gasync.ErrTaskNotFound)
 			return
 		}
 		gincontext.Success(c, toTaskResponse(t))
@@ -101,7 +101,7 @@ func handleSetTaskStatus(s *gasync.Server) gin.HandlerFunc {
 			return
 		}
 		if err != nil {
-			gincontext.Fail(c, err)
+			failAsyncOp(c, err)
 			return
 		}
 		gincontext.Success(c, nil)
@@ -138,7 +138,7 @@ func handleListRuns(s *gasync.Server) gin.HandlerFunc {
 		cond.PageSize = req.PageSize
 		list, total, err := s.GetStore().ListRun(c.Request.Context(), cond)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failAsyncOp(c, err)
 			return
 		}
 		gincontext.Success(c, &runListResponse{List: toRunResponses(list), Total: total})
@@ -163,7 +163,12 @@ func handleGetRun(s *gasync.Server) gin.HandlerFunc {
 		}
 		r, err := s.GetStore().GetRunByID(c.Request.Context(), uri.ID)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failAsyncOp(c, err)
+			return
+		}
+		// 运行记录不存在时 store 返回 (nil, nil)，toRunResponse 会 nil-deref（曾导致 500 空 body）。
+		if r == nil {
+			failAsyncOp(c, gasync.ErrRunNotFound)
 			return
 		}
 		gincontext.Success(c, toRunResponse(r))
@@ -194,7 +199,7 @@ func handleMarkStale(s *gasync.Server) gin.HandlerFunc {
 		}
 		affected, err := s.GetStore().MarkStaleProcessingAsFailed(c.Request.Context(), time.Duration(req.CutoffSeconds)*time.Second, uri.Type)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failAsyncOp(c, err)
 			return
 		}
 		gincontext.Success(c, &affectedResponse{Affected: affected})
@@ -225,7 +230,7 @@ func handleCleanupRuns(s *gasync.Server) gin.HandlerFunc {
 		}
 		affected, err := s.GetStore().CleanupRuns(c.Request.Context(), time.Unix(req.BeforeUnix, 0), uri.Type)
 		if err != nil {
-			gincontext.Fail(c, err)
+			failAsyncOp(c, err)
 			return
 		}
 		gincontext.Success(c, &affectedResponse{Affected: affected})

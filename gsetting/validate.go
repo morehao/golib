@@ -67,3 +67,18 @@ func validateValue(valueType ValueType, value string) error {
 		return errUnsupportedValueType
 	}
 }
+
+// validateStatus 校验配置项状态只允许 enabled / disabled。
+//
+// 空字符串表示「未指定」：Create 默认启用、Update 表示不改，由调用方处理。
+func validateStatus(status string) error {
+	if status == "" {
+		return nil
+	}
+	switch Status(status) {
+	case StatusEnabled, StatusDisabled:
+		return nil
+	default:
+		return errInvalidStatus
+	}
+}

@@ -2,6 +2,7 @@ package ginasync
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -79,4 +80,25 @@ func TestMarkStaleAndCleanup(t *testing.T) {
 
 	code, env = doJSON(t, engine, "DELETE", "/async-tasks/email:send/runs", map[string]any{"before_unix": 1})
 	requireOK(t, code, env, "清理")
+}
+
+// TestGetRunNotFound 不存在的运行记录详情：必须返回 404 + JSON envelope，而不是 500/空 body。
+// 历史缺陷：GetRunByID 返回 (nil, nil) 后 toRunResponse 对 nil 取值 panic。
+func TestGetRunNotFound(t *testing.T) {
+	engine, _ := setupRouter(t)
+
+	code, env := doJSON(t, engine, "GET", "/async-runs/not-a-real-run", nil)
+	require.Equal(t, http.StatusNotFound, code, "不存在运行记录应 404: %v", env)
+	require.EqualValues(t, -1, env["code"])
+	require.Contains(t, env["msg"], "run not found")
+}
+
+// TestGetTaskNotFound 不存在的任务类型详情：404 + JSON envelope。
+func TestGetTaskNotFound(t *testing.T) {
+	engine, _ := setupRouter(t)
+
+	code, env := doJSON(t, engine, "GET", "/async-tasks/not-registered", nil)
+	require.Equal(t, http.StatusNotFound, code, "不存在任务类型应 404: %v", env)
+	require.EqualValues(t, -1, env["code"])
+	require.Contains(t, env["msg"], "task not found")
 }
