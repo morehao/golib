@@ -8,7 +8,12 @@
   等标准代理环境变量被**静默忽略**，所有请求强制直连。在需要出站代理的网络里，调用方
   即使正确设置了代理也无效，表现为直连超时或撞上游限流（如 GitHub 403）。现在在
   `newTransport()` 里设 `Proxy: http.ProxyFromEnvironment`（普通与流式客户端共用），
-  `NO_PROXY` 亦生效。
+  `NO_PROXY` 亦生效——与 `net/http.DefaultTransport`、resty 默认行为一致。
+
+### Features
+
+- **ghttp**: `HttpClientConfig` 新增可选 `ProxyURL` 字段，用于在进程内为单个客户端
+  显式指定代理、覆盖环境变量（如 `http://127.0.0.1:7890`）；留空时仍回落到环境变量。
 
 ### Breaking Changes
 

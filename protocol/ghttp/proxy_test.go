@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,4 +48,22 @@ func TestTransportHonoursProxy(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.True(t, viaProxy, "请求应当经由代理转发")
+}
+
+// TestExplicitProxyURLOverridesEnv 断言 cfg.ProxyURL 非空时优先走该代理（覆盖环境变量）。
+func TestExplicitProxyURLOverridesEnv(t *testing.T) {
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("proxied"))
+	}))
+	defer proxySrv.Close()
+
+	c := NewClient(&protocol.HttpClientConfig{ProxyURL: proxySrv.URL})
+	tr := c.newTransport()
+	require.NotNil(t, tr.Proxy)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/x", nil)
+	got, err := tr.Proxy(req)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, proxySrv.URL, got.String())
 }

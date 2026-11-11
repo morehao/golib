@@ -64,6 +64,10 @@ type Client struct {
 	// 注意：它只解决 OOM，不解决"上游永远传不完"——后者由 ctx 取消与 Result.Close() 负责。
 	MaxResponseBytes int64
 
+	// proxyFunc 决定每次请求是否走代理。默认 http.ProxyFromEnvironment（读环境变量）；
+	// 若 NewClient 传了 cfg.ProxyURL，则固定走该代理。
+	proxyFunc func(*http.Request) (*url.URL, error)
+
 	httpClient   *http.Client // 缓存的HTTP客户端
 	streamClient *http.Client // 流式请求客户端（仅限制响应头阶段超时，不截断 body 读取）
 	once         sync.Once    // 确保 httpClient 只初始化一次
@@ -177,6 +181,12 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 		if cfg.Retryable != nil {
 			client.Retryable = *cfg.Retryable
 		}
+		// 显式代理覆盖：仅在配置了 ProxyURL 时生效，否则保持 nil → 用 ProxyFromEnvironment。
+		if cfg.ProxyURL != "" {
+			if u, err := url.Parse(cfg.ProxyURL); err == nil {
+				client.proxyFunc = http.ProxyURL(u)
+			}
+		}
 		if client.RetryInterval <= 0 {
 			client.RetryInterval = defaultRetryInterval
 		}
@@ -185,11 +195,16 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 }
 
 func (c *Client) newTransport() *http.Transport {
-	return &http.Transport{
+	proxy := c.proxyFunc
+	if proxy == nil {
 		// 尊重标准代理环境变量（HTTP_PROXY/HTTPS_PROXY/NO_PROXY 及小写形式）。
 		// net/http 的 Transport 只有在显式设置 Proxy 时才会读取这些变量；缺省的零值
 		// 表示"从不走代理"，会让使用者即便设了 HTTPS_PROXY 也被静默忽略。
-		Proxy:               http.ProxyFromEnvironment,
+		// 这与 net/http.DefaultTransport 及 resty 的默认行为一致。
+		proxy = http.ProxyFromEnvironment
+	}
+	return &http.Transport{
+		Proxy:               proxy,
 		MaxIdleConns:        c.MaxIdleConns,
 		MaxIdleConnsPerHost: c.MaxConnsPerHost,
 		IdleConnTimeout:     c.IdleConnTimeout,
