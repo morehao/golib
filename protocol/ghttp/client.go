@@ -183,7 +183,13 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 		}
 		// 显式代理覆盖：仅在配置了 ProxyURL 时生效，否则保持 nil → 用 ProxyFromEnvironment。
 		if cfg.ProxyURL != "" {
-			if u, err := url.Parse(cfg.ProxyURL); err == nil {
+			if u, err := url.Parse(cfg.ProxyURL); err != nil {
+				// 配置了代理却解析失败，若静默回落环境变量，使用方会误以为已在走指定代理，
+				// 排查困难。这里显式告警；未配置环境变量代理时行为等同直连。
+				glog.Warnf(context.Background(),
+					"ghttp: invalid ProxyURL %q in HttpClientConfig, fallback to environment proxy: %v",
+					cfg.ProxyURL, err)
+			} else {
 				client.proxyFunc = http.ProxyURL(u)
 			}
 		}
