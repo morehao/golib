@@ -18,6 +18,10 @@ type HttpClientConfig struct {
 	// 面向不可信/易配错的上游时建议显式设置。超限返回 ghttp.ErrResponseTooLarge。
 	// 只约束缓冲（默认整包、Result.Buffer、错误页），WithStream() 的流式消费不受它约束。
 	MaxResponseBytes int64 `yaml:"max_response_bytes"`
+	// ProxyURL 是可选代理覆盖（如 "http://127.0.0.1:7890"）。留空时回落到
+	// http.ProxyFromEnvironment（读取 HTTP_PROXY/HTTPS_PROXY/NO_PROXY 等环境变量，
+	// 与 net/http 默认行为一致）。仅当需要在进程内为不同客户端指定不同代理时才显式设置。
+	ProxyURL string `yaml:"proxy_url"`
 }
 
 type SSEClientConfig struct {
