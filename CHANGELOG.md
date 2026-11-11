@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **ghttp**: `Transport` 未设置 `Proxy` 字段，导致 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`
+  等标准代理环境变量被**静默忽略**，所有请求强制直连。在需要出站代理的网络里，调用方
+  即使正确设置了代理也无效，表现为直连超时或撞上游限流（如 GitHub 403）。现在在
+  `newTransport()` 里设 `Proxy: http.ProxyFromEnvironment`（普通与流式客户端共用），
+  `NO_PROXY` 亦生效。
+
 ### Breaking Changes
 
 - **configkv → gsetting**: rename the `configkv` package to `gsetting`. Import path is now

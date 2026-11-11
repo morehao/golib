@@ -186,6 +186,10 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 
 func (c *Client) newTransport() *http.Transport {
 	return &http.Transport{
+		// 尊重标准代理环境变量（HTTP_PROXY/HTTPS_PROXY/NO_PROXY 及小写形式）。
+		// net/http 的 Transport 只有在显式设置 Proxy 时才会读取这些变量；缺省的零值
+		// 表示"从不走代理"，会让使用者即便设了 HTTPS_PROXY 也被静默忽略。
+		Proxy:               http.ProxyFromEnvironment,
 		MaxIdleConns:        c.MaxIdleConns,
 		MaxIdleConnsPerHost: c.MaxConnsPerHost,
 		IdleConnTimeout:     c.IdleConnTimeout,
