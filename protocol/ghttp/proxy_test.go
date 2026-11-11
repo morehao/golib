@@ -67,3 +67,15 @@ func TestExplicitProxyURLOverridesEnv(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, proxySrv.URL, got.String())
 }
+
+// TestInvalidProxyURLFallsBackToEnv 断言 ProxyURL 非法时不 panic、告警，
+// 且 proxyFunc 保持 nil（回落到环境变量代理），而不是静默装配出一个错误代理。
+func TestInvalidProxyURLFallsBackToEnv(t *testing.T) {
+	// 含非法端口，url.Parse 会报错。
+	c := NewClient(&protocol.HttpClientConfig{ProxyURL: "http://127.0.0.1:not-a-port"})
+	require.NotNil(t, c)
+	assert.Nil(t, c.proxyFunc, "非法 ProxyURL 不应设置代理函数")
+
+	// 未配置 proxyFunc 时，newTransport 仍应挂上环境变量代理函数。
+	assert.NotNil(t, c.newTransport().Proxy)
+}

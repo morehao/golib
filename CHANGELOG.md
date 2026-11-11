@@ -10,6 +10,10 @@
   `newTransport()` 里设 `Proxy: http.ProxyFromEnvironment`（普通与流式客户端共用），
   `NO_PROXY` 亦生效——与 `net/http.DefaultTransport`、resty 默认行为一致。
 
+- **ghttp**: `HttpClientConfig.ProxyURL` 解析失败时原先被**静默忽略**并回落环境变量代理，
+  使用方无法察觉自己配的代理没生效。现在会记录一条 `Warn` 日志（含非法值与解析错误），
+  行为仍回落到 `http.ProxyFromEnvironment`，不 panic、不中断构造。
+
 ### Features
 
 - **ghttp**: `HttpClientConfig` 新增可选 `ProxyURL` 字段，用于在进程内为单个客户端
