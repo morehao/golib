@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/storagetest"
 	"github.com/morehao/golib/storage"
 )
 
@@ -19,7 +19,7 @@ const stubBucket = "testbucket"
 
 // newStubDriver 构造一个指向进程内 S3 桩的 s3base driver。
 // profile 取 MinIO 的形状：path-style 寻址 + 原生条件写。
-func newStubDriver(t *testing.T, f *testutil.FakeS3) storage.Storage {
+func newStubDriver(t *testing.T, f *storagetest.FakeS3) storage.Storage {
 	t.Helper()
 	cfg := storage.Config{
 		Endpoint:  f.URL(),
@@ -52,18 +52,18 @@ func newStubDriver(t *testing.T, f *testutil.FakeS3) storage.Storage {
 // TestConformanceAgainstFakeS3 用进程内 S3 桩跑完整契约套件。
 // 有了它，S3 侧的协议行为不再取决于本机能否拉起来 MinIO / 能否连上云端点。
 func TestConformanceAgainstFakeS3(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	// 用 t.Cleanup 而不是 defer：契约套件自己注册了清理钩子（t.Cleanup），
 	// 而 defer 会在任何 t.Cleanup 之前执行 —— 那样桩先关掉，清理请求就会
 	// 拿到 connection refused。Cleanup 是 LIFO，套件先注册、后执行。
 	t.Cleanup(f.Close)
-	testutil.RunStorageSuite(t, newStubDriver(t, f), stubBucket)
+	storagetest.RunCases(t, storagetest.Spec{S: newStubDriver(t, f), Bucket: stubBucket}, storagetest.StorageCases()...)
 }
 
 // 端到端回归"上传成功但落库 size=0"：桩不返回对象大小（与真实 S3 一致），
 // 驱动必须自己数。旧实现采信 PutObjectOutput.Size，这里会拿到 0。
 func TestStubRegression_PutObjectSizeIsCountedNotTakenFromResponse(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -89,7 +89,7 @@ func TestStubRegression_PutObjectSizeIsCountedNotTakenFromResponse(t *testing.T)
 // 端到端回归 ETag 规范化：Put / Head / List 三条路径必须报出同一个字符串。
 // 旧实现 ListObjects 漏了 trimETag，同一对象在 List 与 Head 上会得到不同值。
 func TestStubRegression_ETagNormalizedAcrossPutHeadList(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -127,7 +127,7 @@ func TestStubRegression_ETagNormalizedAcrossPutHeadList(t *testing.T) {
 // 端到端回归 CopySource 编码：桩按查询串语义解码，'+' 会被解成空格。
 // 若驱动只做 url.PathEscape（Go 不转义 '+'），源对象会查不到并返回 404。
 func TestStubRegression_CopySourceEscapesPlusInKey(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -156,7 +156,7 @@ func TestStubRegression_CopySourceEscapesPlusInKey(t *testing.T) {
 // 端到端回归 DeleteObjects 分批：桩对超过 1000 个对象的单次请求直接报错，
 // 旧实现不分批，这里必然失败。
 func TestStubRegression_DeleteObjectsChunksOver1000(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -178,7 +178,7 @@ func TestStubRegression_DeleteObjectsChunksOver1000(t *testing.T) {
 //   - HeadObject 的 404 没有响应体（HEAD 语义），SDK 只能由状态码推导出
 //     "NotFound"。错误码表必须同时收录两者，否则 Head 的 404 会漏成 KindOther。
 func TestStubRegression_ErrorClassificationKeepsContext(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -229,7 +229,7 @@ func TestStubRegression_ErrorClassificationKeepsContext(t *testing.T) {
 
 // 端到端验证条件写：冲突时既要报错，也绝不能覆盖已有内容。
 func TestStubRegression_ConditionalWriteDoesNotOverwrite(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -262,7 +262,7 @@ func TestStubRegression_ConditionalWriteDoesNotOverwrite(t *testing.T) {
 
 // 条件写的对照面：不带 IfNotExists 时必须允许覆盖，否则去重语义就错了。
 func TestStubRegression_UnconditionalPutOverwrites(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -288,7 +288,7 @@ func TestStubRegression_UnconditionalPutOverwrites(t *testing.T) {
 // 端到端回归"分片上传静默丢弃 Metadata / StorageClass"：
 // 断言这两个字段真的随 CreateMultipartUpload 请求发出。
 func TestStubRegression_CreateMultipartKeepsMetadataAndStorageClass(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -314,7 +314,7 @@ func TestStubRegression_CreateMultipartKeepsMetadataAndStorageClass(t *testing.T
 
 // 分片上传完整回环：上传两片并合并后，对象内容与大小都必须正确。
 func TestStubRegression_MultipartRoundTrip(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	s := newStubDriver(t, f)
 	ctx := context.Background()
@@ -382,7 +382,7 @@ func TestStubRegression_MultipartRoundTrip(t *testing.T) {
 
 // 不支持条件写的后端必须显式拒绝，而不是静默退化为覆盖写。
 func TestStubRegression_ConditionalWriteRefusedWhenUnsupported(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	cfg := storage.Config{Endpoint: f.URL(), Region: "us-east-1", AccessKey: "k", SecretKey: "s"}
 	s, err := New(cfg, &storage.S3PathBuilder{},
@@ -400,7 +400,7 @@ func TestStubRegression_ConditionalWriteRefusedWhenUnsupported(t *testing.T) {
 // 409 FileAlreadyExists —— 该码不在基类表里，必须由 profile 的 ErrorCodeKind
 // 显式声明才能落到"已存在"，否则上层并发去重会静默失效。
 func TestStubRegression_VendorHeaderConflictUsesProviderErrorCode(t *testing.T) {
-	f := testutil.NewFakeS3()
+	f := storagetest.NewFakeS3()
 	defer f.Close()
 	cfg := storage.Config{Endpoint: f.URL(), Region: "us-east-1", AccessKey: "k", SecretKey: "s"}
 	cwOpt := func(o *s3.Options) {

@@ -5,12 +5,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/storagetest"
 	"github.com/morehao/golib/storage"
 )
 
 // newStubDriverWithRetry 构造一个可指定重试配置的桩 driver。
-func newStubDriverWithRetry(t *testing.T, f *testutil.FakeS3, retry storage.RetryConfig) storage.Storage {
+func newStubDriverWithRetry(t *testing.T, f *storagetest.FakeS3, retry storage.RetryConfig) storage.Storage {
 	t.Helper()
 	cfg := storage.Config{
 		Endpoint:  f.URL(),
@@ -38,7 +38,7 @@ func TestRetry_MaxAttemptsIsEffective(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("MaxAttempts=3 允许两次失败后成功", func(t *testing.T) {
-		f := testutil.NewFakeS3()
+		f := storagetest.NewFakeS3()
 		t.Cleanup(f.Close)
 		f.FailFirstRequests(2)
 		s := newStubDriverWithRetry(t, f, storage.RetryConfig{MaxAttempts: 3})
@@ -54,7 +54,7 @@ func TestRetry_MaxAttemptsIsEffective(t *testing.T) {
 	// 这条是最锋利的用例：MaxAttempts=1 表示"不重试"。
 	// 若配置被忽略（仍走 SDK 默认 3 次尝试），请求数会是 3 而不是 1，测试立刻失败。
 	t.Run("MaxAttempts=1 表示不重试", func(t *testing.T) {
-		f := testutil.NewFakeS3()
+		f := storagetest.NewFakeS3()
 		t.Cleanup(f.Close)
 		f.FailFirstRequests(1)
 		s := newStubDriverWithRetry(t, f, storage.RetryConfig{MaxAttempts: 1})
@@ -71,7 +71,7 @@ func TestRetry_MaxAttemptsIsEffective(t *testing.T) {
 	// 这里只验证"默认重试仍然开启"，**不写死默认次数** —— 后者是 SDK 的实现
 	// 细节，写死会让将来升级 SDK 时出现与本次改动无关的失败。
 	t.Run("零值沿用 SDK 默认重试", func(t *testing.T) {
-		f := testutil.NewFakeS3()
+		f := storagetest.NewFakeS3()
 		t.Cleanup(f.Close)
 		f.FailFirstRequests(1)
 		s := newStubDriverWithRetry(t, f, storage.RetryConfig{})
