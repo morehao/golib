@@ -1,6 +1,7 @@
 package dict
 
 import (
+	"github.com/morehao/golib/internal/tablekit"
 	"gorm.io/gorm"
 )
 
@@ -21,5 +22,5 @@ func Migrate(db *gorm.DB) error {
 	if db == nil {
 		return errDBRequired
 	}
-	return db.AutoMigrate(SchemaModels()...)
+	return tablekit.Migrator{Component: "dict", Models: SchemaModels()}.Migrate(db)
 }

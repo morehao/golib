@@ -3,6 +3,7 @@ package filestore
 import (
 	"fmt"
 
+	"github.com/morehao/golib/internal/tablekit"
 	"gorm.io/gorm"
 )
 
@@ -18,5 +19,5 @@ func Migrate(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("filestore.Migrate: db is required: %w", ErrInvalidArgument)
 	}
-	return db.AutoMigrate(SchemaModels()...)
+	return tablekit.Migrator{Component: "filestore", Models: SchemaModels()}.Migrate(db)
 }

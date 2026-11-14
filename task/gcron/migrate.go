@@ -1,6 +1,7 @@
 package gcron
 
 import (
+	"github.com/morehao/golib/internal/tablekit"
 	"gorm.io/gorm"
 )
 
@@ -16,5 +17,5 @@ func AutoMigrate(db *gorm.DB) error {
 	if db == nil {
 		return ErrNilDB
 	}
-	return db.AutoMigrate(SchemaModels()...)
+	return tablekit.Migrator{Component: "gcron", Models: SchemaModels()}.Migrate(db)
 }
