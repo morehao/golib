@@ -1,4 +1,4 @@
-// Package ginsetting 将 gsetting 配置中心接入为 gin HTTP 路由（管理面 CRUD）。
+// Package ginsetting 将 gsetting 配置中心接入为 gin HTTP 路由（管理面 CRUD + 启停）。
 //
 // 定位与 ginupload 一致：组件包自身保持纯库（不依赖 gin），HTTP 适配层单独放在
 // biz/gserver/<组件> 下，由业务组装期统一调用 Register。路由风格遵循
@@ -24,10 +24,11 @@ import (
 func Register(group *gin.RouterGroup, setting *gsetting.Setting) {
 	r := group.Group("/settings")
 	{
-		r.POST("", handleCreate(setting))       // 创建（同名键 upsert）
-		r.GET("", handleList(setting))          // 分页列表
-		r.GET("/:id", handleGetByID(setting))   // 详情
-		r.PUT("/:id", handleUpdate(setting))    // 更新
-		r.DELETE("/:id", handleDelete(setting)) // 删除
+		r.POST("", handleCreate(setting))                   // 创建（同名键 upsert）
+		r.GET("", handleList(setting))                      // 分页列表
+		r.GET("/:id", handleGetByID(setting))               // 详情
+		r.PUT("/:id", handleUpdate(setting))                // 更新
+		r.PATCH("/:id/status", handleUpdateStatus(setting)) // 启停（body: enabled/disabled）
+		r.DELETE("/:id", handleDelete(setting))             // 删除
 	}
 }

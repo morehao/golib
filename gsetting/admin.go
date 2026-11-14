@@ -113,6 +113,32 @@ func (a *AdminAPI) Update(ctx context.Context, id string, req *UpdateReq) error 
 	return a.store.UpdateByID(ctx, id, updateMap)
 }
 
+// UpdateStatus 只更新配置项状态（启停），不改值、描述与加密模式。
+//
+// 与 Update 的分工：Update 是局部合并（零值字段不更新），status 传空表示「不改」；
+// 本方法把「改状态」收窄为一次显式调用——状态必须给出且只接受 enabled / disabled，
+// 调用方不必知道「零值不更新」这条约定，也就不会因为想改状态而误传整个配置体。
+func (a *AdminAPI) UpdateStatus(ctx context.Context, id string, status Status) error {
+	if err := validateStatus(string(status)); err != nil {
+		return err
+	}
+	if status == "" {
+		// validateStatus 把空串当「未指定」（Create 默认启用 / Update 不改），
+		// 但启停接口必须显式给出状态，否则视为非法，避免静默空操作。
+		return errInvalidStatus
+	}
+
+	entity, err := a.store.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if entity == nil {
+		return ErrSettingNotFound
+	}
+
+	return a.store.UpdateByID(ctx, id, map[string]any{"status": status})
+}
+
 func (a *AdminAPI) Delete(ctx context.Context, id string) error {
 	return a.store.DeleteByID(ctx, id)
 }

@@ -76,3 +76,40 @@ func TestAdminUpdate_NotFound(t *testing.T) {
 	err := admin.Update(context.Background(), "not-exist-id", &UpdateReq{Description: "x"})
 	require.ErrorIs(t, err, ErrSettingNotFound)
 }
+
+// TestAdminUpdateStatus 启停只改状态，不动值/描述/加密模式；
+// 非法与空状态一律拒绝，不存在的 ID 返回 ErrSettingNotFound。
+func TestAdminUpdateStatus(t *testing.T) {
+	admin, st := newTestAdmin(t)
+	ctx := context.Background()
+
+	require.NoError(t, admin.Create(ctx, &CreateReq{
+		Group: "g", Key: "k", Value: "v", Description: "说明",
+	}))
+	created, err := st.Get(ctx, "g", "k")
+	require.NoError(t, err)
+
+	// 非法 / 空状态：拒绝，且状态保持默认 enabled
+	require.ErrorIs(t, admin.UpdateStatus(ctx, created.ID, Status("weird")), errInvalidStatus)
+	require.ErrorIs(t, admin.UpdateStatus(ctx, created.ID, Status("")), errInvalidStatus)
+	got, err := st.Get(ctx, "g", "k")
+	require.NoError(t, err)
+	require.Equal(t, StatusEnabled, got.Status, "非法请求不应改动状态")
+
+	// 不存在的 ID
+	require.ErrorIs(t, admin.UpdateStatus(ctx, "not-exist-id", StatusDisabled), ErrSettingNotFound)
+
+	// 正常停用：只改 status
+	require.NoError(t, admin.UpdateStatus(ctx, created.ID, StatusDisabled))
+	got, err = st.Get(ctx, "g", "k")
+	require.NoError(t, err)
+	require.Equal(t, StatusDisabled, got.Status)
+	require.Equal(t, "v", got.Value, "启停不应改动配置值")
+	require.Equal(t, "说明", got.Description, "启停不应改动描述")
+
+	// 再启用
+	require.NoError(t, admin.UpdateStatus(ctx, created.ID, StatusEnabled))
+	got, err = st.Get(ctx, "g", "k")
+	require.NoError(t, err)
+	require.Equal(t, StatusEnabled, got.Status)
+}
