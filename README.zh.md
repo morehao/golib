@@ -8,7 +8,7 @@
 - [gsetting](#gsetting) 配置管理组件
 - [dbaccess](#dbaccess) 数据库客户端组件（支持 MySQL、Redis、Elasticsearch）
 - [dict](#dict) 数据字典组件（类型 + 码值，支持树形层级）
-- [distlock](#distlock) 分布式锁组件（不支持可重入）
+- [distlock](#distlock) 分布式锁组件（不支持可重入）+ 主从选举
 - [excel](#excel) Excel 读写组件
 - [gast](#gast) 语法树工具
 - [gauth](#gauth) 鉴权组件（包含 jwtauth）
@@ -17,7 +17,7 @@
 - [glog](#glog) 日志组件
 - [gtrace](#gtrace) OpenTelemetry Trace 初始化组件
 - [gtree](#gtree) 树结构构建工具
-- [gutil](#gutil) 常用工具函数集合
+- [gutil](#gutil) 常用工具函数集合（字符串/切片/时间/文件/网络/Shell/压缩/随机）
 - [task](#task) 任务调度组件
 - [protocol](#protocol) 协议组件（包含 ghttp、gresty）
 - [ratelimit](#ratelimit) 限流组件
@@ -153,12 +153,16 @@ go get github.com/morehao/golib
 ## distlock
 
 ### 简介
-`distlock` 是分布式锁组件，基于 Redis 实现，使用 redsync 算法，支持自动续期。
+`distlock` 是分布式锁组件，基于 Redis 实现，使用 redsync 算法，支持自动续期。并在同一套锁抽象之上提供**主从选举**能力。
 
 ### 特性
 - 基于 Redis 的分布式锁（支持单节点或多节点 quorum）
 - 支持自动续期（锁续命，带随机抖动），通过 `Lost()` 提供锁丢失通知
 - 不支持可重入
+- **主从选举**（`LeaderElector`）：集群内至多一个主节点，抢占 + 续期模型，租约丢失自动让位
+  - 构建在 `Lock`/`LockFactory` 之上，任意存储后端可用，不引入额外依赖
+  - `IsLeader()` / `Epoch()`（任期号）/ `LeaderID()` 查询状态；`Run(ctx)` 驱动选举循环
+  - 非主节点按 `RetryInterval` 重试，现任主节点释放或租约过期后自动接管
 
 ### 使用示例
 ```go
@@ -186,6 +190,25 @@ if ok, err := lock.Lock(ctx); err != nil {
 	// 续期失败（锁丢失）时 Lost() 会关闭，应尽快终止临界区：
 	// <-lock.Lost()
 }
+```
+
+### 主从选举
+```go
+elector, err := distlock.NewLeaderElector(factory, &distlock.LeaderConfig{
+	Key:           "svc:leader",     // 选举用的锁 key（必填）
+	TTL:           15 * time.Second, // 租约时长（必填）
+	RetryInterval: 2 * time.Second,  // 非主节点重试间隔（可选，默认 2s）
+})
+if err != nil {
+	// 配置错误
+}
+
+go elector.Run(ctx) // 阻塞直到 ctx 取消；退出时尽力释放租约
+
+if elector.IsLeader() {
+	// 执行仅主节点应做的事：定时任务、单例消费、缓存刷新等
+}
+// 可选：elector.Epoch() 识别新任期，elector.LeaderID() 观测当前主节点
 ```
 
 ## excel
@@ -304,15 +327,18 @@ if ok, err := lock.Lock(ctx); err != nil {
 ## gutil
 
 ### 简介
-`gutil` 是常用工具函数集合，提供了开发过程中常用的工具函数。
+`gutil` 是常用工具函数集合，提供了开发过程中常用的工具函数。所有函数均无状态、只触达本机资源（内存、本地文件、本机 shell、本机网络探测），不依赖注入的配置/客户端，也不依赖外部服务。
 
 ### 子组件
-- 随机数生成
-- 字符串处理
-- 时间日期操作
-- 类型转换
-- Slice/Map 操作
-- 文件处理
+- **random**: UUID(v7)、crypto 随机字节/hex/base64、数字串，以及**自定义字符集**的 `RandomFromSet(length, set)`（内置 `RandomCharset[Number|Alpha|Alphanumeric|Symbol]` 常量）
+- **string**: 命名风格转换（snake/camel/Pascal）、截断、ID 大写化、去空白
+- **time**: 格式化、请求耗时、按偏移取日/周/月/年区间
+- **convert**: `any` 转 int64/uint64/float64/string、JSON 字符串
+- **slice / copy**: 差集、去重、包含判断、分组、map 拷贝
+- **file**: 扩展名处理、存在性判断、`CreateDir`、YAML 加载
+- **net**: 本机 IP（`LocalIP`/`MustLocalIP`）、IPv4 与 uint32 互转、端口探测（`CheckPort`/`CheckPortTimeout`）
+- **shell**: 执行本机 shell 命令并带回合并输出（`ExecShell`/`ExecShellContext`，支持 ctx 超时/取消）
+- **zip**: 将目录或文件列表打包为 zip（`ZipDir`/`ZipFiles`），以及带目录穿越防护的解压（`Unzip`）
 
 ## task
 

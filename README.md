@@ -12,7 +12,7 @@ Components:
 - [gsetting](#gsetting) Configuration management component
 - [dbaccess](#dbaccess) Database client components (supports MySQL, Redis, Elasticsearch)
 - [dict](#dict) Data dictionary component (type + code value, tree hierarchy)
-- [distlock](#distlock) Distributed lock component (non-reentrant)
+- [distlock](#distlock) Distributed lock component (non-reentrant) + leader election
 - [excel](#excel) Excel read/write component
 - [gast](#gast) AST syntax tree tool
 - [gauth](#gauth) Authentication component (includes jwtauth)
@@ -22,7 +22,7 @@ Components:
 - [gllm](#gllm) LLM access configuration layer (config → eino model)
 - [gtrace](#gtrace) OpenTelemetry Trace initialization component
 - [gtree](#gtree) Tree structure construction tool
-- [gutil](#gutil) Common utility functions collection
+- [gutil](#gutil) Common utility functions collection (string/slice/time/file/net/shell/zip/random)
 - [task](#task) Task scheduling components
 - [protocol](#protocol) Protocol components (includes ghttp, gresty)
 - [ratelimit](#ratelimit) Rate limiting component
@@ -244,12 +244,16 @@ For usage examples, refer to [dict usage](dict/README.md)
 ## distlock
 
 ### Overview
-`distlock` is a distributed lock component based on Redis, using redsync algorithm, supporting automatic renewal.
+`distlock` is a distributed lock component based on Redis, using redsync algorithm, supporting automatic renewal. It also provides a **leader election** built on the same lock abstraction.
 
 ### Features
 - Redis-based distributed lock (single or multi-node quorum)
 - Automatic renewal (lock keepalive) with jitter, lock-loss notification via `Lost()`
 - Non-reentrant
+- **Leader election** (`LeaderElector`): at most one leader across the cluster, claim + renewal model, automatic step-down when the lease is lost
+  - Built on `Lock`/`LockFactory`, so it works with any storage backend without extra dependencies
+  - `IsLeader()` / `Epoch()` (term counter) / `LeaderID()` for querying state; `Run(ctx)` drives the loop
+  - Non-leaders retry on `RetryInterval` and take over once the current leader releases or its lease expires
 
 ### Usage
 ```go
@@ -277,6 +281,25 @@ if ok, err := lock.Lock(ctx); err != nil {
 	// when auto-renewal fails (lock lost), Lost() is closed — abort ASAP:
 	// <-lock.Lost()
 }
+```
+
+### Leader election
+```go
+elector, err := distlock.NewLeaderElector(factory, &distlock.LeaderConfig{
+	Key:           "svc:leader",     // election lock key (required)
+	TTL:           15 * time.Second, // lease duration (required)
+	RetryInterval: 2 * time.Second,  // retry interval for non-leaders (optional, default 2s)
+})
+if err != nil {
+	// invalid config
+}
+
+go elector.Run(ctx) // blocks until ctx is done; releases the lease on exit
+
+if elector.IsLeader() {
+	// do leader-only work: scheduled job, singleton consumer, cache refresh, ...
+}
+// optional: elector.Epoch() to detect a new term, elector.LeaderID() to observe the current leader
 ```
 
 ## excel
@@ -395,15 +418,18 @@ For usage examples, refer to [gtrace usage](gtrace/README.md)
 ## gutil
 
 ### Overview
-`gutil` is a collection of common utility functions providing commonly used tool functions during development.
+`gutil` is a collection of common utility functions providing commonly used tool functions during development. All functions are stateless and only touch local resources (memory, local files, local shell, local network probes); they never require injected config/clients or external services.
 
 ### Sub-components
-- Random number generation
-- String processing
-- Date/time operations
-- Type conversion
-- Slice/Map operations
-- File processing
+- **random**: UUID (v7), crypto-random bytes/hex/base64, digits, and **`RandomFromSet(length, set)`** for custom charsets (with built-in `RandomCharset[Number|Alpha|Alphanumeric|Symbol]` constants)
+- **string**: snake/camel/Pascal conversion, truncation, ID capitalization, trimming
+- **time**: formatting, request cost, day/week/month/year ranges with offsets
+- **convert**: `any` → int64/uint64/float64/string, JSON string
+- **slice / copy**: diff, duplicate, contain, group, map copy
+- **file**: extension helpers, exists checks, `CreateDir`, YAML loading
+- **net**: local IP (`LocalIP`/`MustLocalIP`), IPv4 ↔ uint32 conversion, port probing (`CheckPort`/`CheckPortTimeout`)
+- **shell**: run a local shell command and capture merged output (`ExecShell`/`ExecShellContext`, ctx-aware)
+- **zip**: pack a directory or a file list into a zip (`ZipDir`/`ZipFiles`), and extract with path-traversal protection (`Unzip`)
 
 ## task
 
