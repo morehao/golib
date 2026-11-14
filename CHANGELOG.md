@@ -24,6 +24,29 @@
 
 ### Features
 
+- **gcache**: 新增统一 KV 缓存组件。`Cache` 接口（Get/Set/Delete/`GetOrLoad`/Close）+ `Config` 值对象与
+  函数式 `Option`；驱动注册式后端 `gcache/memory`（map+LRU+周期清理+进程内 single-flight）与
+  `gcache/redis`（复用 `dbaccess/dbredis`，`SET NX PX` 短占位 + fail-open 防击穿）；泛型 `GetAs[T]`；
+  `gcache:` 前缀 sentinel。无全局单例、不做 DB 当缓存。
+
+- **gnotify**: 新增消息通知组件。`Notifier` 接口 + 渠道注册表（`Register` + blank import）、`Router`
+  按显式渠道发送；首批/二期渠道：email（标准库 `net/smtp`，HTML + 中文标题）、wecom（群机器人 webhook）、
+  sms/aliyun（RPC HMAC-SHA1）、sms/tencent（TC3-HMAC-SHA256）、wechatmp（公众号模板消息，内部 token 缓存）。
+  凭据由调用方注入、不隐式读配置、零云厂商 SDK、不落库、不内部重试。
+
+- **gprompt**: 新增可运营 Prompt 模板组件。`VariableSpec` + `Renderer.ValidateAndRender`（模板引用↔声明
+  双向核对 + 类型/范围/枚举/长度校验 + `missingkey=error` 兜底）；`Source` 读接缝（DB / memory）+
+  `PromptService`；版本快照不可变（`CurrentVersion` 指针）；自有表 `core_prompt`/`core_prompt_version`
+  走 `internal/tablekit`，DDL 由 `internal/ddlgen` 钉住；不 import `gllm`。
+
+- **dict / gprompt 缓存装饰器**: 两者各提供 `NewCachingSource(src, cache, ...)`（读路径 read-through、写路径
+  不走缓存、带失效入口），通过包内最小 `cachePort` 接口结构化满足 `gcache.Cache`，**不引入 gcache 硬依赖**。
+
+- **internal/tablekit**: 新增内部建表样板包，收敛 gsetting/dict/filestore/task/gcron/task/gasync 的 nil 校验 +
+  `AutoMigrate` 重复实现（各组件导出符号签名不变）。
+
+- **protocol**: 明确 `ghttp`（生产主力）/`gresty`（resty 封装·学习参考）边界，补 `protocol/README.md` 与各包 `doc.go`。
+
 - **ghttp**: `HttpClientConfig` 新增可选 `ProxyURL` 字段，用于在进程内为单个客户端
   显式指定代理、覆盖环境变量（如 `http://127.0.0.1:7890`）；留空时仍回落到环境变量。
 
