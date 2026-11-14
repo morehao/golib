@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis_rate/v10"
+	"github.com/morehao/golib/dbaccess/dbredis"
 )
 
 // Limiter 是限流器接口。
@@ -39,9 +40,19 @@ func NewLimiter(opts ...Option) (Limiter, error) {
 		return nil, err
 	}
 
+	// 未直接提供 client 时，复用 dbaccess/dbredis 按配置构造（含日志 Hook 与启动期 Ping 校验）。
+	client := cfg.RedisClient
+	if client == nil {
+		c, err := dbredis.New(cfg.RedisConfig, cfg.RedisConfigOpts...)
+		if err != nil {
+			return nil, err
+		}
+		client = c
+	}
+
 	l := &redisLimiter{
-		limiter:       redis_rate.NewLimiter(cfg.RedisClient),
-		client:        cfg.RedisClient,
+		limiter:       redis_rate.NewLimiter(client),
+		client:        client,
 		rate:          cfg.Rate,
 		burst:         cfg.Burst,
 		period:        cfg.Period,
