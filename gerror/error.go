@@ -1,3 +1,6 @@
+// 分层约定：面向外部的业务码（需映射 HTTP 状态/提示文案）放 gconstant 并用 CodeMsgMap 登记；
+// 组件内部供 errors.Is 判定的哨兵错误放各自包的 errors.go（文案统一 "<pkg>: ..." 前缀）。
+// 详见本包 doc.go。
 package gerror
 
 import (

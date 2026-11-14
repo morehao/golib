@@ -139,3 +139,35 @@ func TestPresignTokenKey_ScopesToBucket(t *testing.T) {
 		t.Fatal("不同 key 必须得到不同 token key")
 	}
 }
+
+// TestVerifyPresignToken_KeyAndOp 唯一校验入口同时覆盖 key 绑定与 op 一致性；
+// expectOp 为空时跳过 op 校验，供按 token 自身 op 分派的端点使用。
+func TestVerifyPresignToken_KeyAndOp(t *testing.T) {
+	future := time.Now().UTC().Add(time.Hour).Unix()
+	token, expires := encodeTestToken(t, testPresignSecret, PresignTokenPayload{
+		Key: PresignTokenKey("bkt", "k/obj.bin"),
+		Op:  PresignOpPut,
+		Exp: future,
+	})
+
+	payload, err := VerifyPresignToken(testPresignSecret, "bkt", "k/obj.bin", PresignOpPut, token, expires)
+	if err != nil {
+		t.Fatalf("valid token: %v", err)
+	}
+	if payload.Op != PresignOpPut || payload.Key != PresignTokenKey("bkt", "k/obj.bin") {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+
+	if _, err := VerifyPresignToken(testPresignSecret, "bkt", "other.bin", PresignOpPut, token, expires); !errors.Is(err, ErrPresignKeyMismatch) {
+		t.Fatalf("key mismatch err = %v", err)
+	}
+	if _, err := VerifyPresignToken(testPresignSecret, "bkt", "k/obj.bin", PresignOpGet, token, expires); !errors.Is(err, ErrPresignOpMismatch) {
+		t.Fatalf("op mismatch err = %v", err)
+	}
+	if _, err := VerifyPresignToken(testPresignSecret, "bkt", "k/obj.bin", "", token, expires); err != nil {
+		t.Fatalf("empty expectOp should skip op check, got %v", err)
+	}
+	if _, err := VerifyPresignToken("wrong-secret", "bkt", "k/obj.bin", PresignOpPut, token, expires); !errors.Is(err, ErrPresignInvalidToken) {
+		t.Fatalf("bad signature err = %v", err)
+	}
+}

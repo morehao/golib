@@ -4,10 +4,16 @@ Go 数据库访问统一封装库，提供对多种数据库（GORM、Redis、El
 
 ## 概述
 
-`dbaccess` 是一个数据库访问层的统一封装，集成了三种主流数据库客户端：
-- **dbgorm**: GORM 数据库客户端（支持 MySQL、PostgreSQL、SQLite）
+`dbaccess` 是一个数据库访问层的统一封装，集成了多种数据库客户端与 GORM 辅助组件：
+- **dbgorm**: GORM 数据库客户端（支持 MySQL、PostgreSQL、SQLite），负责连接建立与配置
+- **gormdao**: 通用 DAO，基于泛型实体封装基础增删改查、软删除过滤、事务绑定与通用查询条件（原名 `genericdao`）
+- **gormplugin**: GORM 多租户插件，对 SELECT/UPDATE/DELETE 注入租户作用域条件
 - **dbredis**: Redis 客户端
 - **dbes**: Elasticsearch 客户端
+
+> 三者关系：`dbgorm` 负责**连接**（拿到 `*gorm.DB`）；`gormdao` 在其上提供**通用 DAO**（泛型 CRUD，
+> 通过 `DBGetter` 获取 `*gorm.DB`）；`gormplugin` 作为 GORM 插件挂到连接上实现**多租户隔离**，
+> 与 gormdao 组合使用即可得到「租户隔离 + 通用 CRUD」的数据访问层。
 
 所有客户端都内置了日志记录功能，与 `glog` 库无缝集成，自动记录数据库操作日志。
 
@@ -492,6 +498,34 @@ customLogCfg := &glog.LogConfig{
 
 simpleClient, typedClient, err := dbes.New(cfg, dbes.WithLogConfig(customLogCfg))
 ```
+
+### 4. gormdao - 通用 DAO
+
+基于泛型实体的通用 DAO 封装（原名 `genericdao`），在 `dbgorm` 建立的 `*gorm.DB` 之上提供基础增删改查，
+并内置软删除过滤、事务绑定与通用查询条件。
+
+```bash
+import "github.com/morehao/golib/dbaccess/gormdao"
+```
+
+- 泛型签名 `NewDao[Entity, List, ID](tableName, daoName, getDB, opts...)`；`getDB` 是返回 `*gorm.DB` 的 `DBGetter`，因此可对接 `dbgorm` 的连接。
+- 表名/列名统一交给 GORM Dialector 按方言引用，保留字表名（`user`、`order` 等）开箱可用。
+- 通过 `WithTx(tx)` 复用当前事务；软删除默认过滤，`IncludeDeleted()` 可关闭。
+- 完整说明见包文档 `gormdao/doc.go`。
+
+### 5. gormplugin - GORM 多租户插件
+
+GORM 多租户插件，在 Query、Update、Delete 回调前自动注入租户过滤条件（如 `table.tenant_id = ?`），实现数据访问的租户隔离。
+
+```bash
+import "github.com/morehao/golib/dbaccess/gormplugin"
+```
+
+- 字段名由调用方通过 `ScopeConfig.FieldName` 必填指定（如 `tenant_id`、`company_id`），无隐含默认值。
+- 三态作用域解析：`Resolver` 区分「未声明作用域」「已声明但不过滤（全租户）」「按值过滤」。
+- 缺失作用域可 fail-closed：`MissingScope` 钩子在 context 未声明作用域时回调，返回 error 即不执行本次 SQL。
+- 支持 `SkipTables`（表级跳过）与 `Skip`（单次操作跳过）。
+- 完整说明见 [gormplugin/README.md](gormplugin/README.md)。
 
 ## 特性
 

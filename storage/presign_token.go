@@ -56,8 +56,8 @@ func EncodePresignToken(secret string, payload PresignTokenPayload) (string, err
 }
 
 // DecodePresignToken 校验 token 的格式、签名、有效期（含 expiresStr 与载荷的一致性）
-// 以及 op 的结构完整性，返回其载荷。key 与 op 的语义校验由调用方完成：
-// 同一个端点可以承载整体 PUT 与分片 PUT，调用方才知道该端点期望哪个 op。
+// 以及 op 的结构完整性，返回其载荷。key 与 op 的语义校验不在本函数内完成：
+// 需要这两项校验的调用方请用 VerifyPresignToken（它期望哪个 op 由调用方按端点语义决定）。
 func DecodePresignToken(secret, tokenStr, expiresStr string) (*PresignTokenPayload, error) {
 	if secret == "" {
 		return nil, ErrPresignNoSecret
@@ -107,4 +107,28 @@ func DecodePresignToken(secret, tokenStr, expiresStr string) (*PresignTokenPaylo
 		return nil, ErrPresignInvalidToken
 	}
 	return &payload, nil
+}
+
+// VerifyPresignToken 是预签名 token 的唯一消费侧校验入口：
+// 先做 DecodePresignToken 的全部校验（格式/签名/有效期/op 结构），
+// 再校验 token 的 key 绑定（必须等于 PresignTokenKey(bucket, key)）
+// 与端点期望的 op（expectOp）。三项语义错误分别返回
+// ErrPresignInvalidToken / ErrPresignExpired / ErrPresignKeyMismatch / ErrPresignOpMismatch，
+// 调用方直接 errors.Is(err, ErrPresignXxx) 判断即可。
+//
+// 若调用方按 token 自身携带的 op 分派（同一个 HTTP 端点承载整体 PUT 与分片 PUT），
+// 可传 expectOp=="" 跳过 op 一致性校验，再读返回载荷的 Op 字段自行分派。
+func VerifyPresignToken(secret, bucket, key, expectOp, tokenStr, expiresStr string) (*PresignTokenPayload, error) {
+	payload, err := DecodePresignToken(secret, tokenStr, expiresStr)
+	if err != nil {
+		return nil, err
+	}
+	// token 与 bucket/key 绑定：换 key 或换 bucket 都必须拒绝
+	if payload.Key != PresignTokenKey(bucket, key) {
+		return nil, ErrPresignKeyMismatch
+	}
+	if expectOp != "" && payload.Op != expectOp {
+		return nil, ErrPresignOpMismatch
+	}
+	return payload, nil
 }
