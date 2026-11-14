@@ -36,6 +36,14 @@
 
 ### Breaking Changes
 
+- **biz/testkit**: 删除该包。它在 v1.34.5（#134）被删除、v1.34.6 又作为**兼容保留**恢复
+  （实现冻结、标 `Deprecated`），现在第一方下游已完成迁移——`ark-iam` 的 `pkg/testsetup` /
+  `apps/auth` 的 `testutil`（morehao/ark-iam#116）与 `ark-go-starter` 的 `pkg/testsetup`
+  都已改为自包含实现，全仓不再 import 它。新代码请用 `gtest`
+  （`gtest/gtest`、`gtest/httptest`、`gtest/dbtest`、`gtest/storagetest`）；
+  仍在使用本包的下游请先迁移，否则升级后 `go mod tidy` 会失败（与 v1.34.5 时的表现一致）。
+  注：本库为自用库，故此破坏性变更随 v1.34.7 发布，不另开 v2。
+
 - **configkv → gsetting**: rename the `configkv` package to `gsetting`. Import path is now
   `github.com/morehao/golib/gsetting`; the underlying table is renamed from `core_config` to
   `core_setting` (derived index becomes `idx_core_setting_deleted_at`). No upstream consumers yet,
