@@ -176,3 +176,57 @@ func TestEncryptedValue(t *testing.T) {
 	require.Equal(t, "s3cr3t", item["value"], "读出应为明文")
 	require.Equal(t, "encrypted", item["encryption_mode"])
 }
+
+// TestUpdateStatusRoute PATCH /settings/:id/status 只改状态（enabled/disabled），
+// 不触碰值/描述；非法状态返回失败 envelope，不存在的 ID 返回 404。
+func TestUpdateStatusRoute(t *testing.T) {
+	engine := setupRouter(t)
+
+	code, env := doJSON(t, engine, http.MethodPost, "/settings", map[string]any{
+		"group": "feature", "key": "flag", "value_type": "bool", "value": "true",
+		"description": "功能开关",
+	})
+	require.Equal(t, http.StatusOK, code)
+	require.EqualValues(t, 0, env["code"], "创建应成功: %v", env)
+
+	code, env = doJSON(t, engine, http.MethodGet, "/settings?group=feature", nil)
+	require.Equal(t, http.StatusOK, code)
+	item := dataMap(t, env)["list"].([]any)[0].(map[string]any)
+	id, _ := item["id"].(string)
+	require.NotEmpty(t, id)
+	require.Equal(t, "enabled", item["status"], "新建默认启用")
+
+	// 停用
+	code, env = doJSON(t, engine, http.MethodPatch, "/settings/"+id+"/status", map[string]any{
+		"status": "disabled",
+	})
+	require.Equal(t, http.StatusOK, code)
+	require.EqualValues(t, 0, env["code"], "停用应成功: %v", env)
+
+	code, env = doJSON(t, engine, http.MethodGet, "/settings/"+id, nil)
+	require.Equal(t, http.StatusOK, code)
+	detail := dataMap(t, env)
+	require.Equal(t, "disabled", detail["status"])
+	require.Equal(t, "true", detail["value"], "启停不应改动配置值")
+	require.Equal(t, "功能开关", detail["description"], "启停不应改动描述")
+
+	// 再启用（同一接口切回）
+	code, env = doJSON(t, engine, http.MethodPatch, "/settings/"+id+"/status", map[string]any{
+		"status": "enabled",
+	})
+	require.Equal(t, http.StatusOK, code)
+	require.EqualValues(t, 0, env["code"], "启用应成功: %v", env)
+
+	// 非法状态：失败 envelope（HTTP 200 + code != 0）
+	code, env = doJSON(t, engine, http.MethodPatch, "/settings/"+id+"/status", map[string]any{
+		"status": "weird",
+	})
+	require.Equal(t, http.StatusOK, code)
+	require.NotEqualValues(t, 0, env["code"], "非法状态应返回失败 envelope")
+
+	// 不存在的 ID：404（与详情/更新一致）
+	code, _ = doJSON(t, engine, http.MethodPatch, "/settings/not-exist-id/status", map[string]any{
+		"status": "disabled",
+	})
+	require.Equal(t, http.StatusNotFound, code)
+}

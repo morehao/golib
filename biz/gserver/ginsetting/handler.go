@@ -181,6 +181,41 @@ func handleUpdate(setting *gsetting.Setting) gin.HandlerFunc {
 	}
 }
 
+// handleUpdateStatus 启停配置项（只改状态，不触碰值/描述/加密模式）。
+//
+// 与 handleUpdate 分开：启停是高频窄语义操作，路由风格与 gindict/gincron/ginasync
+// 的 `PATCH .../status` 保持一致。
+//
+// @Tags 配置中心
+// @Summary 启停配置项
+// @accept application/json
+// @Produce application/json
+// @Param id path string true "配置项ID"
+// @Param body body updateStatusRequest true "状态"
+// @Success 200 {object} gincontext.DtoRender
+// @Router /settings/{id}/status [patch]
+func handleUpdateStatus(setting *gsetting.Setting) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var uri settingIDURI
+		if err := c.ShouldBindUri(&uri); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+
+		var req updateStatusRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+
+		if err := admin(setting).UpdateStatus(c.Request.Context(), uri.ID, gsetting.Status(req.Status)); err != nil {
+			failSettingOp(c, err)
+			return
+		}
+		gincontext.Success(c, nil)
+	}
+}
+
 // handleDelete 按 ID 删除配置项（幂等）。
 //
 // @Tags 配置中心

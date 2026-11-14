@@ -19,6 +19,13 @@
 - **ghttp**: `HttpClientConfig` 新增可选 `ProxyURL` 字段，用于在进程内为单个客户端
   显式指定代理、覆盖环境变量（如 `http://127.0.0.1:7890`）；留空时仍回落到环境变量。
 
+- **gserver/ginsetting**: 新增启停接口 `PATCH /settings/{id}/status`（body
+  `{"status":"enabled|disabled"}`），与 `gindict` / `gincron` / `ginasync` 的
+  `PATCH .../status` 路由风格一致。底层新增 `gsetting.AdminAPI.UpdateStatus`：只更新
+  `status`，不触碰值/描述/加密模式，空状态与非法状态一律拒绝（`errInvalidStatus`），
+  不存在返回 `ErrSettingNotFound`。此前只能通过 `PUT /settings/{id}` 复用「零值字段不
+  更新」的局部更新语义来改状态，调用方需知道该隐式约定。
+
 ### Breaking Changes
 
 - **configkv → gsetting**: rename the `configkv` package to `gsetting`. Import path is now

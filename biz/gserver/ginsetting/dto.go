@@ -29,6 +29,13 @@ type updateRequest struct {
 	Description string `json:"description"` // 描述
 }
 
+// updateStatusRequest 启停配置项请求体。
+// 与 updateRequest 分开：状态切换是高频窄语义操作，单独接口后调用方不必知道
+// 「零值字段不更新」的局部更新约定（见 gsetting.AdminAPI.UpdateStatus）。
+type updateStatusRequest struct {
+	Status string `json:"status" binding:"required"` // 状态：enabled/disabled
+}
+
 // listQueryRequest 列表分页/筛选参数（均可选）。
 type listQueryRequest struct {
 	Group     string `form:"group"`      // 按分组筛选
