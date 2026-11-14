@@ -5,7 +5,10 @@
 Components:
 - [biz](#biz) Business components
 - [codegen](#codegen) Code generation tools
+- [gcache](#gcache) Unified KV cache component (memory / Redis drivers)
 - [gconc](#gconc) Concurrent task pool component
+- [gnotify](#gnotify) Notification component (email / WeCom / SMS / WeChat MP)
+- [gprompt](#gprompt) Operable prompt template component (versioning + variable validation)
 - [gsetting](#gsetting) Configuration management component
 - [dbaccess](#dbaccess) Database client components (supports MySQL, Redis, Elasticsearch)
 - [dict](#dict) Data dictionary component (type + code value, tree hierarchy)
@@ -124,6 +127,48 @@ Test-specific environment variables:
 
 ### Usage
 For usage examples, refer to [codegen unit tests](codegen/gen_test.go)
+
+## gcache
+
+### Overview
+`gcache` is a unified KV cache abstraction with pluggable `memory` / `redis` drivers.
+
+### Features
+- Interface + driver registration (`Register` + blank import, consistent with `storage`/`gllm`)
+- `GetOrLoad` read-through with in-process single-flight; Redis uses `SET NX PX` short-lock + fail-open (never blocks long)
+- Values serialized via pluggable `Codec` (default JSON); no global singleton
+- `Config` value object + functional `Option`s; new capabilities add `WithXxx` without changing `New`
+
+### Usage
+See [gcache README](gcache/README.md).
+
+## gnotify
+
+### Overview
+`gnotify` is a unified notification component with channel-driver registration.
+
+### Features
+- Channels: email (stdlib `net/smtp`), WeCom group-robot webhook, SMS (Aliyun / Tencent), WeChat MP template message
+- `Notifier` interface + channel registry (`Register` + blank import); `Router` sends to an explicit channel (no implicit broadcast)
+- Credentials injected by caller (no implicit DB/env/settings read); zero cloud-SDK (stdlib + injected `http.Client`)
+- No persistence, no internal retry loop
+
+### Usage
+See [gnotify README](gnotify/README.md).
+
+## gprompt
+
+### Overview
+`gprompt` provides operable prompt templates: code-identified prompts, immutable version snapshots, declared variables with value validation, and rendering.
+
+### Features
+- Pure-function renderer on stdlib `text/template` (no jinja/gonja); storage is a pluggable `Source` (DB / memory)
+- Two-way validation: template refs ↔ declared variables, plus type / range / enum / length checks with field-level errors
+- Immutable version snapshots (`CurrentVersion` pointer); own tables via `internal/tablekit`, DDL pinned by `internal/ddlgen`
+- Does not import `gllm` (only produces rendered text)
+
+### Usage
+See [gprompt README](gprompt/README.md).
 
 ## gconc
 
