@@ -7,22 +7,27 @@ Components:
 - [codegen](#codegen) Code generation tools
 - [gcache](#gcache) Unified KV cache component (memory / Redis drivers)
 - [gconc](#gconc) Concurrent task pool component
+- [gconstant](#gconstant) Business constants (error codes + message maps, log keys)
 - [gnotify](#gnotify) Notification component (email / WeCom / SMS / WeChat MP)
 - [gprompt](#gprompt) Operable prompt template component (versioning + variable validation)
 - [gsetting](#gsetting) Configuration management component
 - [dbaccess](#dbaccess) Database client components (supports MySQL, Redis, Elasticsearch)
 - [dict](#dict) Data dictionary component (type + code value, tree hierarchy)
-- [distlock](#distlock) Distributed lock component (non-reentrant)
-- [excel](#excel) Excel read/write component
+- [distlock](#distlock) Distributed lock component (non-reentrant) + leader election
+- [filestore](#filestore) File business layer on top of `storage` (metadata, dedup, multipart sessions, presigned URLs)
+- [gexcel](#gexcel) Excel read/write component
 - [gast](#gast) AST syntax tree tool
 - [gauth](#gauth) Authentication component (includes jwtauth)
 - [gcrypto](#gcrypto) Encryption/decryption component
 - [gerror](#gerror) Error handling component
 - [glog](#glog) Logging component
 - [gllm](#gllm) LLM access configuration layer (config → eino model)
+- [gtest](#gtest) Testing toolkit (env, isolated DB, HTTP/gin helpers, storage conformance)
 - [gtrace](#gtrace) OpenTelemetry Trace initialization component
 - [gtree](#gtree) Tree structure construction tool
-- [gutil](#gutil) Common utility functions collection
+- [gutil](#gutil) Common utility functions collection (string/slice/time/file/net/shell/zip/random)
+- [gvalidate](#gvalidate) Struct validation component (validator wrapper, zh-CN messages, field errors)
+- [lifecycle](#lifecycle) Application lifecycle management and graceful shutdown
 - [task](#task) Task scheduling components
 - [protocol](#protocol) Protocol components (includes ghttp, gresty)
 - [ratelimit](#ratelimit) Rate limiting component
@@ -127,6 +132,16 @@ Test-specific environment variables:
 
 ### Usage
 For usage examples, refer to [codegen unit tests](codegen/gen_test.go)
+
+## gconstant
+
+### Overview
+`gconstant` defines shared business constants used across services: reserved error-code ranges paired with their message maps (consumed by `gerror`), and logging field/header/value keys used by the logging and middleware layers.
+
+### Features
+- Error-code ranges grouped by domain (DB / system / auth / LLM, 100000+), each with a `gerror.CodeMsgMap` for code → message translation
+- Log keys/constants (field keys, headers, values) shared by `glog`, `biz/gmiddleware`, and business code
+- Dependency-free: only depends on `gerror`, so it is safe to import anywhere
 
 ## gcache
 
@@ -244,12 +259,16 @@ For usage examples, refer to [dict usage](dict/README.md)
 ## distlock
 
 ### Overview
-`distlock` is a distributed lock component based on Redis, using redsync algorithm, supporting automatic renewal.
+`distlock` is a distributed lock component based on Redis, using redsync algorithm, supporting automatic renewal. It also provides a **leader election** built on the same lock abstraction.
 
 ### Features
 - Redis-based distributed lock (single or multi-node quorum)
 - Automatic renewal (lock keepalive) with jitter, lock-loss notification via `Lost()`
 - Non-reentrant
+- **Leader election** (`LeaderElector`): at most one leader across the cluster, claim + renewal model, automatic step-down when the lease is lost
+  - Built on `Lock`/`LockFactory`, so it works with any storage backend without extra dependencies
+  - `IsLeader()` / `Epoch()` (term counter) / `LeaderID()` for querying state; `Run(ctx)` drives the loop
+  - Non-leaders retry on `RetryInterval` and take over once the current leader releases or its lease expires
 
 ### Usage
 ```go
@@ -279,10 +298,44 @@ if ok, err := lock.Lock(ctx); err != nil {
 }
 ```
 
-## excel
+### Leader election
+```go
+elector, err := distlock.NewLeaderElector(factory, &distlock.LeaderConfig{
+	Key:           "svc:leader",     // election lock key (required)
+	TTL:           15 * time.Second, // lease duration (required)
+	RetryInterval: 2 * time.Second,  // retry interval for non-leaders (optional, default 2s)
+})
+if err != nil {
+	// invalid config
+}
+
+go elector.Run(ctx) // blocks until ctx is done; releases the lease on exit
+
+if elector.IsLeader() {
+	// do leader-only work: scheduled job, singleton consumer, cache refresh, ...
+}
+// optional: elector.Epoch() to detect a new term, elector.LeaderID() to observe the current leader
+```
+
+## filestore
 
 ### Overview
-`excel` is a simple wrapper around `excelize`, supporting convenient Excel file read/write through structs.
+`filestore` is the **file business layer** on top of `storage` (S3 / local): it adds persisted metadata, content-hash deduplication, multipart upload sessions, and presigned-URL issuing/verification. Content and metadata are separated — `core_file` records the physical file (hash, size, storage path), `core_file_upload` records each upload attempt (upload ID, status, business scene), so content info is not duplicated.
+
+### Features
+- Upload state machine: `uploading -> merging -> completed`, abnormal paths land in `aborted`
+- Deduplication: one `core_file` row per content hash; re-uploading identical content returns the existing record
+- Multipart upload sessions and presigned URL issuing/verification
+- Owns its tables; `New`/`Init` auto-migrate by default (idempotent), or pass `WithoutAutoMigrate()` and run `filestore.Migrate(db)` from the release pipeline
+- Complete MySQL and PostgreSQL DDL in [filestore README](filestore/README.md)
+
+### Usage
+See [filestore README](filestore/README.md).
+
+## gexcel
+
+### Overview
+`gexcel` is a simple wrapper around `excelize`, supporting convenient Excel file read/write through structs.
 
 Both reading and writing Excel require defining a struct, with struct fields specifying Excel-related information through tags (`ex`).
 
@@ -292,7 +345,7 @@ Both reading and writing Excel require defining a struct, with struct fields spe
 - Support data validation based on validator
 
 ### Usage
-For usage examples, refer to [excel usage](excel/README.md)
+For usage examples, refer to [gexcel usage](gexcel/README.md)
 
 ## gast
 
@@ -395,15 +448,18 @@ For usage examples, refer to [gtrace usage](gtrace/README.md)
 ## gutil
 
 ### Overview
-`gutil` is a collection of common utility functions providing commonly used tool functions during development.
+`gutil` is a collection of common utility functions providing commonly used tool functions during development. All functions are stateless and only touch local resources (memory, local files, local shell, local network probes); they never require injected config/clients or external services.
 
 ### Sub-components
-- Random number generation
-- String processing
-- Date/time operations
-- Type conversion
-- Slice/Map operations
-- File processing
+- **random**: UUID (v7), crypto-random bytes/hex/base64, digits, and **`RandomFromSet(length, set)`** for custom charsets (with built-in `RandomCharset[Number|Alpha|Alphanumeric|Symbol]` constants)
+- **string**: snake/camel/Pascal conversion, truncation, ID capitalization, trimming
+- **time**: formatting, request cost, day/week/month/year ranges with offsets
+- **convert**: `any` → int64/uint64/float64/string, JSON string
+- **slice / copy**: diff, duplicate, contain, group, map copy
+- **file**: extension helpers, exists checks, `CreateDir`, YAML loading
+- **net**: local IP (`LocalIP`/`MustLocalIP`), IPv4 ↔ uint32 conversion, port probing (`CheckPort`/`CheckPortTimeout`)
+- **shell**: run a local shell command and capture merged output (`ExecShell`/`ExecShellContext`, ctx-aware)
+- **zip**: pack a directory or a file list into a zip (`ZipDir`/`ZipFiles`), and extract with path-traversal protection (`Unzip`)
 
 ## task
 
@@ -513,3 +569,44 @@ For usage examples, see [storage README](storage/README.md).
 ### Usage
 For usage examples, see [gllm README](gllm/README.md).
 For a step-by-step adoption guide, see [gllm integration guide](docs/gllm-integration-guide.md).
+
+## gtest
+
+### Overview
+`gtest` is a lightweight testing toolkit aligned with idiomatic Go testing. It is **not a test framework**: no inheritance, no forced global state — semantics stay `t.Run` / `t.Fatal` / `t.Cleanup`, and assertions use `testify` or plain `if`.
+
+### Sub-components
+- **gtest**: env source (`LoadEnv` / `Source`), default DSN constants, `Golden`, `Eventually`, `CopyTree`, `Start` (app wiring)
+- **gtest/dbtest**: per-test isolated database (`New` + `Migrate` + `DropAll`)
+- **gtest/httptest**: `NewContext(opts...)`, `NewRequest`/`Do`/`Decode`, `StartServer` (random port)
+- **gtest/storagetest**: `FakeS3`, full-semantics `NewMem`, `StorageCases()` + `RunCases`, `PresignLiveCases()`
+
+### Usage
+See [gtest README](gtest/README.md).
+
+## gvalidate
+
+### Overview
+`gvalidate` is a struct-validation component wrapping `go-playground/validator/v10` with zh-CN messages and structured field errors, so validation failures are returned as readable, per-field results rather than raw validator errors.
+
+### Features
+- `Check(data any) error` — validate a struct, returning `Errors` (`[]*FieldError`) with field + message
+- `Errors.First()` / `Errors.ToMap()` and `AsErrors(err)` for ergonomic handling
+- `RegisterValidation(tag, fn)` to add custom rules (thread-safe, initialized once)
+- Built-in zh-CN translations and lazy singleton initialization
+
+## lifecycle
+
+### Overview
+`lifecycle` is an application lifecycle management and graceful-shutdown library built on the standard library only (logging via `glog`). It replaces a bare `http.ListenAndServe` hard-close — which cuts off in-flight requests — with coordinated shutdown.
+
+### Features
+- **Zero third-party dependencies**: standard library only (plus `glog` for logging)
+- **Multiple triggers**: system signals (SIGTERM/SIGINT), explicit `Exit()`, or an actor returning an error (fail-fast)
+- **Context broadcast**: one shutdown signal that background tasks / consumers / cron jobs cooperate on
+- **HTTP graceful drain**: `http.Server.Shutdown(ctx)` waits for in-flight requests
+- **Staged closers**: `AddCloser`/`AddCloseFunc` with stage ordering; `AddActor` for supervised goroutines
+- `Default()`/`New()`/`SetInstance` for a process-wide lifecycle instance
+
+### Usage
+See [lifecycle README](lifecycle/README.md).
