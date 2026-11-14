@@ -58,8 +58,6 @@ go get github.com/morehao/golib
 - **gconstant**: 业务常量定义，包含错误码（100000 系列）、API 版本等
 - **gserver**: Gin 服务器相关。`RouterGroups` 是唯一的顶层路由分组工厂（路径 `/v1/{app}`），自动挂载 otelgin 与访问日志中间件；业务模块通过 `Register(group, ...)` 注册路由。路由风格规范见 [docs/router-style.md](docs/router-style.md)
 - **gmiddleware**: Gin 中间件，包含 JWT 认证、CORS、访问日志、Token 黑名单
-- **gormplugin**: GORM 多租户插件：对 SELECT/UPDATE/DELETE 注入作用域条件，用三态 `Resolver`（未声明／全租户／按值）解析作用域，并支持 fail-closed 的 `MissingScope` 钩子
-- **genericdao**: 泛型 DAO，封装基础的增删改查操作
 - **gtest**: 可复用测试工具包（贴合 Go 主流）：环境来源、每用例独立库、HTTP/gin 助手、声明式 storage 契约套件。见 [gtest/README.md](gtest/README.md)
 
 ### 特性
@@ -120,7 +118,9 @@ go get github.com/morehao/golib
 `dbaccess` 是数据库客户端组件集合，提供了多种数据库的封装和连接管理。
 
 ### 子组件
-- **dbgorm**: MySQL/PostgreSQL 数据库客户端，基于 GORM 封装
+- **dbgorm**: MySQL/PostgreSQL/SQLite 数据库客户端，基于 GORM 封装
+- **gormdao**: 泛型 DAO，封装基于泛型实体的基础增删改查、软删除过滤、事务绑定与通用查询条件（原名 `genericdao`）
+- **gormplugin**: GORM 多租户插件：对 SELECT/UPDATE/DELETE 注入作用域条件，用三态 `Resolver`（未声明／全租户／按值）解析作用域，并支持 fail-closed 的 `MissingScope` 钩子
 - **dbredis**: Redis 客户端，基于 go-redis 封装
 - **dbes**: Elasticsearch 客户端，基于官方客户端封装
 

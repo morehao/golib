@@ -104,8 +104,6 @@ Test-specific environment variables:
 - **gconstant**: Business constant definitions, including error codes (100000 series), API versions, etc.
 - **gserver**: Gin server related. `RouterGroups` is the unique top-level route group factory (path `/v1/{app}`), auto-mounting otelgin & access-log middleware; business modules register routes via `Register(group, ...)`. Routing style spec: [docs/router-style.md](docs/router-style.md)
 - **gmiddleware**: Gin middleware, including JWT authentication, CORS, access logging, Token blacklist
-- **gormplugin**: GORM multi-tenant plugin: injects a scope condition into SELECT/UPDATE/DELETE, resolves the scope with a three-state `Resolver` (unset / all-tenants / by-value) and supports fail-closed `MissingScope`
-- **genericdao**: Generic DAO,封装基础的增删改查操作
 - **gtest**: Reusable testing toolkit (idiomatic Go): env source, per-test isolated DB, HTTP/gin helpers, and a declaration-based storage conformance suite. See [gtest/README.md](gtest/README.md)
 
 ### Features
@@ -166,7 +164,9 @@ For usage examples, refer to [gconc usage](gconc/README.md)
 `dbaccess` is a database client component collection providing encapsulation and connection management for multiple databases.
 
 ### Sub-components
-- **dbgorm**: MySQL/PostgreSQL database client, based on GORM
+- **dbgorm**: MySQL/PostgreSQL/SQLite database client, based on GORM
+- **gormdao**: Generic DAO, wrapping basic CRUD with generic entities, soft-delete filtering, transaction binding and common query conditions (formerly `genericdao`)
+- **gormplugin**: GORM multi-tenant plugin: injects a scope condition into SELECT/UPDATE/DELETE, resolves the scope with a three-state `Resolver` (unset / all-tenants / by-value) and supports fail-closed `MissingScope`
 - **dbredis**: Redis client, based on go-redis
 - **dbes**: Elasticsearch client, based on official client
 
