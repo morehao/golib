@@ -49,7 +49,12 @@ func New(channel string, opts ...Option) (Notifier, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrChannelNotRegistered, channel)
 	}
-	return f(ApplyOptions(opts...))
+	cfg := ApplyOptions(opts...)
+	n, err := f(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return guard(n, cfg), nil
 }
 
 // Lookup 按渠道名查工厂。第二返回值为 false 表示未注册。

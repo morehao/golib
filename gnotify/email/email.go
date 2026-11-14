@@ -2,7 +2,8 @@
 //
 // 注册：import 本包即触发 init() 注册 "email"。推荐用 [New] 携带 SMTP 配置构造。
 //
-// 渠道特有配置通过 [WithConfig] 注入；单测需要拦截网络时可注入 [WithDialer]。
+// SMTP 配置作为 [New] 的第一个参数传入；Disabled/DryRun/日志/超时等通用能力
+// 通过 gnotify.Option 注入。单测需要拦截网络时用 [NewWithDialer] 注入自定义拨号函数。
 package email
 
 import (
@@ -16,10 +17,16 @@ import (
 	"net/smtp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/morehao/golib/gnotify"
 )
+
+// DefaultMailConcurrency 是 [notifier.Send] 逐收件人并发投递时的默认最大并发数。
+const DefaultMailConcurrency = 4
 
 func init() {
 	gnotify.Register("email", newNotifier)
@@ -73,28 +80,6 @@ func (c EmailConfig) addr() string {
 // dialFunc 建立到底层 SMTP 服务器的连接。默认 net.Dial；单测可注入以拦截网络。
 type dialFunc func(network, addr string) (net.Conn, error)
 
-// option 是 email 渠道私有的选项，作用在渠道构造上。
-type option func(*emailOptions)
-
-type emailOptions struct {
-	cfg    EmailConfig
-	dialer dialFunc
-}
-
-// WithConfig 注入 SMTP 配置。
-func WithConfig(cfg EmailConfig) option {
-	return func(o *emailOptions) { o.cfg = cfg }
-}
-
-// WithDialer 注入自定义拨号函数，主要用于单测拦截网络。传入 nil 会被忽略。
-func WithDialer(d func(network, addr string) (net.Conn, error)) option {
-	return func(o *emailOptions) {
-		if d != nil {
-			o.dialer = d
-		}
-	}
-}
-
 // notifier 是 "email" 渠道的 [gnotify.Notifier] 实现。
 type notifier struct {
 	cfg    EmailConfig
@@ -108,31 +93,44 @@ type notifier struct {
 // 通过统一的 gnotify.New("email") 构造时不带渠道凭据，此时 notifier 的
 // EmailConfig 为空，Send 会返回 ErrInvalidConfig。携带 SMTP 配置请用 [New]。
 func newNotifier(core gnotify.Config) (gnotify.Notifier, error) {
-	return &notifier{core: core, dialer: net.Dial}, nil
+	return gnotify.Guard(&notifier{core: core, dialer: net.Dial}, core), nil
 }
 
-// New 直接构造 email Notifier，是推荐的渠道级入口，可携带 SMTP 配置与拨号器。
+// New 直接构造 email Notifier，携带 SMTP 配置，并可通过 gnotify.Option 注入
+// 日志、Disabled（整体静音）、DryRun（干跑）等通用能力。
+//
+//	n, err := email.New(email.EmailConfig{Host: "...", From: "a@x.com"})
 //
 // 构造时校验必填字段（host/from）；缺失返回 [gnotify.ErrInvalidConfig]。
-func New(cfg EmailConfig, opts ...option) (gnotify.Notifier, error) {
-	o := emailOptions{cfg: cfg, dialer: net.Dial}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
+func New(cfg EmailConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+	return newWithDialer(cfg, net.Dial, opts...)
+}
+
+// NewWithDialer 在 [New] 基础上注入自定义拨号函数，主要用于单测拦截 SMTP 网络。
+// 生产代码通常用 [New] 即可。
+func NewWithDialer(cfg EmailConfig, d func(network, addr string) (net.Conn, error), opts ...gnotify.Option) (gnotify.Notifier, error) {
+	if d == nil {
+		d = net.Dial
 	}
-	if err := o.cfg.validate(); err != nil {
+	return newWithDialer(cfg, d, opts...)
+}
+
+func newWithDialer(cfg EmailConfig, d dialFunc, opts ...gnotify.Option) (gnotify.Notifier, error) {
+	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	return &notifier{cfg: o.cfg, dialer: o.dialer}, nil
+	core := gnotify.ApplyOptions(opts...)
+	n := &notifier{cfg: cfg, core: core, dialer: d}
+	return gnotify.Guard(n, core), nil
 }
 
 // Channel 实现 [gnotify.Notifier]。
 func (n *notifier) Channel() string { return "email" }
 
-// Send 逐收件人发送邮件，失败用 errors.Join 聚合。
+// Send 逐收件人并发送邮件，失败用 errors.Join 聚合。
 //
 // 每个收件人单独建立一次 SMTP 会话（简单、隔离失败），避免一个坏地址影响其他人。
+// 并发度受 [DefaultMailConcurrency] 限制；单个收件人失败不会中断其它收件人的投递。
 func (n *notifier) Send(ctx context.Context, msg gnotify.Message) error {
 	if err := n.cfg.validate(); err != nil {
 		return err
@@ -146,21 +144,32 @@ func (n *notifier) Send(ctx context.Context, msg gnotify.Message) error {
 		return err
 	}
 
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(DefaultMailConcurrency)
+	var mu sync.Mutex
 	var errs []error
 	for _, to := range msg.To {
+		to := to
 		to = strings.TrimSpace(to)
 		if to == "" {
+			mu.Lock()
 			errs = append(errs, fmt.Errorf("%w: empty recipient", gnotify.ErrNoRecipient))
+			mu.Unlock()
 			continue
 		}
-		if err := n.sendOne(ctx, to, raw); err != nil {
-			errs = append(errs, fmt.Errorf("%w: to %s: %v", gnotify.ErrSendFailed, to, err))
-			if n.core.Logger != nil {
-				n.core.Logger.Errorw(ctx, "gnotify/email: send failed", "to", to, "err", err)
+		g.Go(func() error {
+			if err := n.sendOne(gctx, to, raw); err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("%w: to %s: %v", gnotify.ErrSendFailed, to, err))
+				mu.Unlock()
+				if n.core.Logger != nil {
+					n.core.Logger.Errorw(ctx, "gnotify/email: send failed", "to", to, "err", err)
+				}
 			}
-			continue
-		}
+			return nil // 单失败不 return err，保持隔离
+		})
 	}
+	_ = g.Wait()
 	return errors.Join(errs...)
 }
 

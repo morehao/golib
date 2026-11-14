@@ -8,8 +8,8 @@
 //   - StringToSign = HTTPMethod + "&" + PercentEncode("/") + "&" + PercentEncode(canonicalQuery)；
 //   - Signature = Base64(HMAC-SHA1(AccessKeySecret + "&", StringToSign))。
 //
-// HTTP 客户端复用 [gnotify.Config.HTTPClient] 与 Timeout；endpoint 由 RegionID 推导
-// （dysmsapi.<RegionID>.aliyuncs.com）。
+// HTTP 请求复用 [gnotify.EnsureHTTPDoer]（背后是 ghttp），超时/重试等由 gnotify.Config 统一负责；
+// endpoint 由 RegionID 推导（dysmsapi.<RegionID>.aliyuncs.com）。
 package aliyun
 
 import (
@@ -19,8 +19,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -95,18 +93,6 @@ func (c AliyunConfig) endpoint() string {
 	return "https://dysmsapi." + c.region() + ".aliyuncs.com"
 }
 
-// option 是 aliyun 渠道私有选项。
-type option func(*aliyunOptions)
-
-type aliyunOptions struct {
-	cfg AliyunConfig
-}
-
-// WithConfig 注入阿里云短信配置。
-func WithConfig(cfg AliyunConfig) option {
-	return func(o *aliyunOptions) { o.cfg = cfg }
-}
-
 // notifier 是 "aliyun" 渠道的 [gnotify.Notifier] 实现。
 type notifier struct {
 	cfg  AliyunConfig
@@ -116,29 +102,24 @@ type notifier struct {
 // newNotifier 是注册进 gnotify 的 Factory。通过统一 gnotify.New("aliyun") 构造时不带凭据，
 // Send 会返回 ErrInvalidConfig；携带配置请用 [New] 或 [NewWithCore]。
 func newNotifier(core gnotify.Config) (gnotify.Notifier, error) {
-	return &notifier{core: core}, nil
+	return gnotify.Guard(&notifier{core: core}, core), nil
 }
 
-// New 直接构造 aliyun Notifier，携带短信配置。构造时校验必填字段。
-func New(cfg AliyunConfig, opts ...option) (gnotify.Notifier, error) {
-	o := aliyunOptions{cfg: cfg}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	if err := o.cfg.validate(); err != nil {
-		return nil, err
-	}
-	return &notifier{cfg: o.cfg}, nil
-}
-
-// NewWithCore 用 gnotify 全局选项（HTTPClient/Timeout/Logger）与 aliyun 配置一起构造。
-func NewWithCore(cfg AliyunConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+// New 直接构造 aliyun Notifier，携带短信配置，并可通过 gnotify.Option 注入
+// HTTP 客户端（gnotify.WithHTTPDoer）、超时、日志、Disabled/DryRun 等通用能力。
+func New(cfg AliyunConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+	core := gnotify.ApplyOptions(opts...)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	return &notifier{cfg: cfg, core: gnotify.ApplyOptions(opts...)}, nil
+	n := &notifier{cfg: cfg, core: core}
+	return gnotify.Guard(n, core), nil
+}
+
+// NewWithCore 与 [New] 等价：用 gnotify 全局选项（HTTPDoer/Timeout/Logger/Disabled/DryRun）
+// 与 aliyun 配置一起构造，并统一用 gnotify.Guard 包裹开关。
+func NewWithCore(cfg AliyunConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+	return New(cfg, opts...)
 }
 
 // Channel 实现 [gnotify.Notifier]。
@@ -196,45 +177,27 @@ func (n *notifier) Send(ctx context.Context, msg gnotify.Message) error {
 		"TemplateParam":    templateParam,
 	}
 
-	query := sign(params, n.cfg.AccessKeySecret, http.MethodGet)
+	query := sign(params, n.cfg.AccessKeySecret, "GET")
 	reqURL := n.cfg.endpoint() + "/?" + query
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return fmt.Errorf("%w: build request: %v", gnotify.ErrSendFailed, err)
-	}
-
-	resp, err := n.httpClient().Do(req)
+	d := gnotify.EnsureHTTPDoer(n.core)
+	resp, err := d.Do(ctx, gnotify.HTTPRequest{Method: "GET", URL: reqURL})
 	if err != nil {
 		return fmt.Errorf("%w: %v", gnotify.ErrSendFailed, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(data)))
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("%w: http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(resp.Body)))
 	}
 
 	var ar aliyunResponse
-	if err := json.Unmarshal(data, &ar); err != nil {
+	if err := json.Unmarshal(resp.Body, &ar); err != nil {
 		return fmt.Errorf("%w: decode response: %v", gnotify.ErrSendFailed, err)
 	}
 	if ar.Code != "OK" {
 		return fmt.Errorf("%w: aliyun %s: %s (requestId=%s)", gnotify.ErrSendFailed, ar.Code, ar.Message, ar.RequestID)
 	}
 	return nil
-}
-
-// httpClient 返回生效的 HTTP 客户端：优先 core.HTTPClient，其次带超时的默认客户端。
-func (n *notifier) httpClient() *http.Client {
-	if n.core.HTTPClient != nil {
-		return n.core.HTTPClient
-	}
-	timeout := n.core.Timeout
-	if timeout <= 0 {
-		timeout = gnotify.DefaultTimeout
-	}
-	return &http.Client{Timeout: timeout}
 }
 
 // sign 按阿里云 RPC 签名规范计算签名并返回完整查询串（含 Signature）。

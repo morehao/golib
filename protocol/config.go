@@ -22,6 +22,9 @@ type HttpClientConfig struct {
 	// http.ProxyFromEnvironment（读取 HTTP_PROXY/HTTPS_PROXY/NO_PROXY 等环境变量，
 	// 与 net/http 默认行为一致）。仅当需要在进程内为不同客户端指定不同代理时才显式设置。
 	ProxyURL string `yaml:"proxy_url"`
+	// LogLevel 控制 ghttp 自身「成功请求」日志级别，零值视为 debug。
+	// 设为 info/warn 等可在通知类高频调用中静默成功日志；失败/重试日志不受影响。
+	LogLevel string `yaml:"log_level"`
 }
 
 type SSEClientConfig struct {

@@ -3,7 +3,6 @@ package gnotify_test
 import (
 	"context"
 	"errors"
-	"net/http"
 	"testing"
 
 	"github.com/morehao/golib/gnotify"
@@ -71,18 +70,33 @@ func TestRegister_DuplicatePanics(t *testing.T) {
 }
 
 func TestApplyOptions(t *testing.T) {
-	hc := &http.Client{}
+	dc := &fakeHTTPDoer{}
 	cfg := gnotify.ApplyOptions(
 		gnotify.WithTimeout(0), // <=0 → default
-		gnotify.WithHTTPClient(hc),
+		gnotify.WithHTTPDoer(dc),
 		gnotify.WithLogger(nil), // nil 应被跳过且不 panic
 	)
 	if cfg.Timeout != gnotify.DefaultTimeout {
 		t.Fatalf("timeout = %v", cfg.Timeout)
 	}
-	if cfg.HTTPClient != hc {
-		t.Fatal("http client not set")
+	if cfg.HTTPClient != dc {
+		t.Fatal("http doer not set")
 	}
+	if cfg.LogLevel != "debug" {
+		t.Fatalf("default log level = %q, want debug", cfg.LogLevel)
+	}
+}
+
+// fakeHTTPDoer 是测试用 HTTPDoer，记录最近一次请求并返回预设响应。
+type fakeHTTPDoer struct {
+	req  gnotify.HTTPRequest
+	resp gnotify.HTTPResponse
+	err  error
+}
+
+func (f *fakeHTTPDoer) Do(_ context.Context, req gnotify.HTTPRequest) (gnotify.HTTPResponse, error) {
+	f.req = req
+	return f.resp, f.err
 }
 
 func TestRouter_Send(t *testing.T) {

@@ -7,16 +7,13 @@
 //
 // 推送流程：POST /cgi-bin/message/template/send?access_token=<token>，
 // Message.To 为 openid，Message.Params 为模板变量（touser 外的 data）。
-// HTTP 客户端复用 [gnotify.Config.HTTPClient] 与 Timeout。
+// HTTP 请求复用 [gnotify.EnsureHTTPDoer]（背后是 ghttp），超时/重试等由 gnotify.Config 统一负责。
 package wechatmp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -76,18 +73,6 @@ func (c WechatMPConfig) apiBase() string {
 	return defaultAPIBase
 }
 
-// option 是 wechatmp 渠道私有选项。
-type option func(*wechatmpOptions)
-
-type wechatmpOptions struct {
-	cfg WechatMPConfig
-}
-
-// WithConfig 注入微信公众号配置。
-func WithConfig(cfg WechatMPConfig) option {
-	return func(o *wechatmpOptions) { o.cfg = cfg }
-}
-
 // notifier 是 "wechatmp" 渠道的 [gnotify.Notifier] 实现。
 type notifier struct {
 	cfg  WechatMPConfig
@@ -101,29 +86,24 @@ type notifier struct {
 // newNotifier 是注册进 gnotify 的 Factory。统一 gnotify.New("wechatmp") 构造时不带凭据，
 // Send 返回 ErrInvalidConfig；携带配置请用 [New] 或 [NewWithCore]。
 func newNotifier(core gnotify.Config) (gnotify.Notifier, error) {
-	return &notifier{core: core}, nil
+	return gnotify.Guard(&notifier{core: core}, core), nil
 }
 
-// New 直接构造 wechatmp Notifier，携带公众号配置。构造时校验必填字段。
-func New(cfg WechatMPConfig, opts ...option) (gnotify.Notifier, error) {
-	o := wechatmpOptions{cfg: cfg}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	if err := o.cfg.validate(); err != nil {
-		return nil, err
-	}
-	return &notifier{cfg: o.cfg}, nil
-}
-
-// NewWithCore 用 gnotify 全局选项（HTTPClient/Timeout/Logger）与 wechatmp 配置一起构造。
-func NewWithCore(cfg WechatMPConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+// New 直接构造 wechatmp Notifier，携带公众号配置，并可通过 gnotify.Option 注入
+// HTTP 客户端（gnotify.WithHTTPDoer）、超时、日志、Disabled/DryRun 等通用能力。
+func New(cfg WechatMPConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+	core := gnotify.ApplyOptions(opts...)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	return &notifier{cfg: cfg, core: gnotify.ApplyOptions(opts...)}, nil
+	n := &notifier{cfg: cfg, core: core}
+	return gnotify.Guard(n, core), nil
+}
+
+// NewWithCore 与 [New] 等价：用 gnotify 全局选项（HTTPDoer/Timeout/Logger/Disabled/DryRun）
+// 与 wechatmp 配置一起构造，并统一用 gnotify.Guard 包裹开关。
+func NewWithCore(cfg WechatMPConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+	return New(cfg, opts...)
 }
 
 // Channel 实现 [gnotify.Notifier]。
@@ -171,22 +151,17 @@ func (n *notifier) accessToken(ctx context.Context) (string, error) {
 	q.Set("secret", n.cfg.Secret)
 	reqURL := n.cfg.apiBase() + tokenPath + "?" + q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("%w: build token request: %v", gnotify.ErrSendFailed, err)
-	}
-	resp, err := n.httpClient().Do(req)
+	d := gnotify.EnsureHTTPDoer(n.core)
+	resp, err := d.Do(ctx, gnotify.HTTPRequest{Method: "GET", URL: reqURL})
 	if err != nil {
 		return "", fmt.Errorf("%w: token request: %v", gnotify.ErrSendFailed, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: token http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(data)))
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("%w: token http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(resp.Body)))
 	}
 	var tr tokenResponse
-	if err := json.Unmarshal(data, &tr); err != nil {
+	if err := json.Unmarshal(resp.Body, &tr); err != nil {
 		return "", fmt.Errorf("%w: decode token response: %v", gnotify.ErrSendFailed, err)
 	}
 	if tr.ErrCode != 0 {
@@ -247,24 +222,22 @@ func (n *notifier) Send(ctx context.Context, msg gnotify.Message) error {
 	}
 
 	sendURL := n.cfg.apiBase() + sendPath + "?access_token=" + url.QueryEscape(token)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sendURL, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("%w: build request: %v", gnotify.ErrSendFailed, err)
-	}
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-
-	resp, err := n.httpClient().Do(req)
+	d := gnotify.EnsureHTTPDoer(n.core)
+	resp, err := d.Do(ctx, gnotify.HTTPRequest{
+		Method:  "POST",
+		URL:     sendURL,
+		Body:    payload,
+		Headers: map[string]string{"Content-Type": "application/json; charset=utf-8"},
+	})
 	if err != nil {
 		return fmt.Errorf("%w: %v", gnotify.ErrSendFailed, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(data)))
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("%w: http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(resp.Body)))
 	}
 	var ae apiError
-	if err := json.Unmarshal(data, &ae); err != nil {
+	if err := json.Unmarshal(resp.Body, &ae); err != nil {
 		return fmt.Errorf("%w: decode response: %v", gnotify.ErrSendFailed, err)
 	}
 	if ae.ErrCode != 0 {
@@ -283,16 +256,4 @@ func (n *notifier) invalidateToken() {
 	n.token = ""
 	n.expireAt = time.Time{}
 	n.mu.Unlock()
-}
-
-// httpClient 返回生效的 HTTP 客户端：优先 core.HTTPClient，其次带超时的默认客户端。
-func (n *notifier) httpClient() *http.Client {
-	if n.core.HTTPClient != nil {
-		return n.core.HTTPClient
-	}
-	timeout := n.core.Timeout
-	if timeout <= 0 {
-		timeout = gnotify.DefaultTimeout
-	}
-	return &http.Client{Timeout: timeout}
 }
