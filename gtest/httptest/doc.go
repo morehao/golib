@@ -55,14 +55,16 @@ func WithContext(ctx context.Context) Option {
 }
 
 // WithUserID 在 gin.Context 中设置当前用户 ID（键为 gcontext.KeyUserID，与生产中间件一致）。
-func WithUserID(id int64) Option {
+// 需要同时注入租户/组织/部门/人员等完整身份时，优先用 WithIdentity。
+func WithUserID(id string) Option {
 	return func(gc *gin.Context) {
 		gc.Set(gcontext.KeyUserID, id)
 	}
 }
 
 // WithCompanyID 在 gin.Context 中设置当前公司（组织）ID（键为 gcontext.KeyOrgID）。
-func WithCompanyID(id int64) Option {
+// 需要完整身份时优先用 WithIdentity。
+func WithCompanyID(id string) Option {
 	return func(gc *gin.Context) {
 		gc.Set(gcontext.KeyOrgID, id)
 	}

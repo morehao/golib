@@ -39,12 +39,35 @@ dbtest.Migrate(t, db, &User{})
 ### HTTP
 
 ```go
-ctx := httptest.NewContext(httptest.WithUserID(1), httptest.WithJSON())
+ctx := httptest.NewContext(httptest.WithJSON())
 rec := httptest.Do(engine, httptest.NewRequest("GET", "/v1/users"))
 resp := httptest.Decode[UserResp](t, rec)
 
 baseURL, shutdown := httptest.StartServer(t, engine)      // 随机端口，真端口 e2e
 t.Cleanup(shutdown)
+```
+
+### 注入鉴权身份（租户/组织/部门/人员）
+
+从旧 `biz/testkit` 迁移的核心能力：构造一个"已登录"的 `*gin.Context`，其形状与
+认证中间件（`ginmiddleware/auth.go`）投影到 gin Keys 的结果一致，`gincontext.Get*`
+都能读到，租户同时写类型化作用域供 DAO 隔离插件使用。
+
+```go
+ctx := httptest.NewContext(httptest.WithIdentity(httptest.Identity{
+    UserID:   "u-100",
+    PersonID: "p-9",
+    UserType: "employee",
+    OrgID:    "org-3",
+    DeptID:   "dept-7",
+    TenantID: "t-42",           // 非空：写入类型化租户作用域 + gin Keys 投影
+}))
+
+gincontext.GetUserIDString(ctx)   // "u-100"
+gincontext.GetTenantIDString(ctx) // "t-42"
+
+// 跨租户 / 全租户场景：
+ctx = httptest.NewContext(httptest.WithTenantScope(gcontext.AllScope()))
 ```
 
 ### 存储契约（驱动无关）

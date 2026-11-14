@@ -20,8 +20,8 @@ func TestNewContext_Options(t *testing.T) {
 		httptest.WithHeader("X-Custom", "v1"),
 		httptest.WithJSON(),
 		httptest.WithBearerToken("tok"),
-		httptest.WithUserID(42),
-		httptest.WithCompanyID(7),
+		httptest.WithUserID("42"),
+		httptest.WithCompanyID("7"),
 		httptest.WithClientIP("10.0.0.1"),
 	)
 
@@ -56,10 +56,10 @@ func TestNewContext_Options(t *testing.T) {
 	}
 
 	// user/company 存于 gin.Context。
-	if v, ok := ctx.Get(gcontext.KeyUserID); !ok || v != int64(42) {
+	if v, ok := ctx.Get(gcontext.KeyUserID); !ok || v != "42" {
 		t.Errorf("user id = %v (ok=%v), want 42", v, ok)
 	}
-	if v, ok := ctx.Get(gcontext.KeyOrgID); !ok || v != int64(7) {
+	if v, ok := ctx.Get(gcontext.KeyOrgID); !ok || v != "7" {
 		t.Errorf("company id = %v (ok=%v), want 7", v, ok)
 	}
 }

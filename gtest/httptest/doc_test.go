@@ -11,7 +11,7 @@ import (
 func TestContextAPIShape(t *testing.T) {
 	_ = func(t testing.TB) {
 		_ = httptest.NewContext(
-			httptest.WithUserID(123),
+			httptest.WithUserID("123"),
 			httptest.WithMethod("POST"),
 			httptest.WithURL("/api/users"),
 			httptest.WithJSON(),
