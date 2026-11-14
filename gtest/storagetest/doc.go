@@ -7,6 +7,7 @@
 package storagetest
 
 import (
+	"context"
 	"testing"
 
 	"github.com/morehao/golib/storage"
@@ -26,7 +27,29 @@ type Case struct {
 	Run      func(t *testing.T, s Spec)
 }
 
-// RunCases 运行一批用例；失败信息统一带 [case=Name] 前缀。
+// RunCases 运行一批用例。
+//
+// 流程：对每个 Case 起一个 t.Run；在子测试内先注册 suiteKeys 清理（保证任何
+// Case 失败或中途 t.Fatal 都能回收本次写入的对象），再按 Requires + Caps
+// 决定跳过还是执行。跳过信息统一带 [case=Name] 前缀。
 func RunCases(t *testing.T, s Spec, cases ...Case) {
-	panic("storagetest: RunCases not implemented")
+	t.Helper()
+	for _, c := range cases {
+		c := c
+		t.Run(c.Name, func(t *testing.T) {
+			t.Helper()
+			// 清理收尾：每个 Case 独立注册，LIFO 保证在子测试结束后执行。
+			t.Cleanup(func() {
+				if err := s.S.DeleteObjects(context.Background(), s.Bucket, suiteKeys); err != nil {
+					t.Logf("清理测试对象失败（不影响测试结论）: %v", err)
+				}
+			})
+			caps := s.S.Caps()
+			if c.Requires != nil && !c.Requires(caps) {
+				t.Skipf("[case=%s] 后端能力不满足，跳过: %+v", c.Name, caps)
+				return
+			}
+			c.Run(t, s)
+		})
+	}
 }
