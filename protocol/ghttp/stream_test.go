@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/morehao/golib/gconstant"
+	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/morehao/golib/gtrace"
-	_ "github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
 )
