@@ -20,13 +20,15 @@ var DBErrorMsgMap = gerror.CodeMsgMap{
 
 // 系统相关错误码 (100100-100199)，前端需要感知的系统错误，不可随意更改
 const (
-	ParamInvalidErr = 100104
-	SystemErrorErr  = 100105
+	ParamInvalidErr    = 100104
+	SystemErrorErr     = 100105
+	TooManyRequestsErr = 100106 // 请求过于频繁（被限流）
 )
 
 var SystemErrorMsgMap = gerror.CodeMsgMap{
-	ParamInvalidErr: "invalid parameter",
-	SystemErrorErr:  "system error",
+	ParamInvalidErr:    "invalid parameter",
+	SystemErrorErr:     "system error",
+	TooManyRequestsErr: "too many requests",
 }
 
 // 权限/认证相关错误码 (110020-110029)
