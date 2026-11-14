@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
@@ -19,6 +19,13 @@ import (
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
+}
 
 // 本文件钉住"标识符引用由 gormdao 内部按方言完成"这一契约：
 //
@@ -453,7 +460,7 @@ func TestDao_ReservedWordTableName_SQLite(t *testing.T) {
 // （user）开箱可用，预引号名与 schema 限定名作为幂等形态一并覆盖。
 // schema 用唯一后缀命名，用完即删，不触碰库里其它对象。
 func TestDao_ReservedWordTableName_Postgres(t *testing.T) {
-	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
+	dsn := envOr(gtest.PostgresDSN, gtest.DefaultPostgresDSN)
 	admin, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)

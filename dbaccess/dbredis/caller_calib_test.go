@@ -13,15 +13,10 @@ import (
 	"github.com/morehao/golib/glog"
 	_ "github.com/morehao/golib/glog/driver/slog"
 	_ "github.com/morehao/golib/glog/driver/zap"
-	"github.com/morehao/golib/internal/testutil"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func init() {
-	testutil.Load()
-}
 
 func bizRedisCall(db *redis.Client, ctx context.Context) int {
 	_, _, anchorLine, _ := runtime.Caller(0)

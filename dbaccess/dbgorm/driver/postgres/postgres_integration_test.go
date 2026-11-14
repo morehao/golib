@@ -1,15 +1,23 @@
 package postgres
 
 import (
+	"os"
 	"testing"
 
 	"github.com/morehao/golib/dbaccess/dbgorm"
 	_ "github.com/morehao/golib/glog/driver/slog"
 	_ "github.com/morehao/golib/glog/driver/zap"
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
+}
 
 type integrationModel struct {
 	ID   uint   `gorm:"primarykey"`
@@ -24,7 +32,7 @@ func (integrationModel) TableName() string { return "dbgorm_postgres_driver_test
 // 同包的单元测试只覆盖 URL 解析，Open 这一层此前没有真实服务端覆盖。本机 docker
 // postgres:18 不可用时跳过。
 func TestNewWithRealPostgres(t *testing.T) {
-	uri := testutil.GetEnv(testutil.PostgresURI, testutil.DefaultPostgresURI)
+	uri := envOr(gtest.PostgresURI, gtest.DefaultPostgresURI)
 
 	db, err := dbgorm.New(&dbgorm.Config{URL: uri})
 	if err != nil {

@@ -2,17 +2,29 @@ package gormplugin
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 func init() {
-	testutil.Load()
+	if s, err := gtest.LoadEnv("."); err == nil {
+		for k, v := range s {
+			os.Setenv(k, v)
+		}
+	}
+}
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
 }
 
 type testModel struct {
@@ -178,7 +190,7 @@ func (pgScopeTestModel) TableName() string { return "gormplugin_pg_scope_test" }
 // "syntax error at or near"（SQLite 恰好接受反引号，单测无法暴露该问题）。
 func openPostgresForTest(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
+	dsn := envOr(gtest.PostgresDSN, gtest.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)

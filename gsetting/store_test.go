@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -72,7 +72,7 @@ func TestStoreSet_Upsert(t *testing.T) {
 // 重复 Set 在 PG 上报 "duplicate key value violates unique constraint"，
 // 现改为按 (group_name, key) ON CONFLICT upsert。事务内执行并回滚。
 func TestStoreSet_UpsertPostgres(t *testing.T) {
-	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
+	dsn := envOr(gtest.PostgresDSN, gtest.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)

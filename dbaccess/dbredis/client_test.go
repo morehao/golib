@@ -2,25 +2,37 @@ package dbredis
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func init() {
-	testutil.Load()
+	if s, err := gtest.LoadEnv("."); err == nil {
+		for k, v := range s {
+			os.Setenv(k, v)
+		}
+	}
 }
 
 func redisEnvConfig() (addr, password string) {
-	addr = testutil.GetEnv(testutil.RedisAddr, "127.0.0.1:6379")
-	password = testutil.GetEnv(testutil.RedisPassword, "123456")
+	addr = envOr(gtest.RedisAddr, "127.0.0.1:6379")
+	password = envOr(gtest.RedisPassword, "123456")
 	return
+}
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
 }
 
 // requireRedis 返回可用的真实 Redis 连接参数，服务不可达时跳过用例。
