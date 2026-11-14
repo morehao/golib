@@ -1,6 +1,6 @@
 # distlock
 
-`distlock` 是一个基于 Redis（redsync / Redlock 算法）的分布式锁组件，提供互斥、自动续期（续命）、锁丢失通知与多节点 quorum 支持。面向「临界区同一时刻最多一个持有者」的场景，典型消费者是 `task/gcron` 的跨实例任务互斥。
+`distlock` 是一个基于 Redis（redsync / Redlock 算法）的分布式锁组件，提供互斥、自动续期（续命）、锁丢失通知、多节点 quorum 支持，以及在其之上的主从选举（`LeaderElector`）。面向「临界区同一时刻最多一个持有者」的场景，典型消费者是 `task/gcron` 的跨实例任务互斥。
 
 ---
 
@@ -12,6 +12,7 @@
 - **非阻塞、非可重入**：`Lock` 立即返回，竞争失败是正常结果（`ok=false, err=nil`），不是错误。
 - **可复用实例**：`Unlock` 后可再次 `Lock`。
 - **可扩展存储**：`LockFactory` / `Lock` 接口抽象，当前内置 Redis 实现。
+- **主从选举**：`LeaderElector` 在锁之上提供「集群内至多一个主节点」的选举，抢占 + 续期模型，见下文「主从选举」。
 
 ---
 
@@ -87,6 +88,37 @@ default:
 - 因此 **`ctx` 应是长生命周期、与持锁周期一致的生命周期上下文**，不要把「只用于一次 RPC」的短超时 `ctx` 传进来，否则会在 `ctx` 到期时**静默停止续期**。
 - 注意：当续期因 `ctx` 被取消而退出时，**不会关闭 `Lost()`**（`Lost()` 仅在「续期请求本身失败 / 锁已过期」时关闭）。若你的临界区需要感知「续期已停」，请同时监听传入 `ctx` 的 `Done()`。
 - `Lost()` 应在 `Lock` 返回 `ok=true` 之后再取，代表当前这次持锁周期的丢失信号。
+
+---
+
+## 主从选举
+
+`LeaderElector` 在 `Lock`/`LockFactory` 之上提供「集群内至多一个主节点」的选举能力，采用抢占 + 续期模型，复用了与分布式锁一致的底层存储，无需额外依赖。
+
+```go
+elector, err := distlock.NewLeaderElector(factory, &distlock.LeaderConfig{
+    Key:           "svc:leader",     // 选举用的锁 key（必填）
+    TTL:           15 * time.Second, // 租约时长（必填）
+    RetryInterval: 2 * time.Second,  // 非 Leader 抢占失败后的重试间隔（可选，默认 2s）
+})
+if err != nil {
+    // 配置非法
+}
+
+go elector.Run(ctx) // 阻塞直到 ctx 取消；退出时会尽力释放锁
+
+if elector.IsLeader() {
+    // 执行仅主节点应做的事：定时任务、单例消费、缓存刷新等
+}
+// 可选：elector.Epoch() 识别「第几任」，elector.LeaderID() 观测当前主节点标识
+```
+
+要点：
+
+- **至多一个 Leader**：靠底层锁的互斥性保证；同一 group 内所有实例用相同 `Key`。
+- **续期即心跳**：Leader 按 `TTL/3` 续期，续期失败立即主动让位；非 Leader 按 `RetryInterval` 不断抢占。
+- **按需查询，不轮询**：`IsLeader()` 只反映当前状态；需要「任期变化」时可结合 `Epoch()`。
+- **失败即让位**：续期失败、释放失败、单次读抖动都不会长期误判；观察到锁已不属于本实例才降级。
 
 ---
 
