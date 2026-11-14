@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/dbtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
@@ -48,6 +48,8 @@ type tableSnapshot struct {
 type dialect struct {
 	name string
 	// open 返回指向本次验证专用库的句柄（库不存在则创建，连不上则 Skip）。
+	// 用 dbtest.WithReuse：验证库跨用例持久（旧 testutil.MySQLTestDB/PostgresTestDB
+	// 也只建不删），组件表由各用例自行 DROP，避免整套验证反复删库重建。
 	open func(t testing.TB) *gorm.DB
 	// columns 读一张表的列（列名 → 实况）。
 	columns func(t *testing.T, db *gorm.DB, table string) map[string]columnInfo
@@ -84,7 +86,7 @@ func scanTargets(row any) []any {
 // mysqlDialect 用 information_schema 读 MySQL 8 的结构。
 var mysqlDialect = dialect{
 	name: "mysql",
-	open: func(t testing.TB) *gorm.DB { return testutil.MySQLTestDB(t, mysqlDatabase) },
+	open: func(t testing.TB) *gorm.DB { return dbtest.New(t, dbtest.MySQL, mysqlDatabase, dbtest.WithReuse()) },
 	columns: func(t *testing.T, db *gorm.DB, table string) map[string]columnInfo {
 		t.Helper()
 		type row struct {
@@ -150,7 +152,9 @@ var mysqlDialect = dialect{
 // 索引列用 pg_get_indexdef(oid, n, true) 按位置取，避免手工解析 indexdef 文本。
 var postgresDialect = dialect{
 	name: "postgres",
-	open: func(t testing.TB) *gorm.DB { return testutil.PostgresTestDB(t, postgresDatabase) },
+	open: func(t testing.TB) *gorm.DB {
+		return dbtest.New(t, dbtest.Postgres, postgresDatabase, dbtest.WithReuse())
+	},
 	columns: func(t *testing.T, db *gorm.DB, table string) map[string]columnInfo {
 		t.Helper()
 		type row struct {

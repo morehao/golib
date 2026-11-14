@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
@@ -14,7 +14,26 @@ import (
 )
 
 func init() {
-	testutil.Load()
+	loadDotEnv()
+}
+
+// loadDotEnv 从当前目录向上查找 .env 并写入进程环境。
+// gtest.LoadEnv 不写 os.Environ，这里手动写入以保留后续 os.Getenv 可读的旧行为。
+func loadDotEnv() {
+	s, err := gtest.LoadEnv(".")
+	if err != nil {
+		return
+	}
+	for k, v := range s {
+		_ = os.Setenv(k, v)
+	}
+}
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
 }
 
 // pingOrSkip 真正验证数据库可达后返回连接。
@@ -40,14 +59,14 @@ func pingOrSkip(t *testing.T, db *gorm.DB, kind string, err error) *gorm.DB {
 
 func openMySQLForTest(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testutil.GetEnv(testutil.MySQLDSN, testutil.DefaultMySQLDSN)
+	dsn := envOr(gtest.MySQLDSN, gtest.DefaultMySQLDSN)
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	return pingOrSkip(t, db, "mysql", err)
 }
 
 func openPostgresForTest(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
+	dsn := envOr(gtest.PostgresDSN, gtest.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	db = pingOrSkip(t, db, "postgres", err)
 	// 仓库里没有任何迁移/SQL 文件为 demo 库建表（已核实：无 *.sql、无 AutoMigrate），

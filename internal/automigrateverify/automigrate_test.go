@@ -14,6 +14,7 @@
 package automigrateverify
 
 import (
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -21,8 +22,8 @@ import (
 	"github.com/morehao/golib/dict"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/gsetting"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/morehao/golib/gutil"
-	"github.com/morehao/golib/internal/testutil"
 	"github.com/morehao/golib/task/gasync"
 	"github.com/morehao/golib/task/gcron"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,13 @@ import (
 	"gorm.io/gorm"
 )
 
-func init() { testutil.Load() }
+func init() {
+	if s, err := gtest.LoadEnv("."); err == nil {
+		for k, v := range s {
+			os.Setenv(k, v)
+		}
+	}
+}
 
 // 两种方言：同一个机制必须在两边都成立。
 var dialects = []dialect{mysqlDialect, postgresDialect}

@@ -12,11 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/morehao/golib/gllm"
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 )
 
 func init() {
-	testutil.Load()
+	loadDotEnv()
+}
+
+// loadDotEnv 从当前目录向上查找 .env 并写入进程环境。
+// gtest.LoadEnv 不写 os.Environ，这里手动写入以保留后续 os.Getenv 可读的旧行为。
+func loadDotEnv() {
+	s, err := gtest.LoadEnv(".")
+	if err != nil {
+		return
+	}
+	for k, v := range s {
+		_ = os.Setenv(k, v)
+	}
 }
 
 // llmEnv 保存集成测试所需的真实端点配置。
@@ -32,18 +44,18 @@ func loadEnv(t *testing.T) llmEnv {
 	t.Helper()
 
 	e := llmEnv{
-		baseURL: os.Getenv(testutil.GLLMOpenAIBaseURL),
-		apiKey:  os.Getenv(testutil.GLLMOpenAIAPIKey),
-		model:   os.Getenv(testutil.GLLMOpenAIModel),
+		baseURL: os.Getenv(gtest.GLLMOpenAIBaseURL),
+		apiKey:  os.Getenv(gtest.GLLMOpenAIAPIKey),
+		model:   os.Getenv(gtest.GLLMOpenAIModel),
 	}
 	if e.baseURL != "" && e.apiKey != "" && e.model != "" {
 		return e
 	}
 
-	msg := "需要 " + testutil.GLLMOpenAIBaseURL + " / " +
-		testutil.GLLMOpenAIAPIKey + " / " + testutil.GLLMOpenAIModel + " 才能跑真实模型集成测试"
+	msg := "需要 " + gtest.GLLMOpenAIBaseURL + " / " +
+		gtest.GLLMOpenAIAPIKey + " / " + gtest.GLLMOpenAIModel + " 才能跑真实模型集成测试"
 
-	if os.Getenv(testutil.GLLMOpenAIRequire) != "" {
+	if os.Getenv(gtest.GLLMOpenAIRequire) != "" {
 		t.Fatal(msg)
 	}
 	t.Skip(msg)

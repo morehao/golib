@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -14,7 +15,18 @@ import (
 )
 
 func init() {
-	testutil.Load()
+	if s, err := gtest.LoadEnv("."); err == nil {
+		for k, v := range s {
+			os.Setenv(k, v)
+		}
+	}
+}
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
 }
 
 // errRollback 用于让事务内的 DDL/DML 全部回滚，保持测试库干净。
@@ -83,7 +95,7 @@ func TestPostgres_RoundTrip(t *testing.T) {
 
 func openPostgres(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
+	dsn := envOr(gtest.PostgresDSN, gtest.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)

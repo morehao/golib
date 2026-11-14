@@ -12,8 +12,8 @@ import (
 
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/morehao/golib/gtrace"
-	_ "github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"resty.dev/v3"
 )

@@ -2,23 +2,31 @@ package dbes
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/morehao/golib/gutil"
-	"github.com/morehao/golib/internal/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
 func init() {
-	testutil.Load()
+	if s, err := gtest.LoadEnv("."); err == nil {
+		for k, v := range s {
+			os.Setenv(k, v)
+		}
+	}
 }
 
 func esEnvAddr() string {
-	return testutil.GetEnv(testutil.ElasticsearchAddr, "http://localhost:9200")
+	if v := os.Getenv(gtest.ElasticsearchAddr); v != "" {
+		return v
+	}
+	return "http://localhost:9200"
 }
 
 func TestNewTypedES(t *testing.T) {

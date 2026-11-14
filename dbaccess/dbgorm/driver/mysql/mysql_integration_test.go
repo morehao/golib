@@ -1,15 +1,23 @@
 package mysql
 
 import (
+	"os"
 	"testing"
 
 	"github.com/morehao/golib/dbaccess/dbgorm"
 	_ "github.com/morehao/golib/glog/driver/slog"
 	_ "github.com/morehao/golib/glog/driver/zap"
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
+}
 
 type integrationModel struct {
 	ID   uint   `gorm:"primarykey"`
@@ -25,7 +33,7 @@ func (integrationModel) TableName() string { return "dbgorm_mysql_driver_test" }
 // `mysql://user:pass@host:port/db?params` 转成 `user:pass@tcp(host:port)/db?params`
 // 的地方——转错了只有连真库才暴露。本机 docker mysql:8.4 不可用时跳过。
 func TestNewWithRealMySQL(t *testing.T) {
-	uri := testutil.GetEnv(testutil.MySQLURI, testutil.DefaultMySQLURI)
+	uri := envOr(gtest.MySQLURI, gtest.DefaultMySQLURI)
 
 	db, err := dbgorm.New(&dbgorm.Config{URL: uri})
 	if err != nil {

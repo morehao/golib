@@ -1,4 +1,4 @@
-package testutil
+package storagetest
 
 import (
 	"crypto/md5"

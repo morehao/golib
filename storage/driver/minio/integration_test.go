@@ -3,12 +3,14 @@ package minio
 import (
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
+	"github.com/morehao/golib/gtest/storagetest"
 	"github.com/morehao/golib/storage"
 )
 
@@ -17,7 +19,27 @@ import (
 const requireOnlineEnv = "STORAGE_MINIO_REQUIRE"
 
 func init() {
-	testutil.Load()
+	initFromDotEnv()
+}
+
+// initFromDotEnv 读取向上查找的 .env 并写入进程环境，
+// 供依赖 os.Getenv 的旧式读取路径使用。
+func initFromDotEnv() {
+	src, err := gtest.LoadEnv(".")
+	if err != nil {
+		return
+	}
+	for k, v := range src {
+		_ = os.Setenv(k, v)
+	}
+}
+
+// envOr 读取环境变量，为空时返回默认值。
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
 }
 
 // dialTarget 把 endpoint 规范化成可拨号的 host:port。
@@ -53,7 +75,7 @@ func dialTarget(endpoint string, useSSL bool) string {
 // 这里显式跳过并说明原因；需要强制校验的环境用 requireOnlineEnv 打开硬失败。
 func probeStorage(t *testing.T, endpoint string, useSSL bool) {
 	t.Helper()
-	require := testutil.GetEnv(requireOnlineEnv, "") != ""
+	require := envOr(requireOnlineEnv, "") != ""
 	target := dialTarget(endpoint, useSSL)
 	conn, err := net.DialTimeout("tcp", target, 2*time.Second)
 	if err == nil {
@@ -68,28 +90,29 @@ func probeStorage(t *testing.T, endpoint string, useSSL bool) {
 }
 
 func TestIntegration(t *testing.T) {
-	endpoint := testutil.GetEnv(testutil.StorageMinioEndpoint, "")
-	accessKey := testutil.GetEnv(testutil.StorageMinioAccessKey, "")
+	endpoint := envOr(gtest.StorageMinioEndpoint, "")
+	accessKey := envOr(gtest.StorageMinioAccessKey, "")
 	if endpoint == "" || accessKey == "" {
 		t.Skip("STORAGE_MINIO_ENDPOINT or STORAGE_MINIO_ACCESS_KEY not set, skipping integration test")
 	}
 
-	useSSL, _ := strconv.ParseBool(testutil.GetEnv(testutil.StorageMinioUseSSL, "false"))
+	useSSL, _ := strconv.ParseBool(envOr(gtest.StorageMinioUseSSL, "false"))
 	probeStorage(t, endpoint, useSSL)
 
 	cfg := storage.Config{
 		Endpoint:  endpoint,
-		Region:    testutil.GetEnv(testutil.StorageMinioRegion, "us-east-1"),
+		Region:    envOr(gtest.StorageMinioRegion, "us-east-1"),
 		AccessKey: accessKey,
-		SecretKey: testutil.GetEnv(testutil.StorageMinioSecretKey, ""),
+		SecretKey: envOr(gtest.StorageMinioSecretKey, ""),
 		UseSSL:    useSSL,
-		BaseURL:   testutil.GetEnv(testutil.StorageMinioBaseURL, ""),
+		BaseURL:   envOr(gtest.StorageMinioBaseURL, ""),
 	}
 	s, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New minio driver: %v", err)
 	}
-	testutil.RunStorageSuite(t, s, testutil.GetEnv(testutil.StorageMinioBucket, "testbucket"))
+	bucket := envOr(gtest.StorageMinioBucket, "testbucket")
+	storagetest.RunCases(t, storagetest.Spec{S: s, Bucket: bucket}, storagetest.StorageCases()...)
 }
 
 func TestDialTarget(t *testing.T) {

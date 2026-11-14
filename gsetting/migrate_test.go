@@ -2,17 +2,29 @@ package gsetting
 
 import (
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 func init() {
-	testutil.Load()
+	if s, err := gtest.LoadEnv("."); err == nil {
+		for k, v := range s {
+			os.Setenv(k, v)
+		}
+	}
+}
+
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
 }
 
 // TestNew_MigratesByDefaultAndWithoutAutoMigrate 验证默认建表与选项开关。
@@ -47,7 +59,7 @@ func TestNew_MigratesByDefaultAndWithoutAutoMigrate(t *testing.T) {
 // （MySQL longtext / PG text），两侧建表均应成功。
 // 事务内执行并回滚，不残留表结构。
 func TestSettingEntity_AutoMigratePostgres(t *testing.T) {
-	dsn := testutil.GetEnv(testutil.PostgresDSN, testutil.DefaultPostgresDSN)
+	dsn := envOr(gtest.PostgresDSN, gtest.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Skipf("skip postgres-dependent test: %v", err)

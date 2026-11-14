@@ -1,7 +1,8 @@
 package local
 
 import (
-	"github.com/morehao/golib/internal/testutil"
+	"github.com/morehao/golib/gtest/gtest"
+	"github.com/morehao/golib/gtest/storagetest"
 	"github.com/morehao/golib/storage"
 
 	"os"
@@ -9,7 +10,27 @@ import (
 )
 
 func init() {
-	testutil.Load()
+	initFromDotEnv()
+}
+
+// initFromDotEnv 读取向上查找的 .env 并写入进程环境，
+// 供依赖 os.Getenv 的旧式读取路径使用。
+func initFromDotEnv() {
+	src, err := gtest.LoadEnv(".")
+	if err != nil {
+		return
+	}
+	for k, v := range src {
+		_ = os.Setenv(k, v)
+	}
+}
+
+// envOr 读取环境变量，为空时返回默认值。
+func envOr(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
 }
 
 func TestIntegration(t *testing.T) {
@@ -25,10 +46,10 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New local driver: %v", err)
 	}
-	bucket := testutil.GetEnv(testutil.StorageLocalBucket, "testbucket")
+	bucket := envOr(gtest.StorageLocalBucket, "testbucket")
 	dataDir := dir + "/data/" + bucket
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		t.Fatalf("create bucket dir: %v", err)
 	}
-	testutil.RunStorageSuite(t, s, bucket)
+	storagetest.RunCases(t, storagetest.Spec{S: s, Bucket: bucket}, storagetest.StorageCases()...)
 }
