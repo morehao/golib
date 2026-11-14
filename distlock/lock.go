@@ -3,7 +3,7 @@ package distlock
 import (
 	"context"
 	"errors"
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
@@ -171,7 +171,7 @@ func (dl *DistLock) autoRenewal(ctx context.Context) {
 	ttl := dl.config.TTL
 	base := ttl / 3
 	for {
-		interval := base + time.Duration(rand.Int63n(int64(base+1)))
+		interval := base + time.Duration(rand.Int64N(int64(base+1)))
 		if interval < minRenewalInterval {
 			interval = minRenewalInterval
 		}
