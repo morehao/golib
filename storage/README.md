@@ -238,7 +238,7 @@ local 驱动的行为约定：
 go test ./storage/... 
 ```
 
-local 驱动与云厂商共用同一份契约测试（`internal/testutil.RunStorageSuite`）。
+local 驱动与云厂商共用同一份契约测试（`gtest/storagetest.RunCases` + `StorageCases()`）。
 云厂商用例从 `.env` 读取 `STORAGE_<DRIVER>_ENDPOINT/ACCESS_KEY/...`：变量缺失时跳过，
 设置为占位值但端点不可达时会失败（例如 `.env` 里的 `STORAGE_MINIO_ENDPOINT=127.0.0.1:9000`
 在本地未启动 MinIO 时会让 `TestIntegration` 失败，属预期现象，与代码无关）。

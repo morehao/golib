@@ -106,7 +106,7 @@ Test-specific environment variables:
 - **gmiddleware**: Gin middleware, including JWT authentication, CORS, access logging, Token blacklist
 - **gormplugin**: GORM multi-tenant plugin: injects a scope condition into SELECT/UPDATE/DELETE, resolves the scope with a three-state `Resolver` (unset / all-tenants / by-value) and supports fail-closed `MissingScope`
 - **genericdao**: Generic DAO,封装基础的增删改查操作
-- **testkit**: Testing toolkit, supporting test initializer and context building
+- **gtest**: Reusable testing toolkit (idiomatic Go): env source, per-test isolated DB, HTTP/gin helpers, and a declaration-based storage conformance suite. See [gtest/README.md](gtest/README.md)
 
 ### Features
 - Business scenario-oriented, ready to use

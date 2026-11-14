@@ -60,7 +60,7 @@ go get github.com/morehao/golib
 - **gmiddleware**: Gin 中间件，包含 JWT 认证、CORS、访问日志、Token 黑名单
 - **gormplugin**: GORM 多租户插件：对 SELECT/UPDATE/DELETE 注入作用域条件，用三态 `Resolver`（未声明／全租户／按值）解析作用域，并支持 fail-closed 的 `MissingScope` 钩子
 - **genericdao**: 泛型 DAO，封装基础的增删改查操作
-- **testkit**: 测试工具包，支持测试初始化器和上下文构建
+- **gtest**: 可复用测试工具包（贴合 Go 主流）：环境来源、每用例独立库、HTTP/gin 助手、声明式 storage 契约套件。见 [gtest/README.md](gtest/README.md)
 
 ### 特性
 - 业务场景贴合，开箱即用
