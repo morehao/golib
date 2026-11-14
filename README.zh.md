@@ -5,22 +5,32 @@
 - [biz](#biz) 业务组件包
 - [codegen](#codegen) 代码生成工具
 - [gconc](#gconc) 并发任务池组件
+- [gconstant](#gconstant) 业务常量（错误码与消息映射、日志字段 key）
+- [gcache](#gcache) 统一 KV 缓存组件（memory / Redis 驱动）
+- [gnotify](#gnotify) 通知组件（邮件 / 企业微信 / 短信 / 公众号）
+- [gprompt](#gprompt) 可运营的提示词模板组件（版本化 + 变量校验）
 - [gsetting](#gsetting) 配置管理组件
 - [dbaccess](#dbaccess) 数据库客户端组件（支持 MySQL、Redis、Elasticsearch）
 - [dict](#dict) 数据字典组件（类型 + 码值，支持树形层级）
 - [distlock](#distlock) 分布式锁组件（不支持可重入）+ 主从选举
-- [excel](#excel) Excel 读写组件
+- [filestore](#filestore) 基于 `storage` 的文件业务层（元数据、去重、分片会话、预签名 URL）
+- [gexcel](#gexcel) Excel 读写组件
 - [gast](#gast) 语法树工具
 - [gauth](#gauth) 鉴权组件（包含 jwtauth）
 - [gcrypto](#gcrypto) 加解密组件
 - [gerror](#gerror) 错误处理组件
 - [glog](#glog) 日志组件
+- [gllm](#gllm) LLM 接入配置层（config → eino model）
+- [gtest](#gtest) 测试工具包（环境、独立库、HTTP/gin 辅助、存储一致性套件）
 - [gtrace](#gtrace) OpenTelemetry Trace 初始化组件
 - [gtree](#gtree) 树结构构建工具
 - [gutil](#gutil) 常用工具函数集合（字符串/切片/时间/文件/网络/Shell/压缩/随机）
+- [gvalidate](#gvalidate) 结构体校验组件（validator 封装、中文提示、字段级错误）
+- [lifecycle](#lifecycle) 应用生命周期管理与优雅退出
 - [task](#task) 任务调度组件
 - [protocol](#protocol) 协议组件（包含 ghttp、gresty）
 - [ratelimit](#ratelimit) 限流组件
+- [storage](#storage) 统一对象存储组件（支持 S3、MinIO、OSS、COS、TOS）
 
 # 安装
 ```bash
@@ -78,6 +88,58 @@ go get github.com/morehao/golib
 
 ### 使用
 使用示例参照 [codegen 单测](codegen/gen_test.go)
+
+## gconstant
+
+### 简介
+`gconstant` 定义跨服务共享的业务常量：按域分组的保留错误码区间及其消息映射（供 `gerror` 使用），以及日志层与中间件层共用的日志字段/Header/取值 key。
+
+### 特性
+- 错误码按域分组（DB / 系统 / 鉴权 / LLM，100000+），每组配套 `gerror.CodeMsgMap` 做码值到文案的映射
+- 日志 key/常量（字段 key、Header、取值）供 `glog`、`biz/gmiddleware` 与业务代码复用
+- 零外部依赖：只依赖 `gerror`，可在任意位置安全引入
+
+## gcache
+
+### 简介
+`gcache` 是统一 KV 缓存抽象，提供可插拔的 `memory` / `redis` 驱动。
+
+### 特性
+- 接口 + 驱动注册（`Register` + 空导入，与 `storage`/`gllm` 一致）
+- `GetOrLoad` 读穿透，进程内单飞；Redis 用 `SET NX PX` 短锁 + fail-open（不长时间阻塞）
+- 值通过可插拔 `Codec`（默认 JSON）序列化；无全局单例
+- `Config` 值对象 + 函数式 `Option`；新增能力加 `WithXxx`，不改 `New` 签名
+
+### 使用
+参见 [gcache README](gcache/README.md)。
+
+## gnotify
+
+### 简介
+`gnotify` 是统一通知组件，采用渠道驱动注册。
+
+### 特性
+- 渠道：邮件（标准库 `net/smtp`）、企业微信群机器人 webhook、短信（阿里 / 腾讯）、公众号模板消息
+- `Notifier` 接口 + 渠道注册表（`Register` + 空导入）；`Router` 显式指定渠道发送（不做隐式广播）
+- 凭据由调用方注入（不隐式读 DB/env/settings）；零云 SDK（标准库 + 注入的 `http.Client`）
+- 无持久化、无内部重试循环
+
+### 使用
+参见 [gnotify README](gnotify/README.md)。
+
+## gprompt
+
+### 简介
+`gprompt` 提供可运营的提示词模板：按 code 标识、版本快照不可变、声明变量并做取值校验，并支持渲染。
+
+### 特性
+- 基于标准库 `text/template` 的纯函数渲染器（不引入 jinja/gonja）；存储为可插拔 `Source`（DB / 内存）
+- 双向校验：模板引用 ↔ 声明变量，并做类型/范围/枚举/长度校验，给出字段级错误
+- 不可变版本快照（`CurrentVersion` 指针）；自持表由 `internal/tablekit` 管理，DDL 由 `internal/ddlgen` 固定
+- 不导入 `gllm`（只产出渲染后的文本）
+
+### 使用
+参见 [gprompt README](gprompt/README.md)。
 
 ## gconc
 
@@ -211,10 +273,25 @@ if elector.IsLeader() {
 // 可选：elector.Epoch() 识别新任期，elector.LeaderID() 观测当前主节点
 ```
 
-## excel
+## filestore
 
 ### 简介
-`excel` 是基于 `excelize` 的简单封装，支持通过结构体便捷地读写 Excel 文件。
+`filestore` 是 `storage`（S3 / 本地）之上的**文件业务层**：补齐落库元数据、按内容哈希去重、分片上传会话与预签名 URL 的签发/校验。内容与元数据分离——`core_file` 只记物理文件（哈希、大小、存储路径），`core_file_upload` 只记每次上传（上传 ID、状态、业务场景），内容信息不冗余存储。
+
+### 特性
+- 上传状态机：`uploading -> merging -> completed`，异常路径落 `aborted`
+- 去重：同内容哈希只有一行 `core_file`，重复上传直接返回既有记录
+- 分片上传会话与预签名 URL 的签发/校验
+- 自持表：`New`/`Init` 默认建表（幂等），也可传 `WithoutAutoMigrate()` 改由发布流程 `filestore.Migrate(db)`
+- MySQL 与 PostgreSQL 完整 DDL 见 [filestore README](filestore/README.md)
+
+### 使用
+参见 [filestore README](filestore/README.md)。
+
+## gexcel
+
+### 简介
+`gexcel` 是基于 `excelize` 的简单封装，支持通过结构体便捷地读写 Excel 文件。
 
 无论是读取 Excel 还是写入 Excel，都需要定义一个结构体，结构体的字段通过 tag（即 `ex`）来指定 Excel 的相关信息。
 
@@ -224,7 +301,7 @@ if elector.IsLeader() {
 - 支持基于 validator 的数据验证
 
 ### 使用
-使用示例参照 [excel 使用说明](excel/README.md)
+使用示例参照 [gexcel 使用说明](gexcel/README.md)
 
 ## gast
 
@@ -381,6 +458,31 @@ if elector.IsLeader() {
 ### 使用
 使用示例参照 [ghttp 使用说明](protocol/ghttp/README.md)
 
+## storage
+
+### 简介
+`storage` 是统一对象存储组件，支持多家云厂商，提供一致的 API。
+
+### 支持的厂商
+- AWS S3
+- MinIO
+- 阿里云 OSS
+- 腾讯云 COS
+- 火山引擎 TOS
+- 七牛云 Kodo
+
+### 特性
+- 跨厂商统一 API
+- 分片上传（本地会话可续传，带 TTL 回收）
+- 预签名 URL 生成（GET/PUT/PUT part；HMAC 签名令牌绑定 bucket/key/op）
+- 对象列举（prefix/delimiter 与续传 token 分页）
+- 批量操作（删除、拷贝）
+- URI + PathBuilder 辅助，标准化资源标识与公网 URL
+- 本地文件系统驱动，让业务服务自身充当对象存储
+
+### 使用
+参见 [storage README](storage/README.md)。
+
 ## ratelimit
 
 ### 简介
@@ -395,3 +497,63 @@ if elector.IsLeader() {
 ### 注意
 - 降级（fail-open）期间每个进程使用独立的本地限流器，多实例部署时聚合上限约为「实例数 × 配置值」，且各实例配额不共享
 - `Rate`/`Burst`/`Period`/`CleanupInterval` 必须大于 0，否则 `NewLimiter` 返回错误
+## gllm
+
+### 简介
+`gllm` 是 LLM 接入配置层：把配置值对象解析为 eino 的 `model.ToolCallingChatModel`。它负责「用哪个 provider、哪个模型、失败怎么办」，不负责「怎么和厂商协议通信」，后者由 eino-ext 组件完成。
+
+### 特性
+- 值对象配置，字段名固定（`providers` / `models` / `allow_degraded`），不依赖配置文件
+- 调用方直接按模型名使用：`models` 的 key 就是模型名，不设中间层
+- 启动期校验（`Resolve`）：配置错误在首次调用前暴露
+- 显式可探测的降级：缺少 API Key 时回退到内置 fake 模型并置 `Model.Degraded = true`，而非启动失败
+- 错误分类到保留码段（`120000-120099`）并附可重试矩阵
+- 驱动注册表带能力声明；核心只依赖 eino，不依赖 eino-ext
+
+### 支持的驱动
+- `openai` —— OpenAI 及一切 OpenAI 兼容端点（DeepSeek、DashScope 兼容模式、Ark、vLLM、Ollama 等）；见 `gllm/driver/openai`
+- `fake` —— 内置回退，自动注册
+
+### 使用
+参见 [gllm README](gllm/README.md)，分步接入指南见 [gllm 接入指南](docs/gllm-integration-guide.md)。
+
+## gtest
+
+### 简介
+`gtest` 是贴合 Go 主流测试实践的轻量构件库。不是测试框架：不要求继承、不强制全局状态，语义仍是 `t.Run` / `t.Fatal` / `t.Cleanup`，断言请用 `testify` 或裸 `if`。
+
+### 子组件
+- **gtest**：环境来源（`LoadEnv` / `Source`）、默认 DSN 常量、`Golden`、`Eventually`、`CopyTree`、`Start`（应用装配）
+- **gtest/dbtest**：每用例独立库（`New` + `Migrate` + `DropAll`）
+- **gtest/httptest**：`NewContext(opts...)`、`NewRequest`/`Do`/`Decode`、`StartServer`（随机端口）
+- **gtest/storagetest**：`FakeS3`、完整语义 `NewMem`、`StorageCases()` + `RunCases`、`PresignLiveCases()`
+
+### 使用
+参见 [gtest README](gtest/README.md)。
+
+## gvalidate
+
+### 简介
+`gvalidate` 是结构体校验组件，封装 `go-playground/validator/v10`，带中文提示与字段级错误，让校验失败以可读的逐字段结果返回，而不是原始 validator 错误。
+
+### 特性
+- `Check(data any) error` —— 校验结构体，返回 `Errors`（`[]*FieldError`，含字段 + 文案）
+- `Errors.First()` / `Errors.ToMap()` 与 `AsErrors(err)` 便于处理
+- `RegisterValidation(tag, fn)` 注册自定义规则（线程安全，仅初始化一次）
+- 内置中文翻译与懒加载单例初始化
+
+## lifecycle
+
+### 简介
+`lifecycle` 是基于标准库实现的应用生命周期管理与优雅退出库（日志走 `glog`）。用于替代裸 `http.ListenAndServe` 的硬关闭（会在退出时掐断正在处理的请求）。
+
+### 特性
+- **零第三方依赖**：仅用标准库（另加 `glog` 记录日志）
+- **多触发源**：系统信号（SIGTERM/SIGINT）、`Exit()` 主动触发、actor 出错即关
+- **context 广播**：统一退出信号，后台任务 / 消费者 / 定时任务协作停止
+- **HTTP 优雅收尾**：退出时用 `http.Server.Shutdown(ctx)` 等待在途请求完成
+- **分阶段关闭**：`AddCloser`/`AddCloseFunc` 支持阶段顺序；`AddActor` 托管 goroutine
+- `Default()`/`New()`/`SetInstance` 提供进程级生命周期实例
+
+### 使用
+参见 [lifecycle README](lifecycle/README.md)。
