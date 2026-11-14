@@ -4,6 +4,14 @@
 
 ### Bug Fixes
 
+- **biz/testkit**: v1.34.5 的 #134 把测试基建迁到 `gtest` 时直接删除了 `biz/testkit`，但已发布的
+  下游仍在 import 它——`github.com/morehao/ark-iam/pkg@v0.4.1`（testsetup）与
+  `github.com/morehao/ark-iam/apps/auth@v0.1.0`（testutil）。已发布版本无法自行消除引用，
+  于是任何依赖 ark-iam 且把 golib 升到 v1.34.5 的项目，`go mod tidy` 会直接失败：
+  `module github.com/morehao/golib@v1.34.5 found, but does not contain package .../biz/testkit`。
+  现恢复本包为**兼容保留**（实现与 v1.34.4 一致、冻结不再演进，Go 文档标注 `Deprecated`），
+  待下游迁完 `gtest` 后随下一个主版本移除；`internal/testutil` 属 internal，无外部影响，不恢复。
+
 - **ghttp**: `Transport` 未设置 `Proxy` 字段，导致 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`
   等标准代理环境变量被**静默忽略**，所有请求强制直连。在需要出站代理的网络里，调用方
   即使正确设置了代理也无效，表现为直连超时或撞上游限流（如 GitHub 403）。现在在
