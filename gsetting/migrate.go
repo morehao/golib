@@ -3,6 +3,7 @@ package gsetting
 import (
 	"fmt"
 
+	"github.com/morehao/golib/internal/tablekit"
 	"gorm.io/gorm"
 )
 
@@ -18,5 +19,5 @@ func Migrate(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("gsetting.Migrate: %w", errDBRequired)
 	}
-	return db.AutoMigrate(SchemaModels()...)
+	return tablekit.Migrator{Component: "gsetting", Models: SchemaModels()}.Migrate(db)
 }
