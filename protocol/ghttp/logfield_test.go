@@ -29,7 +29,7 @@ func TestLogFieldsAreVisibleToFieldHook(t *testing.T) {
 	cfg := &glog.LogConfig{
 		Service:    "ghttplog",
 		Module:     "test",
-		Level:      glog.InfoLevel,
+		Level:      glog.DebugLevel,
 		Writers:    []glog.WriterConfig{{Type: glog.WriterFile, Dir: dir}},
 		LoggerType: glog.LoggerTypeZap,
 	}

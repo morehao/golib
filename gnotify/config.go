@@ -2,7 +2,6 @@ package gnotify
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	"github.com/morehao/golib/glog"
@@ -20,11 +19,26 @@ type Config struct {
 	// Logger 可选。nil 时渠道使用空实现（log 丢弃），不会 panic。
 	Logger glog.Logger
 
-	// HTTPClient 供 HTTP 类渠道（如 wecom）复用。nil 时渠道使用各渠道默认值。
-	HTTPClient *http.Client
+	// HTTPClient 供 HTTP 类渠道复用（背后通常是本仓库 protocol/ghttp 的适配器）。
+	// nil 时渠道按 Timeout/Retry/LogLevel 自动构造一个基于 ghttp 的默认实现。
+	HTTPClient HTTPDoer
 
 	// Timeout 是 HTTP 渠道的单次请求超时。<=0 时取 [DefaultTimeout]。
 	Timeout time.Duration
+
+	// Retry 透传给底层 ghttp 的最大尝试次数（含首次）。gnotify 默认 0 = 只发一次、不重试
+	// （遵循包「不做内部重试」的边界；需要重试请由调用方处理）。
+	Retry int
+
+	// LogLevel 透传给底层 ghttp 的成功请求日志级别。零值视为 debug。
+	LogLevel glog.Level
+
+	// Disabled 为 true 时所有渠道的 Send 直接返回 nil、不真正发送、不打日志（整体静音）。
+	Disabled bool
+
+	// DryRun 为 true 时所有渠道的 Send 不真正发送，但会打一条 dry-run 日志，
+	// 便于预发/本地环境预览将要发送的内容。
+	DryRun bool
 }
 
 // withDefaults 返回填充默认值后的副本，不修改入参。
@@ -32,6 +46,9 @@ func (c Config) withDefaults() Config {
 	out := c
 	if out.Timeout <= 0 {
 		out.Timeout = DefaultTimeout
+	}
+	if out.LogLevel == "" {
+		out.LogLevel = glog.DebugLevel
 	}
 	return out
 }
@@ -44,14 +61,34 @@ func WithLogger(l glog.Logger) Option {
 	return func(c *Config) { c.Logger = l }
 }
 
-// WithHTTPClient 注入 HTTP 客户端，供 HTTP 类渠道复用。
-func WithHTTPClient(hc *http.Client) Option {
-	return func(c *Config) { c.HTTPClient = hc }
+// WithHTTPDoer 注入 HTTP 客户端实现，供 HTTP 类渠道复用。
+func WithHTTPDoer(h HTTPDoer) Option {
+	return func(c *Config) { c.HTTPClient = h }
 }
 
 // WithTimeout 设置 HTTP 渠道的单次请求超时。<=0 表示使用 [DefaultTimeout]。
 func WithTimeout(d time.Duration) Option {
 	return func(c *Config) { c.Timeout = d }
+}
+
+// WithRetry 设置底层 ghttp 的最大尝试次数（含首次）。默认 0 = 不重试。
+func WithRetry(n int) Option {
+	return func(c *Config) { c.Retry = n }
+}
+
+// WithLogLevel 设置底层 ghttp 成功请求日志级别。零值视为 debug。
+func WithLogLevel(l glog.Level) Option {
+	return func(c *Config) { c.LogLevel = l }
+}
+
+// WithDisabled 整体静音：所有渠道 Send 直接返回 nil，不发送、不打日志。
+func WithDisabled(disabled bool) Option {
+	return func(c *Config) { c.Disabled = disabled }
+}
+
+// WithDryRun 干跑：所有渠道 Send 不真正发送，但打一条 dry-run 日志便于预览。
+func WithDryRun(dryRun bool) Option {
+	return func(c *Config) { c.DryRun = dryRun }
 }
 
 // ApplyOptions 把 opts 依次应用到一份默认 Config 上，并填充默认值（Timeout 等）。

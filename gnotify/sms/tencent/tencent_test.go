@@ -7,9 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,7 +16,7 @@ import (
 	"github.com/morehao/golib/gnotify"
 )
 
-func validConfig(endpoint string) TencentConfig {
+func validConfig() TencentConfig {
 	return TencentConfig{
 		SecretID:   "test-id",
 		SecretKey:  "test-key",
@@ -26,27 +24,31 @@ func validConfig(endpoint string) TencentConfig {
 		SignName:   "测试签名",
 		TemplateID: "123456",
 		Region:     "ap-guangzhou",
-		Endpoint:   endpoint,
+		Endpoint:   "https://sms.example.com",
 	}
 }
 
-func TestSend_Success(t *testing.T) {
-	var (
-		gotBody   tencentRequest
-		gotAuth   string
-		gotHdrs   http.Header
-		gotRawPay []byte
-	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotHdrs = r.Header.Clone()
-		gotRawPay, _ = io.ReadAll(r.Body)
-		_ = json.Unmarshal(gotRawPay, &gotBody)
-		_, _ = w.Write([]byte(`{"Response":{"SendStatusSet":[{"Code":"Ok","Message":"send success"}],"RequestId":"req-1"}}`))
-	}))
-	defer srv.Close()
+// fakeDoer 记录最近一次请求并返回预置响应。
+type fakeDoer struct {
+	gotReq gnotify.HTTPRequest
+	gotURL *url.URL
+	calls  int
+	resp   gnotify.HTTPResponse
+	err    error
+}
 
-	n, err := New(validConfig(srv.URL))
+func (f *fakeDoer) Do(_ context.Context, req gnotify.HTTPRequest) (gnotify.HTTPResponse, error) {
+	f.calls++
+	f.gotReq = req
+	if u, err := url.Parse(req.URL); err == nil {
+		f.gotURL = u
+	}
+	return f.resp, f.err
+}
+
+func TestSend_Success(t *testing.T) {
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Response":{"SendStatusSet":[{"Code":"Ok","Message":"send success"}],"RequestId":"req-1"}}`)}}
+	n, err := New(validConfig(), gnotify.WithHTTPDoer(d))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -58,7 +60,17 @@ func TestSend_Success(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// 请求体。
+	if d.gotReq.Method != "POST" {
+		t.Errorf("method = %q", d.gotReq.Method)
+	}
+	if d.gotURL == nil || d.gotURL.Host != "sms.example.com" {
+		t.Errorf("url = %q", d.gotReq.URL)
+	}
+
+	var gotBody tencentRequest
+	if err := json.Unmarshal(d.gotReq.Body, &gotBody); err != nil {
+		t.Fatalf("body not json: %v", err)
+	}
 	if gotBody.SmsSdkAppId != "1400000000" {
 		t.Errorf("SmsSdkAppId = %q", gotBody.SmsSdkAppId)
 	}
@@ -73,22 +85,28 @@ func TestSend_Success(t *testing.T) {
 	}
 
 	// 头部。
-	if gotHdrs.Get("X-TC-Action") != "SendSms" || gotHdrs.Get("X-TC-Version") != "2021-01-11" {
-		t.Errorf("action/version headers wrong: %q/%q", gotHdrs.Get("X-TC-Action"), gotHdrs.Get("X-TC-Version"))
+	h := d.gotReq.Headers
+	if h["X-TC-Action"] != "SendSms" || h["X-TC-Version"] != "2021-01-11" {
+		t.Errorf("action/version headers wrong: %q/%q", h["X-TC-Action"], h["X-TC-Version"])
 	}
-	if gotHdrs.Get("X-TC-Region") != "ap-guangzhou" {
-		t.Errorf("region header = %q", gotHdrs.Get("X-TC-Region"))
+	if h["X-TC-Region"] != "ap-guangzhou" {
+		t.Errorf("region header = %q", h["X-TC-Region"])
+	}
+	if h["Content-Type"] != contentType {
+		t.Errorf("content-type = %q", h["Content-Type"])
 	}
 
 	// 签名格式与正确性。
+	gotAuth := h["Authorization"]
 	if !strings.HasPrefix(gotAuth, "TC3-HMAC-SHA256 Credential=test-id/") {
 		t.Fatalf("Authorization prefix wrong: %q", gotAuth)
 	}
 	if !strings.Contains(gotAuth, "SignedHeaders=content-type;host") {
 		t.Errorf("SignedHeaders wrong: %q", gotAuth)
 	}
-	ts, _ := strconv.ParseInt(gotHdrs.Get("X-TC-Timestamp"), 10, 64)
-	wantSig := recomputeSignature(gotRawPay, gotHdrs.Get("X-TC-Timestamp"), "test-id", "test-key", "sms", time.Unix(ts, 0))
+	tsStr := h["X-TC-Timestamp"]
+	ts, _ := strconv.ParseInt(tsStr, 10, 64)
+	wantSig := recomputeSignature(d.gotReq.Body, tsStr, "test-id", "test-key", "sms", time.Unix(ts, 0))
 	if !strings.Contains(gotAuth, "Signature="+wantSig) {
 		t.Errorf("signature mismatch:\n got  %q\n want %q", gotAuth, wantSig)
 	}
@@ -100,7 +118,7 @@ func recomputeSignature(payload []byte, tsStr, secretID, secretKey, service stri
 	ph := sha256.Sum256(payload)
 	canonicalHeaders := "content-type:" + contentType + "\n" + "host:" + apiHost + "\n"
 	cr := strings.Join([]string{
-		http.MethodPost, "/", "", canonicalHeaders, "content-type;host", hex.EncodeToString(ph[:]),
+		"POST", "/", "", canonicalHeaders, "content-type;host", hex.EncodeToString(ph[:]),
 	}, "\n")
 	crHash := sha256.Sum256([]byte(cr))
 	scope := date + "/" + service + "/tc3_request"
@@ -120,11 +138,8 @@ func recomputeSignature(payload []byte, tsStr, secretID, secretKey, service stri
 }
 
 func TestSend_APIError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"Response":{"Error":{"Code":"InvalidParameterValue.TemplateParamSet","Message":"模板参数错误"},"RequestId":"req-2"}}`))
-	}))
-	defer srv.Close()
-	n, _ := New(validConfig(srv.URL))
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Response":{"Error":{"Code":"InvalidParameterValue.TemplateParamSet","Message":"模板参数错误"},"RequestId":"req-2"}}`)}}
+	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
@@ -135,11 +150,8 @@ func TestSend_APIError(t *testing.T) {
 }
 
 func TestSend_SendStatusFailure(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"Response":{"SendStatusSet":[{"Code":"LimitExceeded.PhoneNumberDailyLimit","Message":"超限"}]}}`))
-	}))
-	defer srv.Close()
-	n, _ := New(validConfig(srv.URL))
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Response":{"SendStatusSet":[{"Code":"LimitExceeded.PhoneNumberDailyLimit","Message":"超限"}]}}`)}}
+	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
@@ -149,8 +161,17 @@ func TestSend_SendStatusFailure(t *testing.T) {
 	}
 }
 
+func TestSend_HTTPStatusError(t *testing.T) {
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 500, Body: []byte("boom")}}
+	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
+	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
+	if !errors.Is(err, gnotify.ErrSendFailed) {
+		t.Fatalf("want ErrSendFailed, got %v", err)
+	}
+}
+
 func TestSend_NoRecipient(t *testing.T) {
-	n, _ := New(validConfig("http://127.0.0.1:1"))
+	n, _ := New(validConfig(), gnotify.WithHTTPDoer(&fakeDoer{}))
 	err := n.Send(context.Background(), gnotify.Message{})
 	if !errors.Is(err, gnotify.ErrNoRecipient) {
 		t.Fatalf("want ErrNoRecipient, got %v", err)
@@ -173,7 +194,7 @@ func TestNew_InvalidConfig(t *testing.T) {
 }
 
 func TestPhoneNumberPrefix(t *testing.T) {
-	n := &notifier{cfg: validConfig("")}
+	n := &notifier{cfg: validConfig()}
 	got, err := n.phoneNumbers([]string{"13800000000", "+8613900000000", " ", ""})
 	if err != nil {
 		t.Fatalf("phoneNumbers: %v", err)
@@ -207,27 +228,22 @@ func TestEndpointAndRegion(t *testing.T) {
 	}
 }
 
-func TestNewWithCore_UsesHTTPClient(t *testing.T) {
-	used := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"Response":{"SendStatusSet":[{"Code":"Ok"}]}}`))
-	}))
-	defer srv.Close()
-	hc := &http.Client{Transport: &flagTransport{used: &used}}
-	n, err := NewWithCore(validConfig(srv.URL), gnotify.WithHTTPClient(hc))
+func TestNewWithCore_UsesHTTPDoer(t *testing.T) {
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Response":{"SendStatusSet":[{"Code":"Ok"}]}}`)}}
+	n, err := NewWithCore(validConfig(), gnotify.WithHTTPDoer(d))
 	if err != nil {
 		t.Fatalf("NewWithCore: %v", err)
 	}
 	if err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if !used {
-		t.Fatal("injected HTTPClient not used")
+	if d.calls != 1 {
+		t.Fatalf("injected HTTPDoer not used: calls = %d", d.calls)
 	}
 }
 
 func TestRegistry_Tencent(t *testing.T) {
-	n, err := gnotify.New("tencent", gnotify.WithHTTPClient(&http.Client{}))
+	n, err := gnotify.New("tencent", gnotify.WithHTTPDoer(&fakeDoer{}))
 	if err != nil {
 		t.Fatalf("gnotify.New(tencent): %v", err)
 	}
@@ -237,13 +253,4 @@ func TestRegistry_Tencent(t *testing.T) {
 	if err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}}); !errors.Is(err, gnotify.ErrInvalidConfig) {
 		t.Fatalf("want ErrInvalidConfig, got %v", err)
 	}
-}
-
-type flagTransport struct {
-	used *bool
-}
-
-func (f *flagTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	*f.used = true
-	return http.DefaultTransport.RoundTrip(r)
 }

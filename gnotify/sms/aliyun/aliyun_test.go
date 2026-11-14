@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -15,26 +14,38 @@ import (
 	"github.com/morehao/golib/gnotify"
 )
 
-func validConfig(endpoint string) AliyunConfig {
+func validConfig() AliyunConfig {
 	return AliyunConfig{
 		AccessKeyID:     "test-id",
 		AccessKeySecret: "test-secret",
 		SignName:        "测试签名",
 		TemplateCode:    "SMS_100000001",
 		RegionID:        "cn-hangzhou",
-		Endpoint:        endpoint,
+		Endpoint:        "https://dysmsapi.example.com",
 	}
 }
 
-func TestSend_Success(t *testing.T) {
-	var gotQuery url.Values
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.Query()
-		_, _ = w.Write([]byte(`{"Code":"OK","Message":"OK","RequestId":"req-1","BizId":"biz-1"}`))
-	}))
-	defer srv.Close()
+// fakeDoer 记录最近一次请求并返回预置响应。
+type fakeDoer struct {
+	gotReq gnotify.HTTPRequest
+	gotURL *url.URL
+	calls  int
+	resp   gnotify.HTTPResponse
+	err    error
+}
 
-	n, err := New(validConfig(srv.URL))
+func (f *fakeDoer) Do(_ context.Context, req gnotify.HTTPRequest) (gnotify.HTTPResponse, error) {
+	f.calls++
+	f.gotReq = req
+	if u, err := url.Parse(req.URL); err == nil {
+		f.gotURL = u
+	}
+	return f.resp, f.err
+}
+
+func TestSend_Success(t *testing.T) {
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Code":"OK","Message":"OK","RequestId":"req-1","BizId":"biz-1"}`)}}
+	n, err := New(validConfig(), gnotify.WithHTTPDoer(d))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -45,6 +56,14 @@ func TestSend_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
+
+	if d.gotReq.Method != "GET" {
+		t.Errorf("method = %q", d.gotReq.Method)
+	}
+	if d.gotURL == nil || d.gotURL.Path != "/" {
+		t.Errorf("url path = %q", d.gotReq.URL)
+	}
+	gotQuery := d.gotURL.Query()
 
 	// 校验固定参数。
 	if got := gotQuery.Get("Action"); got != "SendSms" {
@@ -101,12 +120,8 @@ func recomputeSignature(q url.Values, secret string) string {
 }
 
 func TestSend_ErrcodeFailure(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"Code":"isv.BUSINESS_LIMIT_CONTROL","Message":"触发流控","RequestId":"req-2"}`))
-	}))
-	defer srv.Close()
-
-	n, _ := New(validConfig(srv.URL))
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Code":"isv.BUSINESS_LIMIT_CONTROL","Message":"触发流控","RequestId":"req-2"}`)}}
+	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
@@ -117,12 +132,17 @@ func TestSend_ErrcodeFailure(t *testing.T) {
 }
 
 func TestSend_HTTPStatusError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte("bad gateway"))
-	}))
-	defer srv.Close()
-	n, _ := New(validConfig(srv.URL))
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 502, Body: []byte("bad gateway")}}
+	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
+	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
+	if !errors.Is(err, gnotify.ErrSendFailed) {
+		t.Fatalf("want ErrSendFailed, got %v", err)
+	}
+}
+
+func TestSend_TransportError(t *testing.T) {
+	d := &fakeDoer{err: errors.New("dial fail")}
+	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
@@ -130,7 +150,7 @@ func TestSend_HTTPStatusError(t *testing.T) {
 }
 
 func TestSend_NoRecipient(t *testing.T) {
-	n, _ := New(validConfig("http://127.0.0.1:1"))
+	n, _ := New(validConfig(), gnotify.WithHTTPDoer(&fakeDoer{}))
 	err := n.Send(context.Background(), gnotify.Message{})
 	if !errors.Is(err, gnotify.ErrNoRecipient) {
 		t.Fatalf("want ErrNoRecipient, got %v", err)
@@ -173,27 +193,22 @@ func TestPercentEncode(t *testing.T) {
 	}
 }
 
-func TestNewWithCore_UsesHTTPClient(t *testing.T) {
-	used := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"Code":"OK"}`))
-	}))
-	defer srv.Close()
-	hc := &http.Client{Transport: &flagTransport{used: &used}}
-	n, err := NewWithCore(validConfig(srv.URL), gnotify.WithHTTPClient(hc))
+func TestNewWithCore_UsesHTTPDoer(t *testing.T) {
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Code":"OK"}`)}}
+	n, err := NewWithCore(validConfig(), gnotify.WithHTTPDoer(d))
 	if err != nil {
 		t.Fatalf("NewWithCore: %v", err)
 	}
 	if err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if !used {
-		t.Fatal("injected HTTPClient not used")
+	if d.calls != 1 {
+		t.Fatalf("injected HTTPDoer not used: calls = %d", d.calls)
 	}
 }
 
 func TestRegistry_Aliyun(t *testing.T) {
-	n, err := gnotify.New("aliyun", gnotify.WithHTTPClient(&http.Client{}))
+	n, err := gnotify.New("aliyun", gnotify.WithHTTPDoer(&fakeDoer{}))
 	if err != nil {
 		t.Fatalf("gnotify.New(aliyun): %v", err)
 	}
@@ -203,13 +218,4 @@ func TestRegistry_Aliyun(t *testing.T) {
 	if err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}}); !errors.Is(err, gnotify.ErrInvalidConfig) {
 		t.Fatalf("want ErrInvalidConfig, got %v", err)
 	}
-}
-
-type flagTransport struct {
-	used *bool
-}
-
-func (f *flagTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	*f.used = true
-	return http.DefaultTransport.RoundTrip(r)
 }

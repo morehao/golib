@@ -10,19 +10,16 @@
 //   - Signature = HexHMAC(SecretSigning, StringToSign)，SecretSigning 由 SecretKey 逐层派生；
 //   - Authorization = "TC3-HMAC-SHA256 Credential=<id>/<scope>, SignedHeaders=<h>, Signature=<sig>"。
 //
-// HTTP 客户端复用 [gnotify.Config.HTTPClient] 与 Timeout。
+// HTTP 请求复用 [gnotify.EnsureHTTPDoer]（背后是 ghttp），超时/重试等由 gnotify.Config 统一负责。
 package tencent
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -102,18 +99,6 @@ func (c TencentConfig) endpoint() string {
 	return "https://" + apiHost
 }
 
-// option 是 tencent 渠道私有选项。
-type option func(*tencentOptions)
-
-type tencentOptions struct {
-	cfg TencentConfig
-}
-
-// WithConfig 注入腾讯云短信配置。
-func WithConfig(cfg TencentConfig) option {
-	return func(o *tencentOptions) { o.cfg = cfg }
-}
-
 // notifier 是 "tencent" 渠道的 [gnotify.Notifier] 实现。
 type notifier struct {
 	cfg  TencentConfig
@@ -123,29 +108,24 @@ type notifier struct {
 // newNotifier 是注册进 gnotify 的 Factory。统一 gnotify.New("tencent") 构造时不带凭据，
 // Send 返回 ErrInvalidConfig；携带配置请用 [New] 或 [NewWithCore]。
 func newNotifier(core gnotify.Config) (gnotify.Notifier, error) {
-	return &notifier{core: core}, nil
+	return gnotify.Guard(&notifier{core: core}, core), nil
 }
 
-// New 直接构造 tencent Notifier，携带短信配置。构造时校验必填字段。
-func New(cfg TencentConfig, opts ...option) (gnotify.Notifier, error) {
-	o := tencentOptions{cfg: cfg}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	if err := o.cfg.validate(); err != nil {
-		return nil, err
-	}
-	return &notifier{cfg: o.cfg}, nil
-}
-
-// NewWithCore 用 gnotify 全局选项（HTTPClient/Timeout/Logger）与 tencent 配置一起构造。
-func NewWithCore(cfg TencentConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+// New 直接构造 tencent Notifier，携带短信配置，并可通过 gnotify.Option 注入
+// HTTP 客户端（gnotify.WithHTTPDoer）、超时、日志、Disabled/DryRun 等通用能力。
+func New(cfg TencentConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+	core := gnotify.ApplyOptions(opts...)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	return &notifier{cfg: cfg, core: gnotify.ApplyOptions(opts...)}, nil
+	n := &notifier{cfg: cfg, core: core}
+	return gnotify.Guard(n, core), nil
+}
+
+// NewWithCore 与 [New] 等价：用 gnotify 全局选项（HTTPDoer/Timeout/Logger/Disabled/DryRun）
+// 与 tencent 配置一起构造，并统一用 gnotify.Guard 包裹开关。
+func NewWithCore(cfg TencentConfig, opts ...gnotify.Option) (gnotify.Notifier, error) {
+	return New(cfg, opts...)
 }
 
 // Channel 实现 [gnotify.Notifier]。
@@ -202,32 +182,33 @@ func (n *notifier) Send(ctx context.Context, msg gnotify.Message) error {
 	}
 
 	now := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.cfg.endpoint(), bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("%w: build request: %v", gnotify.ErrSendFailed, err)
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	headers := map[string]string{
+		"Content-Type":   contentType,
+		"X-TC-Action":    apiAction,
+		"X-TC-Version":   apiVersion,
+		"X-TC-Region":    n.cfg.region(),
+		"X-TC-Timestamp": timestamp,
 	}
-	req.Host = apiHost
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("X-TC-Action", apiAction)
-	req.Header.Set("X-TC-Version", apiVersion)
-	req.Header.Set("X-TC-Region", n.cfg.region())
-	req.Header.Set("X-TC-Timestamp", strconv.FormatInt(now.Unix(), 10))
+	headers["Authorization"] = tencentAuthorization(payload, timestamp, n.cfg.SecretID, n.cfg.SecretKey, apiService, now)
 
-	signTencent(req, payload, n.cfg.SecretID, n.cfg.SecretKey, apiService, now)
-
-	resp, err := n.httpClient().Do(req)
+	d := gnotify.EnsureHTTPDoer(n.core)
+	resp, err := d.Do(ctx, gnotify.HTTPRequest{
+		Method:  "POST",
+		URL:     n.cfg.endpoint(),
+		Body:    payload,
+		Headers: headers,
+	})
 	if err != nil {
 		return fmt.Errorf("%w: %v", gnotify.ErrSendFailed, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(data)))
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("%w: http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(resp.Body)))
 	}
 
 	var tr tencentResponse
-	if err := json.Unmarshal(data, &tr); err != nil {
+	if err := json.Unmarshal(resp.Body, &tr); err != nil {
 		return fmt.Errorf("%w: decode response: %v", gnotify.ErrSendFailed, err)
 	}
 	if e := tr.Response.Error; e != nil && e.Code != "" {
@@ -276,23 +257,10 @@ func templateParams(params map[string]string) []string {
 	return []string{}
 }
 
-// httpClient 返回生效的 HTTP 客户端：优先 core.HTTPClient，其次带超时的默认客户端。
-func (n *notifier) httpClient() *http.Client {
-	if n.core.HTTPClient != nil {
-		return n.core.HTTPClient
-	}
-	timeout := n.core.Timeout
-	if timeout <= 0 {
-		timeout = gnotify.DefaultTimeout
-	}
-	return &http.Client{Timeout: timeout}
-}
-
-// signTencent 计算 TC3-HMAC-SHA256 签名并写入 req.Header["Authorization"]。
+// tencentAuthorization 计算 TC3-HMAC-SHA256 签名并返回 Authorization 头值。
 //
 // 请求固定为 POST + "/" + 空 query + content-type/host 两个签名头。
-func signTencent(req *http.Request, payload []byte, secretID, secretKey, service string, now time.Time) {
-	timestamp := now.Unix()
+func tencentAuthorization(payload []byte, timestamp, secretID, secretKey, service string, now time.Time) string {
 	date := now.UTC().Format("2006-01-02")
 
 	// 1. 拼接规范请求串。
@@ -300,7 +268,7 @@ func signTencent(req *http.Request, payload []byte, secretID, secretKey, service
 	signedHeaders := "content-type;host"
 	hashedPayload := sha256Hex(payload)
 	canonicalRequest := strings.Join([]string{
-		http.MethodPost,
+		"POST",
 		"/",
 		"",
 		canonicalHeaders,
@@ -312,7 +280,7 @@ func signTencent(req *http.Request, payload []byte, secretID, secretKey, service
 	credentialScope := date + "/" + service + "/tc3_request"
 	stringToSign := strings.Join([]string{
 		signAlgo,
-		strconv.FormatInt(timestamp, 10),
+		timestamp,
 		credentialScope,
 		sha256Hex([]byte(canonicalRequest)),
 	}, "\n")
@@ -324,9 +292,8 @@ func signTencent(req *http.Request, payload []byte, secretID, secretKey, service
 	signature := hex.EncodeToString(hmacSHA256(secretSigning, stringToSign))
 
 	// 4. 拼接 Authorization。
-	authorization := signAlgo + " Credential=" + secretID + "/" + credentialScope +
+	return signAlgo + " Credential=" + secretID + "/" + credentialScope +
 		", SignedHeaders=" + signedHeaders + ", Signature=" + signature
-	req.Header.Set("Authorization", authorization)
 }
 
 // sha256Hex 返回 data 的 SHA-256 十六进制小写摘要。

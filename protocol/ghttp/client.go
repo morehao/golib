@@ -43,6 +43,13 @@ type Client struct {
 	Retryable       bool          // 网络错误是否重试
 	IdleConnTimeout time.Duration // 空闲连接超时回收时间
 
+	// LogLevel 控制 ghttp 自身「成功请求」留痕日志的级别，只区分 debug 与 info 两档，
+	// 零值（""）及其它取值一律按 glog.DebugLevel 处理。
+	//
+	// 语义：成功请求日志一定会打——设为 info 则走 Infow，否则走 Debugw。
+	// 默认 debug，避免通知类高频调用在 info 级刷屏。失败与重试固定走 Error/Warn，不受本字段影响。
+	LogLevel glog.Level
+
 	// MaxResponseBytes 是单次**缓冲进内存**的响应体字节上限：
 	//   正数 → 上限字节数；0（含未设置）或负数 → 不限制。
 	//
@@ -165,6 +172,7 @@ func NewClient(cfg *protocol.HttpClientConfig) *Client {
 		client.Timeout = cfg.Timeout
 		client.Retry = cfg.MaxRetry
 		client.MaxResponseBytes = cfg.MaxResponseBytes
+		client.LogLevel = glog.Level(cfg.LogLevel)
 		if cfg.MaxIdleConns > 0 {
 			client.MaxIdleConns = cfg.MaxIdleConns
 		}
@@ -615,7 +623,12 @@ func (c *Client) httpDo(ctx context.Context, method, path string, opt RequestOpt
 	co := applyCallOptions(opts...)
 	limit := c.effectiveLimit(co)
 
-	reqURL := c.Host + path
+	// path 为绝对 URL（带 scheme://）时直接使用，不再拼接 Host。
+	// 这样同一 Client 也能请求与 Host 不同源的地址（如通知渠道的多宿主 webhook）。
+	reqURL := path
+	if !isAbsoluteURL(path) {
+		reqURL = c.Host + path
+	}
 
 	payload, requestBody, err := c.buildPayloadAndURL(method, &reqURL, opt)
 	if err != nil {
@@ -654,17 +667,41 @@ func (c *Client) httpDo(ctx context.Context, method, path string, opt RequestOpt
 			gconstant.KeyAppRequestDurationMs, costTime,
 		)
 	} else {
-		glog.Infow(ctx, "http request success",
-			gconstant.KeyService, c.Service,
-			gconstant.KeyUrlFull, reqURL,
-			gconstant.KeyHttpRequestBody, reqData,
-			gconstant.KeyHttpResponseCode, result.HttpCode,
-			gconstant.KeyHttpResponseBody, string(respData),
-			gconstant.KeyAppRequestDurationMs, costTime,
-		)
+		// 成功请求的日志级别由 Client.LogLevel 决定（默认 debug）；无论配置与否都会打，只是级别不同。
+		// 成功请求属诊断细节，默认 debug 可避免通知类高频调用在 info 级刷屏。
+		c.logSuccess(ctx, reqURL, reqData, result.HttpCode, respData, costTime)
 	}
 
 	return result, err
+}
+
+// isAbsoluteURL 判断 path 是否为带 scheme 的绝对 URL（如 https://host/p）。
+// 用于在 httpDo 中决定是否拼接 Client.Host：绝对 URL 直接使用，便于多宿主/跨源请求。
+func isAbsoluteURL(path string) bool {
+	u, err := url.Parse(path)
+	return err == nil && u.IsAbs() && u.Host != ""
+}
+
+// logSuccess 按配置级别输出成功请求日志：先构造好 kvs，再据级别选择 glog 的对应方法。
+//
+// 只有 debug 与 info 两档（成功留痕的常见诉求）；info 档升为 Infow，其余（含零值/未配置）
+// 一律按 debug。日志一定会打，绝不为任何级别静默。失败走 Errorw（不受本级别影响）。
+func (c *Client) logSuccess(ctx context.Context, reqURL string, reqData []byte, code int, respData []byte, costTime int64) {
+	kvs := []any{
+		gconstant.KeyService, c.Service,
+		gconstant.KeyUrlFull, reqURL,
+		gconstant.KeyHttpRequestBody, reqData,
+		gconstant.KeyHttpResponseCode, code,
+		gconstant.KeyHttpResponseBody, string(respData),
+		gconstant.KeyAppRequestDurationMs, costTime,
+	}
+	const msg = "http request success"
+
+	if c.LogLevel == glog.InfoLevel {
+		glog.Infow(ctx, msg, kvs...)
+		return
+	}
+	glog.Debugw(ctx, msg, kvs...)
 }
 
 // buildPayloadAndURL 根据方法构造请求体并调整 URL：

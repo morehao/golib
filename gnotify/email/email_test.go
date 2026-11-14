@@ -21,6 +21,9 @@ type fakeSMTPServer struct {
 	mu   sync.Mutex
 	data []string // 每个 DATA 事务的原始内容
 	rcpt []string // 收到的所有 RCPT TO
+
+	// rejectRcpt 非空时，对此地址的 RCPT TO 返回 550，用于模拟单个收件人失败。
+	rejectRcpt string
 }
 
 func newFakeSMTPServer(t *testing.T) *fakeSMTPServer {
@@ -92,7 +95,12 @@ func (s *fakeSMTPServer) handle(conn net.Conn) {
 			}
 			s.mu.Lock()
 			s.rcpt = append(s.rcpt, addr)
+			reject := s.rejectRcpt != "" && addr == s.rejectRcpt
 			s.mu.Unlock()
+			if reject {
+				write("550 No such user")
+				continue
+			}
 			write("250 OK")
 		case strings.HasPrefix(cmd, "DATA"):
 			write("354 End data with <CR><LF>.<CR><LF>")
@@ -138,11 +146,11 @@ func (s *fakeSMTPServer) dialTo() dialFunc {
 func TestSend_PlainText_ChineseSubject(t *testing.T) {
 	srv := newFakeSMTPServer(t)
 
-	n, err := New(EmailConfig{
+	n, err := NewWithDialer(EmailConfig{
 		Host: "smtp.example.com",
 		Port: 587,
 		From: "from@example.com",
-	}, WithDialer(srv.dialTo()))
+	}, srv.dialTo())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -187,7 +195,7 @@ func TestSend_PlainText_ChineseSubject(t *testing.T) {
 
 func TestSend_HTML(t *testing.T) {
 	srv := newFakeSMTPServer(t)
-	n, err := New(EmailConfig{Host: "h", From: "f@x.com"}, WithDialer(srv.dialTo()))
+	n, err := NewWithDialer(EmailConfig{Host: "h", From: "f@x.com"}, srv.dialTo())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -214,10 +222,58 @@ func TestSend_HTML(t *testing.T) {
 
 func TestSend_NoRecipient(t *testing.T) {
 	srv := newFakeSMTPServer(t)
-	n, _ := New(EmailConfig{Host: "h", From: "f@x.com"}, WithDialer(srv.dialTo()))
+	n, _ := NewWithDialer(EmailConfig{Host: "h", From: "f@x.com"}, srv.dialTo())
 	err := n.Send(context.Background(), gnotify.Message{Body: "x"})
 	if !errors.Is(err, gnotify.ErrNoRecipient) {
 		t.Fatalf("want ErrNoRecipient, got %v", err)
+	}
+}
+
+// TestSend_MultiRecipient_ConcurrentAllSuccess 验证多收件人并发下全部送到且返回 nil。
+func TestSend_MultiRecipient_ConcurrentAllSuccess(t *testing.T) {
+	srv := newFakeSMTPServer(t)
+	n, err := NewWithDialer(EmailConfig{Host: "h", From: "f@x.com"}, srv.dialTo())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// 收件人数量超过 DefaultMailConcurrency，确保并发限流路径被覆盖。
+	to := []string{"a@x.com", "b@x.com", "c@x.com", "d@x.com", "e@x.com", "f@x.com"}
+	if err := n.Send(context.Background(), gnotify.Message{To: to, Subject: "s", Body: "b"}); err != nil {
+		t.Fatalf("Send: want nil, got %v", err)
+	}
+
+	data, rcpt := srv.snapshot()
+	if len(data) != len(to) {
+		t.Fatalf("want %d messages, got %d", len(to), len(data))
+	}
+	if len(rcpt) != len(to) {
+		t.Fatalf("want %d rcpt, got %d: %v", len(to), len(rcpt), rcpt)
+	}
+}
+
+// TestSend_MultiRecipient_PartialFailure 验证某收件人失败时其它收件人仍成功送达，
+// 且返回错误可 errors.Is(ErrSendFailed)。
+func TestSend_MultiRecipient_PartialFailure(t *testing.T) {
+	srv := newFakeSMTPServer(t)
+	srv.rejectRcpt = "bad@x.com"
+
+	n, err := NewWithDialer(EmailConfig{Host: "h", From: "f@x.com"}, srv.dialTo())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = n.Send(context.Background(), gnotify.Message{
+		To:   []string{"a@x.com", "bad@x.com", "c@x.com"},
+		Body: "x",
+	})
+	if !errors.Is(err, gnotify.ErrSendFailed) {
+		t.Fatalf("want ErrSendFailed, got %v", err)
+	}
+	// 两个好收件人的邮件应已成功投递；坏收件人不会进入 DATA。
+	data, _ := srv.snapshot()
+	if len(data) != 2 {
+		t.Fatalf("want 2 successful deliveries, got %d", len(data))
 	}
 }
 
@@ -232,10 +288,10 @@ func TestNew_InvalidConfig(t *testing.T) {
 
 func TestSend_FailureAggregation(t *testing.T) {
 	// dialer 直接失败，验证错误被 ErrSendFailed 包装且逐收件人聚合。
-	n, _ := New(EmailConfig{Host: "h", From: "f@x.com"},
-		WithDialer(func(network, addr string) (net.Conn, error) {
+	n, _ := NewWithDialer(EmailConfig{Host: "h", From: "f@x.com"},
+		func(network, addr string) (net.Conn, error) {
 			return nil, errors.New("boom")
-		}))
+		})
 	err := n.Send(context.Background(), gnotify.Message{
 		To:   []string{"a@x.com", "b@x.com"},
 		Body: "x",
@@ -284,4 +340,24 @@ func extractHeader(raw, key string) string {
 		}
 	}
 	return ""
+}
+
+// TestNew_DisabledSkipsSMTP 验证 email.New 也受 gnotify 全局 Disabled 开关控制：
+// Disabled 时 Send 直接返回 nil，且不会真正拨号（dialer 不被调用）。
+func TestNew_DisabledSkipsSMTP(t *testing.T) {
+	dialed := false
+	dialer := func(network, addr string) (net.Conn, error) {
+		dialed = true
+		return nil, errors.New("should not dial")
+	}
+	n, err := NewWithDialer(EmailConfig{Host: "h", From: "f@x.com"}, dialer, gnotify.WithDisabled(true))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := n.Send(context.Background(), gnotify.Message{To: []string{"a@x.com"}, Body: "x"}); err != nil {
+		t.Fatalf("disabled send: %v", err)
+	}
+	if dialed {
+		t.Fatal("Disabled 下不应拨号")
+	}
 }
