@@ -57,7 +57,7 @@ func handlePresignedPut(fs *filestore.FileStore) gin.HandlerFunc {
 
 		ctx := c.Request.Context()
 		switch payload.Op {
-		case filestore.PresignOpPut:
+		case storage.PresignOpPut:
 			contentType := c.GetHeader("Content-Type")
 			if _, putErr := fs.HandlePresignedPut(ctx, bucket, key, c.Request.Body, contentType); putErr != nil {
 				writeStorageError(c, putErr)
@@ -65,7 +65,7 @@ func handlePresignedPut(fs *filestore.FileStore) gin.HandlerFunc {
 			}
 			gincontext.Success(c, presignedPutResponse{URI: fs.PathBuilder().Build(bucket, key).URI()})
 
-		case filestore.PresignOpPutPart:
+		case storage.PresignOpPutPart:
 			part, partErr := fs.HandlePresignedUploadPart(ctx, bucket, key, payload.UploadID, int32(payload.PartNumber), c.Request.Body)
 			if partErr != nil {
 				writeStorageError(c, partErr)
@@ -108,7 +108,7 @@ func handlePresignedGet(fs *filestore.FileStore) gin.HandlerFunc {
 			c.String(http.StatusForbidden, presignErrorMessage(err))
 			return
 		}
-		if payload.Op != filestore.PresignOpGet {
+		if payload.Op != storage.PresignOpGet {
 			c.String(http.StatusForbidden, "operation mismatch")
 			return
 		}
@@ -141,11 +141,11 @@ func handlePresignedGet(fs *filestore.FileStore) gin.HandlerFunc {
 // presignErrorMessage 把 token 校验失败统一映射为不泄露内部细节的对外文案。
 func presignErrorMessage(err error) string {
 	switch {
-	case errors.Is(err, filestore.ErrPresignExpired):
+	case errors.Is(err, storage.ErrPresignExpired):
 		return "presigned url expired"
-	case errors.Is(err, filestore.ErrPresignOpMismatch):
+	case errors.Is(err, storage.ErrPresignOpMismatch):
 		return "operation mismatch"
-	case errors.Is(err, filestore.ErrPresignKeyMismatch):
+	case errors.Is(err, storage.ErrPresignKeyMismatch):
 		return "key mismatch"
 	default:
 		return "invalid presigned token"

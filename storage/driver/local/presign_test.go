@@ -71,7 +71,7 @@ func TestVerifyPresignedToken_EmptySecret(t *testing.T) {
 func TestVerifyPresignedToken_InvalidTokenFormat(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost")
 	err := d.VerifyPresignedToken("bucket", "key", presignOpGet, "invalid", "9999999999")
-	if !errors.Is(err, ErrPresignInvalidToken) {
+	if !errors.Is(err, storage.ErrPresignInvalidToken) {
 		t.Fatalf("expected ErrPresignInvalidToken, got %v", err)
 	}
 }
@@ -79,7 +79,7 @@ func TestVerifyPresignedToken_InvalidTokenFormat(t *testing.T) {
 func TestVerifyPresignedToken_InvalidBase64(t *testing.T) {
 	d := newPresignDriver("secret", "http://localhost")
 	err := d.VerifyPresignedToken("bucket", "key", presignOpGet, "!!!not-base64.sig", "9999999999")
-	if !errors.Is(err, ErrPresignInvalidToken) {
+	if !errors.Is(err, storage.ErrPresignInvalidToken) {
 		t.Fatalf("expected ErrPresignInvalidToken, got %v", err)
 	}
 }
@@ -101,7 +101,7 @@ func TestVerifyPresignedToken_KeyMismatch(t *testing.T) {
 	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key2", presignOpGet, q.Get("token"), q.Get("expires"))
-	if !errors.Is(err, ErrPresignKeyMismatch) {
+	if !errors.Is(err, storage.ErrPresignKeyMismatch) {
 		t.Fatalf("expected ErrPresignKeyMismatch, got %v", err)
 	}
 }
@@ -112,7 +112,7 @@ func TestVerifyPresignedToken_OpMismatch(t *testing.T) {
 	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key", presignOpPut, q.Get("token"), q.Get("expires"))
-	if !errors.Is(err, ErrPresignOpMismatch) {
+	if !errors.Is(err, storage.ErrPresignOpMismatch) {
 		t.Fatalf("expected ErrPresignOpMismatch, got %v", err)
 	}
 }
@@ -125,7 +125,7 @@ func TestVerifyPresignedToken_BadSignature(t *testing.T) {
 
 	wrongSecretDriver := newPresignDriver("wrongsecret", "http://localhost")
 	err := wrongSecretDriver.VerifyPresignedToken("bucket", "key", presignOpGet, q.Get("token"), q.Get("expires"))
-	if !errors.Is(err, ErrPresignInvalidToken) {
+	if !errors.Is(err, storage.ErrPresignInvalidToken) {
 		t.Fatalf("expected ErrPresignInvalidToken, got %v", err)
 	}
 }
@@ -144,7 +144,7 @@ func TestVerifyPresignedToken_Expired(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = d.VerifyPresignedToken("bucket", "key", presignOpGet, token, strconv.FormatInt(past, 10))
-	if !errors.Is(err, ErrPresignExpired) {
+	if !errors.Is(err, storage.ErrPresignExpired) {
 		t.Fatalf("expected ErrPresignExpired, got %v", err)
 	}
 }
@@ -184,7 +184,7 @@ func TestVerifyPresignedToken_InvalidExpiresStr(t *testing.T) {
 	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key", presignOpGet, q.Get("token"), "not-a-number")
-	if !errors.Is(err, ErrPresignInvalidToken) {
+	if !errors.Is(err, storage.ErrPresignInvalidToken) {
 		t.Fatalf("expected ErrPresignInvalidToken, got %v", err)
 	}
 }
@@ -195,7 +195,7 @@ func TestVerifyPresignedToken_ExpiresMismatch(t *testing.T) {
 	parsed, _ := url.Parse(rawURL.URL)
 	q := parsed.Query()
 	err := d.VerifyPresignedToken("bucket", "key", presignOpGet, q.Get("token"), "9999999999")
-	if !errors.Is(err, ErrPresignInvalidToken) {
+	if !errors.Is(err, storage.ErrPresignInvalidToken) {
 		t.Fatalf("expected ErrPresignInvalidToken, got %v", err)
 	}
 }
@@ -225,7 +225,7 @@ func TestPresignUploadPartObject_BindsSessionAndPart(t *testing.T) {
 		t.Fatalf("expected valid part token, got %v", err)
 	}
 	// 整体 put 的令牌语义不适用于分片 token
-	if err := d.VerifyPresignedToken("bucket", "k.bin", presignOpPut, q.Get("token"), q.Get("expires")); !errors.Is(err, ErrPresignOpMismatch) {
+	if err := d.VerifyPresignedToken("bucket", "k.bin", presignOpPut, q.Get("token"), q.Get("expires")); !errors.Is(err, storage.ErrPresignOpMismatch) {
 		t.Fatalf("expected ErrPresignOpMismatch, got %v", err)
 	}
 

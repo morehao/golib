@@ -7,50 +7,22 @@ import (
 	"github.com/morehao/golib/storage"
 )
 
-// 预签名 token 的协议与编解码由 storage 包统一实现（storage/presign_token.go），
-// local 驱动生成、filestore 消费，两侧共用同一份代码，不再各自维护一套。
-const (
-	PresignOpGet     = storage.PresignOpGet
-	PresignOpPut     = storage.PresignOpPut
-	PresignOpPutPart = storage.PresignOpPutPart
-)
+// 预签名 token 的协议、编解码、key/op 校验与错误定义均在 storage 包一处实现
+// （storage/presign_token.go / storage/errors.go）。本文件只保留 FileStore 的
+// 预签名端点处理（HandlePresigned*）与 token 消费入口的薄转发；
+// 调用方做校验失败判断时直接用 errors.Is(err, storage.ErrPresignExpired) 等 storage 错误。
 
-// PresignPayload 校验通过后的 token 载荷（含 Key/Exp 等完整字段）。
-type PresignPayload = storage.PresignTokenPayload
-
-// 校验错误统一别名到 storage 包，errors.Is 在跨包场景同样成立。
-var (
-	ErrPresignExpired      = storage.ErrPresignExpired
-	ErrPresignOpMismatch   = storage.ErrPresignOpMismatch
-	ErrPresignKeyMismatch  = storage.ErrPresignKeyMismatch
-	ErrPresignInvalidToken = storage.ErrPresignInvalidToken
-)
-
-// VerifyPresignedToken 验证预签名 URL 中的 token 是否合法，并要求 op 与调用方一致。
-// signSecret 必须与生成预签名 URL 时使用的密钥一致。
-func VerifyPresignedToken(signSecret, bucket, key, op, tokenStr, expiresStr string) error {
-	payload, err := ParsePresignedToken(signSecret, bucket, key, tokenStr, expiresStr)
-	if err != nil {
-		return err
-	}
-	if payload.Op != op {
-		return ErrPresignOpMismatch
-	}
-	return nil
+// VerifyPresignedToken 校验预签名 URL 中的 token 是否合法且 op 与端点期望一致，
+// 返回 token 载荷。薄转发到 storage.VerifyPresignToken。
+func VerifyPresignedToken(signSecret, bucket, key, op, tokenStr, expiresStr string) (*storage.PresignTokenPayload, error) {
+	return storage.VerifyPresignToken(signSecret, bucket, key, op, tokenStr, expiresStr)
 }
 
-// ParsePresignedToken 校验 token 的签名、有效期与目标 key，并返回其载荷；
-// op 由调用方按端点语义自行判定（同一个 URL 端点可承载整体 PUT 与分片 PUT）。
-func ParsePresignedToken(signSecret, bucket, key, tokenStr, expiresStr string) (*PresignPayload, error) {
-	payload, err := storage.DecodePresignToken(signSecret, tokenStr, expiresStr)
-	if err != nil {
-		return nil, err
-	}
-	// token 与 bucket/key 绑定：换 key 或换 bucket 都必须拒绝
-	if payload.Key != storage.PresignTokenKey(bucket, key) {
-		return nil, ErrPresignKeyMismatch
-	}
-	return payload, nil
+// ParsePresignedToken 校验 token 的签名、有效期与 key 绑定并返回其载荷；
+// op 由调用方按端点语义自行判定（同一 URL 端点可承载整体 PUT 与分片 PUT）。
+// 薄转发到 storage.VerifyPresignToken，op 维度传空表示不校验。
+func ParsePresignedToken(signSecret, bucket, key, tokenStr, expiresStr string) (*storage.PresignTokenPayload, error) {
+	return storage.VerifyPresignToken(signSecret, bucket, key, "", tokenStr, expiresStr)
 }
 
 // HandlePresignedPut 处理预签名 PUT 请求，将请求 body 写入 storage。

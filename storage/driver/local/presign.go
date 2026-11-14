@@ -97,26 +97,11 @@ func (d *driver) generatePresignedURL(bucket, key, op, uploadID string, partNumb
 	}, nil
 }
 
-// 预签名校验错误统一别名到 storage 包的同名错误，保证 errors.Is 跨包可用。
-var (
-	ErrPresignExpired      = storage.ErrPresignExpired
-	ErrPresignOpMismatch   = storage.ErrPresignOpMismatch
-	ErrPresignKeyMismatch  = storage.ErrPresignKeyMismatch
-	ErrPresignInvalidToken = storage.ErrPresignInvalidToken
-)
-
 // VerifyPresignedToken 校验 token 是否合法且 op 与端点语义一致。
+// key 绑定与 op 校验统一由 storage.VerifyPresignToken 完成（错误体也定义在 storage），
+// 本驱动只做薄转发；错误判断用 errors.Is(err, storage.ErrPresignXxx)。
 // 仅在 local 驱动的测试与自定义 HTTP 端点中使用，业务侧统一走 filestore。
 func (d *driver) VerifyPresignedToken(bucket, key, op, tokenStr, expiresStr string) error {
-	payload, err := storage.DecodePresignToken(d.signSecret, tokenStr, expiresStr)
-	if err != nil {
-		return err
-	}
-	if payload.Key != storage.PresignTokenKey(bucket, key) {
-		return ErrPresignKeyMismatch
-	}
-	if payload.Op != op {
-		return ErrPresignOpMismatch
-	}
-	return nil
+	_, err := storage.VerifyPresignToken(d.signSecret, bucket, key, op, tokenStr, expiresStr)
+	return err
 }
