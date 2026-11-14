@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/morehao/golib/biz/gcontext"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/gtest/httptest"
 )
@@ -55,10 +56,10 @@ func TestNewContext_Options(t *testing.T) {
 	}
 
 	// user/company 存于 gin.Context。
-	if v, ok := ctx.Get("gtest.user.id"); !ok || v != int64(42) {
+	if v, ok := ctx.Get(gcontext.KeyUserID); !ok || v != int64(42) {
 		t.Errorf("user id = %v (ok=%v), want 42", v, ok)
 	}
-	if v, ok := ctx.Get("gtest.company.id"); !ok || v != int64(7) {
+	if v, ok := ctx.Get(gcontext.KeyOrgID); !ok || v != int64(7) {
 		t.Errorf("company id = %v (ok=%v), want 7", v, ok)
 	}
 }

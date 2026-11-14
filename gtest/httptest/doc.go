@@ -13,17 +13,9 @@ import (
 	"net/url"
 
 	"github.com/gin-gonic/gin"
+	"github.com/morehao/golib/biz/gcontext"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/gutil"
-)
-
-// gconstant 中未定义 KeyUserID / KeyCompanyID 常量，这里使用与日志字段风格一致的
-// 常量字符串承载 gin.Context 中的用户/公司标识，避免魔法字符串散落各处。
-const (
-	// ctxKeyUserID 是 gin.Context 中存放当前用户 ID 的 key。
-	ctxKeyUserID = "gtest.user.id"
-	// ctxKeyCompanyID 是 gin.Context 中存放当前公司 ID 的 key。
-	ctxKeyCompanyID = "gtest.company.id"
 )
 
 // Option 调整 NewContext 构造的 gin.Context。
@@ -62,17 +54,17 @@ func WithContext(ctx context.Context) Option {
 	}
 }
 
-// WithUserID 在 gin.Context 中设置当前用户 ID。
+// WithUserID 在 gin.Context 中设置当前用户 ID（键为 gcontext.KeyUserID，与生产中间件一致）。
 func WithUserID(id int64) Option {
 	return func(gc *gin.Context) {
-		gc.Set(ctxKeyUserID, id)
+		gc.Set(gcontext.KeyUserID, id)
 	}
 }
 
-// WithCompanyID 在 gin.Context 中设置当前公司 ID。
+// WithCompanyID 在 gin.Context 中设置当前公司（组织）ID（键为 gcontext.KeyOrgID）。
 func WithCompanyID(id int64) Option {
 	return func(gc *gin.Context) {
-		gc.Set(ctxKeyCompanyID, id)
+		gc.Set(gcontext.KeyOrgID, id)
 	}
 }
 
