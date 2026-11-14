@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.35.2] - 2026-11-15
+
+### Features
+
+- distlock 主从选举 + gutil 工具补全（shell/net/zip/随机） (#151)
+
+**Full Changelog**: https://github.com/morehao/golib/compare/v1.35.1...v1.35.2
+
 ## [Unreleased]
 
 ### Bug Fixes
