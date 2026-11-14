@@ -29,6 +29,7 @@ var readmeCases = []struct {
 		{"gcron", MySQL}, {"gcron", Postgres},
 		{"gasync", MySQL}, {"gasync", Postgres},
 	}},
+	{"gprompt/README.md", []section{{"gprompt", MySQL}, {"gprompt", Postgres}}},
 }
 
 // TestReadmeDDLMatchesModels 保证 README 里的 DDL 与各包 gorm tag 不漂移。

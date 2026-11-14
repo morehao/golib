@@ -16,6 +16,7 @@ import (
 
 	"github.com/morehao/golib/dict"
 	"github.com/morehao/golib/filestore"
+	"github.com/morehao/golib/gprompt"
 	"github.com/morehao/golib/gsetting"
 	"github.com/morehao/golib/task/gasync"
 	"github.com/morehao/golib/task/gcron"
@@ -52,6 +53,7 @@ var Groups = []Group{
 	{"filestore", filestore.SchemaModels()},
 	{"gcron", gcron.SchemaModels()},
 	{"gasync", gasync.SchemaModels()},
+	{"gprompt", gprompt.SchemaModels()},
 }
 
 // GroupNames 返回所有组件名（按 Groups 顺序）。
