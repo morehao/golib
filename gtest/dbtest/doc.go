@@ -38,11 +38,11 @@ func WithReuse() Option { return func(c *config) { c.reuse = true } }
 
 // New 打开一个"每用例独占"的库：不存在则建，t.Cleanup 时整库删除；连不上 t.Skip。
 func New(t testing.TB, d Dialect, name string, opts ...Option) *gorm.DB {
-	panic("dbtest: New not implemented")
+	return newDB(t, d, name, opts...)
 }
 
 // Migrate 对给定模型执行 AutoMigrate。
-func Migrate(t testing.TB, db *gorm.DB, models ...any) { panic("dbtest: Migrate not implemented") }
+func Migrate(t testing.TB, db *gorm.DB, models ...any) { migrate(t, db, models...) }
 
 // DropAll 删除给定模型对应的表。
-func DropAll(t testing.TB, db *gorm.DB, models ...any) { panic("dbtest: DropAll not implemented") }
+func DropAll(t testing.TB, db *gorm.DB, models ...any) { dropAll(t, db, models...) }
