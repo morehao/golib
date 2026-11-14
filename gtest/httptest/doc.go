@@ -6,50 +6,171 @@
 package httptest
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
-	stdhttptest "net/http/httptest"
-	"testing"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
+	"github.com/morehao/golib/gconstant"
+	"github.com/morehao/golib/gutil"
+)
+
+// gconstant 中未定义 KeyUserID / KeyCompanyID 常量，这里使用与日志字段风格一致的
+// 常量字符串承载 gin.Context 中的用户/公司标识，避免魔法字符串散落各处。
+const (
+	// ctxKeyUserID 是 gin.Context 中存放当前用户 ID 的 key。
+	ctxKeyUserID = "gtest.user.id"
+	// ctxKeyCompanyID 是 gin.Context 中存放当前公司 ID 的 key。
+	ctxKeyCompanyID = "gtest.company.id"
 )
 
 // Option 调整 NewContext 构造的 gin.Context。
 type Option func(*gin.Context)
 
 // NewContext 构造一个可用于 handler/service 单测的 *gin.Context。
-func NewContext(opts ...Option) *gin.Context { panic("httptest: NewContext not implemented") }
+//
+// 默认 Request 带空 URL 与空 Header，并注入 context.Background()；应用完 opts 后，
+// 若未显式设置 gconstant.KeyAppRequestID，则用 gutil.GenUUID() 补一个请求 ID。
+func NewContext(opts ...Option) *gin.Context {
+	ctx := &gin.Context{
+		Request: &http.Request{
+			URL:    &url.URL{},
+			Header: http.Header{},
+		},
+	}
+	ctx.Request = ctx.Request.WithContext(context.Background())
 
-func WithContext(ctx context.Context) Option     { panic("httptest: not implemented") }
-func WithUserID(id int64) Option                 { panic("httptest: not implemented") }
-func WithCompanyID(id int64) Option              { panic("httptest: not implemented") }
-func WithRequestID(id string) Option             { panic("httptest: not implemented") }
-func WithMethod(m string) Option                 { panic("httptest: not implemented") }
-func WithURL(u string) Option                    { panic("httptest: not implemented") }
-func WithQueryParams(p map[string]string) Option { panic("httptest: not implemented") }
-func WithHeader(k, v string) Option              { panic("httptest: not implemented") }
-func WithJSON() Option                           { panic("httptest: not implemented") }
-func WithFormData() Option                       { panic("httptest: not implemented") }
-func WithMultipartFormData() Option              { panic("httptest: not implemented") }
-func WithBearerToken(token string) Option        { panic("httptest: not implemented") }
-func WithClientIP(ip string) Option              { panic("httptest: not implemented") }
-func WithBody(b []byte) Option                   { panic("httptest: not implemented") }
-func WithKeyValue(k string, v any) Option        { panic("httptest: not implemented") }
+	for _, opt := range opts {
+		opt(ctx)
+	}
 
-// RequestOption 调整 NewRequest。
-type RequestOption func(*http.Request)
+	if _, exists := ctx.Get(gconstant.KeyAppRequestID); !exists {
+		ctx.Set(gconstant.KeyAppRequestID, gutil.GenUUID())
+	}
 
-// NewRequest 构造测试请求。
-func NewRequest(method, path string, opts ...RequestOption) *http.Request {
-	panic("httptest: NewRequest not implemented")
+	return ctx
 }
 
-// Do 将 req 交给 h 处理，返回 recorder。
-func Do(h http.Handler, req *http.Request) *stdhttptest.ResponseRecorder {
-	panic("httptest: Do not implemented")
+// WithContext 用给定 ctx 替换请求上下文（nil 时忽略）。
+func WithContext(ctx context.Context) Option {
+	return func(gc *gin.Context) {
+		if ctx != nil {
+			gc.Request = gc.Request.WithContext(ctx)
+		}
+	}
 }
 
-// StartServer 在随机空闲端口启动真实引擎，返回 baseURL 与关闭函数。
-func StartServer(t testing.TB, engine *gin.Engine) (baseURL string, shutdown func()) {
-	panic("httptest: StartServer not implemented")
+// WithUserID 在 gin.Context 中设置当前用户 ID。
+func WithUserID(id int64) Option {
+	return func(gc *gin.Context) {
+		gc.Set(ctxKeyUserID, id)
+	}
+}
+
+// WithCompanyID 在 gin.Context 中设置当前公司 ID。
+func WithCompanyID(id int64) Option {
+	return func(gc *gin.Context) {
+		gc.Set(ctxKeyCompanyID, id)
+	}
+}
+
+// WithRequestID 设置请求 ID（gconstant.KeyAppRequestID）。
+func WithRequestID(id string) Option {
+	return func(gc *gin.Context) {
+		gc.Set(gconstant.KeyAppRequestID, id)
+	}
+}
+
+// WithMethod 设置请求方法。
+func WithMethod(m string) Option {
+	return func(gc *gin.Context) {
+		gc.Request.Method = m
+	}
+}
+
+// WithURL 设置请求 URL（按字符串解析为 *url.URL）。
+func WithURL(u string) Option {
+	return func(gc *gin.Context) {
+		parsed, err := url.Parse(u)
+		if err != nil {
+			// 解析失败时退化为仅设置 Path，避免测试直接崩溃。
+			if gc.Request.URL == nil {
+				gc.Request.URL = &url.URL{}
+			}
+			gc.Request.URL.Path = u
+			return
+		}
+		gc.Request.URL = parsed
+	}
+}
+
+// WithQueryParams 把参数写入请求 URL 的 query。
+func WithQueryParams(p map[string]string) Option {
+	return func(gc *gin.Context) {
+		if gc.Request.URL == nil {
+			gc.Request.URL = &url.URL{}
+		}
+		q := gc.Request.URL.Query()
+		for k, v := range p {
+			q.Set(k, v)
+		}
+		gc.Request.URL.RawQuery = q.Encode()
+	}
+}
+
+// WithHeader 设置一个请求头。
+func WithHeader(k, v string) Option {
+	return func(gc *gin.Context) {
+		if gc.Request.Header == nil {
+			gc.Request.Header = http.Header{}
+		}
+		gc.Request.Header.Set(k, v)
+	}
+}
+
+// WithJSON 设置 Content-Type 为 application/json。
+func WithJSON() Option {
+	return WithHeader("Content-Type", "application/json")
+}
+
+// WithFormData 设置 Content-Type 为 application/x-www-form-urlencoded。
+func WithFormData() Option {
+	return WithHeader("Content-Type", "application/x-www-form-urlencoded")
+}
+
+// WithMultipartFormData 设置 Content-Type 为 multipart/form-data。
+func WithMultipartFormData() Option {
+	return WithHeader("Content-Type", "multipart/form-data")
+}
+
+// WithBearerToken 设置 Authorization: Bearer <token>。
+func WithBearerToken(token string) Option {
+	return WithHeader("Authorization", "Bearer "+token)
+}
+
+// WithClientIP 设置客户端 IP：写入 RemoteAddr 与 X-Forwarded-For。
+func WithClientIP(ip string) Option {
+	return func(gc *gin.Context) {
+		gc.Request.RemoteAddr = ip
+		if gc.Request.Header == nil {
+			gc.Request.Header = http.Header{}
+		}
+		gc.Request.Header.Set("X-Forwarded-For", ip)
+	}
+}
+
+// WithBody 设置请求体（用 io.NopCloser 包裹）。
+func WithBody(b []byte) Option {
+	return func(gc *gin.Context) {
+		gc.Request.Body = io.NopCloser(bytes.NewReader(b))
+	}
+}
+
+// WithKeyValue 用 gc.Set 在 gin.Context 中存放任意键值。
+func WithKeyValue(k string, v any) Option {
+	return func(gc *gin.Context) {
+		gc.Set(k, v)
+	}
 }
