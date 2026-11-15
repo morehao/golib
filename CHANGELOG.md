@@ -42,6 +42,15 @@
   字段差异，且需改公开语义以被 gocli 消费，成本 ≥ 自研）；详见
   `.dsh/docs/notes/2026-11-15-codegen-poc-result.md`。
 
+### 升级 Go 版本
+
+- **go 指令 `1.26.1` → `1.27.0`**（本机 go1.27.4）。
+- **`gutil.GenUUID`** 改用 Go 1.27 标准库 `uuid.NewV7()`（RFC 9562），不再依赖
+  `github.com/google/uuid`（该依赖仍被 frozen 的 `storage/driver/local` 使用故保留）。
+- 对 `gutil`/`gcache`/`gnotify` 应用 go1.25+ 标准库现代化（`go fix` modernizers）：
+  `for i := range n`、`atomic.Int32`、`wg.Go`、`min()`、`new(x)`、`reflect.Pointer` 等，
+  零行为变化。范围严格限定在本次改造涉及的包，未触碰 frozen 的 storage/protocol 等。
+
 ## [v1.36.0] - 2026-11-15
 
 ### Breaking Changes
