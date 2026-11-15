@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/morehao/golib/storage"
 )
 
@@ -73,7 +73,7 @@ func (m *multipartStore) sessionPath(uploadID string) string {
 func partFileName(partNum int) string { return fmt.Sprintf("part-%04d", partNum) }
 
 func (m *multipartStore) Create(bucket, key, contentType string, metadata map[string]string) (string, error) {
-	id := uuid.NewString()
+	id := uuid.New().String()
 	if err := os.MkdirAll(m.uploadDir(id), 0o755); err != nil {
 		return "", err
 	}
