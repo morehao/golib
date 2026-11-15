@@ -55,7 +55,7 @@ source .env && go test ./codegen/...
 
 ## Built-in tables: migration convention
 
-`gsetting`, `dict`, `filestore`, `task/gcron` and `task/gasync` own their own tables and follow one shared convention:
+`gsetting`, `dict`, `filestore`, `task/gcron`, `task/gasync` and `task/gjob` (`core_job` / `core_job_run`) own their own tables and follow one shared convention:
 
 1. **Migrate by default.** Constructors (`New` / `Init` / `NewServer`) run an idempotent `AutoMigrate`, so a caller
    needs no extra step. Note that GORM's generated DDL has no `IF NOT EXISTS`, so replicas starting cold at the
@@ -64,8 +64,8 @@ source .env && go test ./codegen/...
 2. **`WithoutAutoMigrate()` when you own the DDL.** The switch is a constructor option (functional options),
    so a shared database — or a runtime account without DDL privileges — can turn the implicit migration
    off and let the release pipeline run `dict.Migrate(db)` / `gsetting.Migrate(db)` / `filestore.Migrate(db)` /
-   `gcron.AutoMigrate(db)` / `gasync.AutoMigrate(db)` with a dedicated account. The explicit entry always runs,
-   regardless of the switch.
+   `gcron.AutoMigrate(db)` / `gasync.AutoMigrate(db)` / `gjob.AutoMigrate(db)` with a dedicated account. The explicit
+   entry always runs, regardless of the switch.
 3. **Every package README ships complete MySQL and PostgreSQL DDL**, generated from the gorm tags by
    `internal/ddlgen` and asserted statement-by-statement in tests, so it cannot drift from the models.
 

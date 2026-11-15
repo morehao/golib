@@ -20,6 +20,7 @@ import (
 	"github.com/morehao/golib/gsetting"
 	"github.com/morehao/golib/task/gasync"
 	"github.com/morehao/golib/task/gcron"
+	gjobmanager "github.com/morehao/golib/task/gjob/manager"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -53,6 +54,7 @@ var Groups = []Group{
 	{"filestore", filestore.SchemaModels()},
 	{"gcron", gcron.SchemaModels()},
 	{"gasync", gasync.SchemaModels()},
+	{"gjob", gjobmanager.SchemaModels()},
 	{"gprompt", gprompt.SchemaModels()},
 }
 
