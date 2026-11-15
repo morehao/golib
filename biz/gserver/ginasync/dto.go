@@ -2,80 +2,104 @@ package ginasync
 
 // --- uri ---
 
-// typeURI 任务类型路径参数 :type。
-type typeURI struct {
-	Type string `uri:"type" binding:"required"`
-}
-
-// runIDURI 运行记录路径参数 :id。
-type runIDURI struct {
+// jobIDURI 任务 ID 路径参数 :id。
+type jobIDURI struct {
 	ID string `uri:"id" binding:"required"`
 }
 
 // --- 请求 ---
 
-type setStatusRequest struct {
-	Status string `json:"status" binding:"required"` // enabled/disabled
-}
-
-type listTasksRequest struct {
+// listJobsRequest 任务分页列表查询参数。
+type listJobsRequest struct {
+	Type     string `form:"type"`
 	Status   string `form:"status"`
+	BizType  string `form:"biz_type"`
+	BizID    string `form:"biz_id"`
 	Page     int    `form:"page"`
 	PageSize int    `form:"page_size"`
 }
 
+// listRunsRequest 尝试记录分页列表查询参数。
 type listRunsRequest struct {
-	TaskType string `form:"task_type"`
-	Queue    string `form:"queue"`
-	Status   string `form:"status"`
-	Page     int    `form:"page"`
-	PageSize int    `form:"page_size"`
-}
-
-type markStaleRequest struct {
-	CutoffSeconds int64 `json:"cutoff_seconds" binding:"required,gt=0"`
-}
-
-type cleanupRunsRequest struct {
-	BeforeUnix int64 `json:"before_unix" binding:"required,gt=0"`
+	Status     string `form:"status"`
+	Failure    string `form:"failure"`
+	Generation int    `form:"generation"`
+	Page       int    `form:"page"`
+	PageSize   int    `form:"page_size"`
 }
 
 // --- 响应 ---
 
-type taskResponse struct {
+// jobResponse 任务详情/列表项。
+type jobResponse struct {
 	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Type        string `json:"type"`
 	Status      string `json:"status"`
+	Priority    int    `json:"priority"`
+	BizType     string `json:"biz_type"`
+	BizID       string `json:"biz_id"`
+	UniqKey     string `json:"uniq_key"`
+	Generation  int    `json:"generation"`
+	Attempt     int    `json:"attempt"`
+	MaxAttempts int    `json:"max_attempts"`
+	TimeoutMS   int64  `json:"timeout_ms"`
+	NextRunAt   int64  `json:"next_run_at"`
+	LeaseUntil  *int64 `json:"lease_until"`
+	WorkerID    string `json:"worker_id"`
+	StartedAt   *int64 `json:"started_at"`
+	FinishedAt  *int64 `json:"finished_at"`
+	DurationMS  int64  `json:"duration_ms"`
+	LastError   string `json:"last_error"`
+	Result      []byte `json:"result"`
+	RequestID   string `json:"request_id"`
+	TraceID     string `json:"trace_id"`
 	CreatedAt   int64  `json:"created_at"`
 	UpdatedAt   int64  `json:"updated_at"`
 }
 
+// runResponse 一次尝试记录。
 type runResponse struct {
 	ID         string `json:"id"`
-	TaskType   string `json:"task_type"`
-	Queue      string `json:"queue"`
+	JobID      string `json:"job_id"`
+	Generation int    `json:"generation"`
+	Attempt    int    `json:"attempt"`
 	Status     string `json:"status"`
-	Retried    int    `json:"retried"`
-	MaxRetry   int    `json:"max_retry"`
-	StartAt    *int64 `json:"start_at"`
-	EndAt      *int64 `json:"end_at"`
+	Failure    string `json:"failure"`
+	WorkerID   string `json:"worker_id"`
+	StartedAt  int64  `json:"started_at"`
+	FinishedAt *int64 `json:"finished_at"`
 	DurationMS int64  `json:"duration_ms"`
-	ErrorMsg   string `json:"error_msg"`
+	Result     []byte `json:"result"`
+	Error      string `json:"error"`
 	RequestID  string `json:"request_id"`
+	TraceID    string `json:"trace_id"`
 	CreatedAt  int64  `json:"created_at"`
 }
 
-type taskListResponse struct {
-	List  []*taskResponse `json:"list"`
-	Total int64           `json:"total"`
+// jobListResponse 任务分页列表。
+type jobListResponse struct {
+	List  []*jobResponse `json:"list"`
+	Total int64          `json:"total"`
 }
 
+// runListResponse 尝试记录分页列表。
 type runListResponse struct {
 	List  []*runResponse `json:"list"`
 	Total int64          `json:"total"`
 }
 
-type affectedResponse struct {
-	Affected int64 `json:"affected"`
+// cancelResponse 取消任务结果。
+type cancelResponse struct {
+	Canceled bool `json:"canceled"`
+}
+
+// statsResponse 任务统计。
+type statsResponse struct {
+	Pending   int64 `json:"pending"`
+	Running   int64 `json:"running"`
+	Succeeded int64 `json:"succeeded"`
+	Failed    int64 `json:"failed"`
+	Canceled  int64 `json:"canceled"`
+	Skipped   int64 `json:"skipped"`
+	Total     int64 `json:"total"`
 }

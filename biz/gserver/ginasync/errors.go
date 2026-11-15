@@ -9,18 +9,21 @@ import (
 	"github.com/morehao/golib/task/gasync"
 )
 
-// failAsyncOp 把「资源不存在」映射为 HTTP 404，其余错误沿用本包统一的
-// JSON envelope（HTTP 200 + code != 0，见 gincontext.Fail）。
+// failJobOp 把任务中心错误映射到 HTTP 状态码，其余错误沿用本包统一的 JSON
+// envelope（HTTP 200 + code != 0，见 gincontext.Fail）。
 //
-// 404 的业务含义：
-//   - gasync.ErrTaskNotFound：任务类型未注册（详情/启停不存在的类型）；
-//   - gasync.ErrRunNotFound：运行记录不存在（详情查询传入未知 ID）。
+// 状态码映射：
+//   - gasync.ErrJobNotFound / gasync.ErrRunNotFound → 404（资源不存在）；
+//   - gasync.ErrNotReplayable → 409（任务非终态，当前状态不允许重放）。
 //
-// 响应体由 gincontext.FailWithStatus 统一构造，与 ginupload.failFileOp 保持同一套约定。
-func failAsyncOp(c *gin.Context, err error) {
-	if errors.Is(err, gasync.ErrTaskNotFound) || errors.Is(err, gasync.ErrRunNotFound) {
+// 响应体由 gincontext.FailWithStatus 统一构造，与 ginasync.failAsyncOp 保持同一套约定。
+func failJobOp(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, gasync.ErrJobNotFound), errors.Is(err, gasync.ErrRunNotFound):
 		gincontext.FailWithStatus(c, http.StatusNotFound, err)
-		return
+	case errors.Is(err, gasync.ErrNotReplayable):
+		gincontext.FailWithStatus(c, http.StatusConflict, err)
+	default:
+		gincontext.Fail(c, err)
 	}
-	gincontext.Fail(c, err)
 }
