@@ -19,18 +19,19 @@ type Config struct {
 	// Logger 可选。nil 时渠道使用空实现（log 丢弃），不会 panic。
 	Logger glog.Logger
 
-	// HTTPClient 供 HTTP 类渠道复用（背后通常是本仓库 protocol/ghttp 的适配器）。
-	// nil 时渠道按 Timeout/Retry/LogLevel 自动构造一个基于 ghttp 的默认实现。
+	// HTTPClient 供 HTTP 类渠道复用（背后通常是本仓库 protocol/gresty 的适配器，
+	// 也可以是任何满足 [HTTPDoer] 的实现，如 protocol/ghttp 的适配器）。
+	// nil 时渠道按 Timeout/Retry/LogLevel 自动构造一个基于 gresty 的默认实现。
 	HTTPClient HTTPDoer
 
 	// Timeout 是 HTTP 渠道的单次请求超时。<=0 时取 [DefaultTimeout]。
 	Timeout time.Duration
 
-	// Retry 透传给底层 ghttp 的最大尝试次数（含首次）。gnotify 默认 0 = 只发一次、不重试
+	// Retry 透传给底层 HTTP 客户端的最大尝试次数（含首次）。gnotify 默认 0 = 只发一次、不重试
 	// （遵循包「不做内部重试」的边界；需要重试请由调用方处理）。
 	Retry int
 
-	// LogLevel 透传给底层 ghttp 的成功请求日志级别。零值视为 debug。
+	// LogLevel 透传给底层 HTTP 客户端的成功请求日志级别。零值视为 debug。
 	LogLevel glog.Level
 
 	// Disabled 为 true 时所有渠道的 Send 直接返回 nil、不真正发送、不打日志（整体静音）。
@@ -71,12 +72,12 @@ func WithTimeout(d time.Duration) Option {
 	return func(c *Config) { c.Timeout = d }
 }
 
-// WithRetry 设置底层 ghttp 的最大尝试次数（含首次）。默认 0 = 不重试。
+// WithRetry 设置底层 HTTP 客户端的最大尝试次数（含首次）。默认 0 = 不重试。
 func WithRetry(n int) Option {
 	return func(c *Config) { c.Retry = n }
 }
 
-// WithLogLevel 设置底层 ghttp 成功请求日志级别。零值视为 debug。
+// WithLogLevel 设置底层 HTTP 客户端成功请求日志级别。零值视为 debug。
 func WithLogLevel(l glog.Level) Option {
 	return func(c *Config) { c.LogLevel = l }
 }

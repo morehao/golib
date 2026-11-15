@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/morehao/golib/protocol"
-	"github.com/morehao/golib/protocol/ghttp"
+	"github.com/morehao/golib/protocol/gresty"
 )
 
 // HTTPRequest 是渠道发起一次 HTTP 调用所需的最小描述。
@@ -31,26 +31,49 @@ type HTTPResponse struct {
 
 // HTTPDoer 是 gnotify 对 HTTP 客户端的最小依赖面：发一个请求、拿回结果。
 //
-// 抽象成接口（而非直接写死 *ghttp.Client）有两个目的：
+// 抽象成接口（而非写死某个具体客户端）有两个目的：
 //   - 让渠道逻辑可注入 fake 实现做单测，不必真发网络；
-//   - 让 gnotify 核心不直接绑定 ghttp 的具体类型，同时默认实现仍基于 ghttp。
+//   - 让 gnotify 核心不绑定具体客户端实现，默认用 protocol/gresty，
+//     需要时可通过 WithHTTPDoer 注入任意实现（如 protocol/ghttp 的适配器）。
 type HTTPDoer interface {
 	Do(ctx context.Context, req HTTPRequest) (HTTPResponse, error)
 }
 
-// ghttpDoer 是基于本仓库 protocol/ghttp 的 HTTPDoer 默认实现。
-type ghttpDoer struct {
-	client *ghttp.Client
+// httpFacade 是 gnotify 对具体 HTTP 客户端门面的内部最小接口：
+// protocol/ghttp.Client 与 protocol/gresty.Client 都天然满足它
+// （两者门面同名同签名，且共用 protocol.Result / protocol.RequestOption）。
+//
+// 收口到接口后，默认实现与 ghttp/gresty 具体包解耦——换后端只换构造处。
+type httpFacade interface {
+	Get(ctx context.Context, path string, opt protocol.RequestOption, opts ...protocol.CallOption) (*protocol.Result, error)
+	Post(ctx context.Context, path string, opt protocol.RequestOption, opts ...protocol.CallOption) (*protocol.Result, error)
+	Put(ctx context.Context, path string, opt protocol.RequestOption, opts ...protocol.CallOption) (*protocol.Result, error)
+	Delete(ctx context.Context, path string, opt protocol.RequestOption, opts ...protocol.CallOption) (*protocol.Result, error)
+	Patch(ctx context.Context, path string, opt protocol.RequestOption, opts ...protocol.CallOption) (*protocol.Result, error)
 }
 
-// Do 实现 [HTTPDoer]。请求 body 以原始字节透传（ghhttp 对 []byte 原样发送）。
-func (g *ghttpDoer) Do(ctx context.Context, req HTTPRequest) (HTTPResponse, error) {
+// facadeDoer 是基于统一门面接口（protocol/ghttp 或 protocol/gresty 均可）的默认 HTTPDoer 实现。
+type facadeDoer struct {
+	client httpFacade
+}
+
+// NewHTTPDoerFromFacade 用任意满足门面接口的客户端构造一个 HTTPDoer。
+//
+// 用于把 protocol/ghttp.Client 等也接进来（保留 ghttp 作为可选后端）：
+//
+//	doer := gnotify.NewHTTPDoerFromFacade(ghttp.NewClient(cfg))
+func NewHTTPDoerFromFacade(client httpFacade) HTTPDoer {
+	return &facadeDoer{client: client}
+}
+
+// Do 实现 [HTTPDoer]。请求 body 以原始字节透传（门面层对 []byte 原样发送）。
+func (d *facadeDoer) Do(ctx context.Context, req HTTPRequest) (HTTPResponse, error) {
 	method := req.Method
 	if method == "" {
 		method = http.MethodGet
 	}
 
-	// Content-Type 单独提取：ghttp 会用 RequestOption.ContentType 覆盖请求头里的
+	// Content-Type 单独提取：门面会用 RequestOption.ContentType 覆盖请求头里的
 	// Content-Type（默认 application/json），因此必须经由该字段传入，避免被覆盖丢失。
 	headers := make(map[string]string, len(req.Headers))
 	contentType := ""
@@ -62,7 +85,7 @@ func (g *ghttpDoer) Do(ctx context.Context, req HTTPRequest) (HTTPResponse, erro
 		headers[k] = v
 	}
 
-	opt := ghttp.RequestOption{
+	opt := protocol.RequestOption{
 		Headers:     headers,
 		ContentType: contentType,
 	}
@@ -71,27 +94,27 @@ func (g *ghttpDoer) Do(ctx context.Context, req HTTPRequest) (HTTPResponse, erro
 	}
 
 	var (
-		result *ghttp.Result
+		result *protocol.Result
 		err    error
 	)
 	switch method {
 	case http.MethodGet:
-		result, err = g.client.Get(ctx, req.URL, opt)
+		result, err = d.client.Get(ctx, req.URL, opt)
 	case http.MethodPost:
-		result, err = g.client.Post(ctx, req.URL, opt)
+		result, err = d.client.Post(ctx, req.URL, opt)
 	case http.MethodPut:
-		result, err = g.client.Put(ctx, req.URL, opt)
+		result, err = d.client.Put(ctx, req.URL, opt)
 	case http.MethodDelete:
-		result, err = g.client.Delete(ctx, req.URL, opt)
+		result, err = d.client.Delete(ctx, req.URL, opt)
 	case http.MethodPatch:
-		result, err = g.client.Patch(ctx, req.URL, opt)
+		result, err = d.client.Patch(ctx, req.URL, opt)
 	default:
 		return HTTPResponse{}, errors.New("gnotify: unsupported http method " + method)
 	}
 
-	// 状态码 >= 400 时 ghttp 返回 *HTTPError，但它已带上 code/body；我们把它当作
+	// 状态码 >= 400 时门面返回 *protocol.HTTPError，但它已带上 code/body；我们把它当作
 	// 正常响应返回，交给渠道判断，只把纯传输层错误透出。
-	var httpErr *ghttp.HTTPError
+	var httpErr *protocol.HTTPError
 	if err != nil {
 		if errors.As(err, &httpErr) && result != nil {
 			return HTTPResponse{
@@ -109,20 +132,20 @@ func (g *ghttpDoer) Do(ctx context.Context, req HTTPRequest) (HTTPResponse, erro
 	}, nil
 }
 
-// defaultHTTPDoer 依据 Config 构造一个基于 ghttp 的默认 HTTPDoer。
+// defaultHTTPDoer 依据 Config 构造一个基于 protocol/gresty 的默认 HTTPDoer。
 //
 // 关键默认：MaxRetry 取 cfg.Retry（gnotify 默认 0 = 不重试），Retryable=false，
 // LogLevel 取 cfg.LogLevel（默认 debug）。
 func defaultHTTPDoer(cfg Config) HTTPDoer {
 	retryable := false
-	client := ghttp.NewClient(&protocol.HttpClientConfig{
+	client := gresty.NewClient(&protocol.HttpClientConfig{
 		Module:    "gnotify",
 		Timeout:   cfg.Timeout,
 		MaxRetry:  cfg.Retry,
 		Retryable: &retryable,
 		LogLevel:  string(cfg.LogLevel),
 	})
-	return &ghttpDoer{client: client}
+	return &facadeDoer{client: client}
 }
 
 // doer 返回生效的 HTTPDoer：优先注入的 HTTPClient，否则按配置构造默认实现。
@@ -134,7 +157,7 @@ func (c Config) doer() HTTPDoer {
 }
 
 // EnsureHTTPDoer 返回 cfg 生效的 HTTPDoer：优先 cfg.HTTPClient，否则按 cfg 构造一个
-// 基于 ghttp 的默认实现（不重试、日志级别取 cfg.LogLevel）。
+// 基于 protocol/gresty 的默认实现（不重试、日志级别取 cfg.LogLevel）。
 //
 // 供渠道子包在自建 notifier 时获取 HTTP 客户端使用（子包无法调用包内未导出的 doer）。
 func EnsureHTTPDoer(cfg Config) HTTPDoer {
