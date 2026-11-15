@@ -1,5 +1,42 @@
 # Changelog
 
+## [v1.36.0] - 2026-11-15
+
+### Breaking Changes
+
+- **distlock（重写）**: 用「租约（Lease）」模型替换「门面 + 双 channel」，公开 API 全部
+  变更且不提供兼容层，迁移对应表见 [distlock README](distlock/README.md)。修复的核心缺陷（均已
+  用真实 redsync + 故障注入复现）：
+  1. **单次瞬时续期错误曾被当作锁丢失**，`Lost()` 误关导致健康的临界区被中止（gcron 会误记
+     `lock_lost`）。现在续期遇到存储故障会在 `renewDeadline`（默认 `TTL*2/3`）内重试，只有底层
+     明确「不再持有」才判定 `ErrLockLost`，超过窗口才判定 `ErrRenewFailed`。
+  2. **调用方 ctx 取消的语义分裂**：既可能静默停止续期，也可能在续期 RPC 在途时误报丢锁。现在续期
+     RPC 用 `context.WithoutCancel` 派生，租约只由显式 `Release` 或锁丢失结束。
+  3. **丢锁后实例卡死**（旧 `DistLock` 必须 `Unlock` 才能复用）：门面改为无状态，每次获取返回独立的
+     `Lease`，实例复用问题消失。
+  4. **`Unlock` 最坏阻塞 `TTL/3`**：现在先判定终态、取消在途续期，再有界等待（`min(TTL/3, 2s)`）。
+  5. **`Lost()` 有四种「永不关闭」的情形**（关闭 `AutoRenewal`、`Lock` 前取 channel、每次 Lock
+     重建 channel、ctx 取消期间）：现在 `Lease.Context()` / `Lost()` / `Cause()` 语义固定。
+  6. **删除 `LeaderElector.LeaderID()`**：redsync 的 `Value()` 是本实例自己的 token，无法诚实观测
+     「当前 Leader 是谁」，旧实现返回值与文档相反。
+
+  同步变更：
+  - `Lock` → `Mutex`（`TryLock`/`Refresh`/`Unlock`/`Token`，哨兵错误替代 `(bool, error)`）；
+    `LockFactory.NewLock(Config)` → `Factory.NewMutex(key, ttl)`；`NewRedisStorage`（panic）→
+    `NewRedis`（返回 error）；`AutoRenewal` 与手动 `Renewal()` 移除（续期恒开）。
+  - `LeaderElector` 改为回调模型 `Run(ctx, Callbacks{OnStartedLeading, OnStoppedLeading})`，内部
+    复用 `Lease`（不再有第二份续期实现）；`Epoch()` 改名 `Term()` 并注明是进程本地计数。
+  - 新增阻塞式 `Acquire`（带抖动重试）、`MinTTL` 下限校验、`Hooks` 观测钩子，以及多节点 quorum、
+    瞬时故障不误判丢锁的回归测试。
+  - **task/gcron**: `New` 的位置参数与 `Config.LockFactory` 改为 `*distlock.Locker`
+    （`WithLockFactory` → `WithLocker`）；`Config.AutoRenewal` / `Task.AutoRenewal` /
+    `Config.StrictLockTTL` / `WithAutoRenewal` / `WithStrictLockTTL` / `ErrLockTTLTooShort`
+    移除（自动续期恒开，`Timeout > LockTTL` 不再影响互斥性）；`LockTTL < distlock.MinTTL`
+    改为在 `Register` 期返回新增的 `ErrInvalidLockTTL`；`lock_lost` 状态保留，但不再因瞬时抖动误报。
+  - 注：本库为自用库，故该破坏性变更随 v1.36.0 发布，不另开 v2（沿用 v1.34.7 的处置方式）。
+
+**Full Changelog**: https://github.com/morehao/golib/compare/v1.35.2...v1.36.0
+
 ## [v1.35.2] - 2026-11-15
 
 ### Features
@@ -66,37 +103,6 @@
   更新」的局部更新语义来改状态，调用方需知道该隐式约定。
 
 ### Breaking Changes
-
-- **distlock（重写，v1.36.0）**: 用「租约（Lease）」模型替换「门面 + 双 channel」，公开 API 全部
-  变更且不提供兼容层，迁移对应表见 [distlock README](distlock/README.md)。修复的核心缺陷（均已
-  用真实 redsync + 故障注入复现）：
-  1. **单次瞬时续期错误曾被当作锁丢失**，`Lost()` 误关导致健康的临界区被中止（gcron 会误记
-     `lock_lost`）。现在续期遇到存储故障会在 `renewDeadline`（默认 `TTL*2/3`）内重试，只有底层
-     明确「不再持有」才判定 `ErrLockLost`，超过窗口才判定 `ErrRenewFailed`。
-  2. **调用方 ctx 取消的语义分裂**：既可能静默停止续期，也可能在续期 RPC 在途时误报丢锁。现在续期
-     RPC 用 `context.WithoutCancel` 派生，租约只由显式 `Release` 或锁丢失结束。
-  3. **丢锁后实例卡死**（旧 `DistLock` 必须 `Unlock` 才能复用）：门面改为无状态，每次获取返回独立的
-     `Lease`，实例复用问题消失。
-  4. **`Unlock` 最坏阻塞 `TTL/3`**：现在先判定终态、取消在途续期，再有界等待（`min(TTL/3, 2s)`）。
-  5. **`Lost()` 有四种「永不关闭」的情形**（关闭 `AutoRenewal`、`Lock` 前取 channel、每次 Lock
-     重建 channel、ctx 取消期间）：现在 `Lease.Context()` / `Lost()` / `Cause()` 语义固定。
-  6. **删除 `LeaderElector.LeaderID()`**：redsync 的 `Value()` 是本实例自己的 token，无法诚实观测
-     「当前 Leader 是谁」，旧实现返回值与文档相反。
-
-  同步变更：
-  - `Lock` → `Mutex`（`TryLock`/`Refresh`/`Unlock`/`Token`，哨兵错误替代 `(bool, error)`）；
-    `LockFactory.NewLock(Config)` → `Factory.NewMutex(key, ttl)`；`NewRedisStorage`（panic）→
-    `NewRedis`（返回 error）；`AutoRenewal` 与手动 `Renewal()` 移除（续期恒开）。
-  - `LeaderElector` 改为回调模型 `Run(ctx, Callbacks{OnStartedLeading, OnStoppedLeading})`，内部
-    复用 `Lease`（不再有第二份续期实现）；`Epoch()` 改名 `Term()` 并注明是进程本地计数。
-  - 新增阻塞式 `Acquire`（带抖动重试）、`MinTTL` 下限校验、`Hooks` 观测钩子，以及多节点 quorum、
-    瞬时故障不误判丢锁的回归测试。
-  - **task/gcron**: `New` 的位置参数与 `Config.LockFactory` 改为 `*distlock.Locker`
-    （`WithLockFactory` → `WithLocker`）；`Config.AutoRenewal` / `Task.AutoRenewal` /
-    `Config.StrictLockTTL` / `WithAutoRenewal` / `WithStrictLockTTL` / `ErrLockTTLTooShort`
-    移除（自动续期恒开，`Timeout > LockTTL` 不再影响互斥性）；`LockTTL < distlock.MinTTL`
-    改为在 `Register` 期返回新增的 `ErrInvalidLockTTL`；`lock_lost` 状态保留，但不再因瞬时抖动误报。
-  - 注：本库为自用库，故该破坏性变更随 v1.36.0 发布，不另开 v2（沿用 v1.34.7 的处置方式）。
 
 - **biz/testkit**: 删除该包。它在 v1.34.5（#134）被删除、v1.34.6 又作为**兼容保留**恢复
   （实现冻结、标 `Deprecated`），现在第一方下游已完成迁移——`ark-iam` 的 `pkg/testsetup` /
