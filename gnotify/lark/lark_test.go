@@ -83,8 +83,14 @@ func TestSend_Post_ViaParams(t *testing.T) {
 	if body["msg_type"] != "post" {
 		t.Errorf("msg_type = %v", body["msg_type"])
 	}
+	// Feishu 要求 content 内再包一层 "post": {"content":{"post":{"zh_cn":...}}}。
+	// 曾误赋内层导致缺 "post" 包裹层，飞书报 code 10208 "'post' field required"。
 	content, _ := body["content"].(map[string]any)
-	zhcn, _ := content["zh_cn"].(map[string]any)
+	post, _ := content["post"].(map[string]any)
+	if post == nil {
+		t.Fatalf("content missing \"post\" wrapper: %v", content)
+	}
+	zhcn, _ := post["zh_cn"].(map[string]any)
 	if zhcn["title"] != "T" {
 		t.Errorf("title = %v", zhcn["title"])
 	}

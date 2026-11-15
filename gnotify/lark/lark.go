@@ -135,7 +135,10 @@ func (n *notifier) buildBody(msg gnotify.Message) (map[string]any, error) {
 			{{"tag": "text", "text": content}},
 		}
 		body["msg_type"] = msgTypePost
-		body["content"] = p.Post
+		// Feishu 期望 content 内再包一层 "post"：{"content":{"post":{"zh_cn":...}}}。
+		// larkPost 的最外层字段 tag 就是 "post"，因此赋整体 p 而非内层 p.Post
+		// （赋 p.Post 会丢掉 "post" 包裹层，飞书报 code 10208 "'post' field required"）。
+		body["content"] = p
 	}
 	return body, nil
 }
