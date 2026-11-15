@@ -1,30 +1,25 @@
-// Package aliyun 实现 gnotify 的 "aliyun" 渠道：阿里云短信服务（Dysmsapi / RPC 风格 API），
-// 纯标准库实现 RPC 签名（HMAC-SHA1 + PercentEncode），不依赖阿里云 SDK。
+// Package aliyun 实现 gnotify 的 "aliyun" 渠道：阿里云短信服务（Dysmsapi / RPC 风格 API）。
+//
+// 内部直接使用阿里云官方 Go SDK（github.com/alibabacloud-go/dysmsapi-20170525/v3 +
+// github.com/alibabacloud-go/darabonba-openapi/v2）完成请求签名与发送，本包不再实现任何
+// 手写签名逻辑（原 HMAC-SHA1 + PercentEncode 已删除，不存在 fallback 路径）。
 //
 // 注册：import 本包即触发 init() 注册 "aliyun"。推荐用 [New] 携带 AccessKey/签名/模板配置构造。
 //
-// 签名算法遵循阿里云 RPC 签名规范：
-//   - 参数按键名字典序排序后用 PercentEncode 拼成规范查询串；
-//   - StringToSign = HTTPMethod + "&" + PercentEncode("/") + "&" + PercentEncode(canonicalQuery)；
-//   - Signature = Base64(HMAC-SHA1(AccessKeySecret + "&", StringToSign))。
-//
-// HTTP 请求复用 [gnotify.EnsureHTTPDoer]（背后是 ghttp），超时/重试等由 gnotify.Config 统一负责；
-// endpoint 由 RegionID 推导（dysmsapi.<RegionID>.aliyuncs.com）。
+// endpoint 由 RegionID 推导（dysmsapi.<RegionID>.aliyuncs.com），也可通过
+// [AliyunConfig.Endpoint] 覆盖（便于单测指向 httptest）。
 package aliyun
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha1"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"sort"
-	"strconv"
 	"strings"
-	"time"
 
+	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
+	dysmsapi "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
+	"github.com/alibabacloud-go/tea/dara"
 	"github.com/morehao/golib/gnotify"
 )
 
@@ -32,15 +27,8 @@ func init() {
 	gnotify.Register("aliyun", newNotifier)
 }
 
-// 固定 API 元信息（阿里云短信 SendSms）。
-const (
-	apiAction  = "SendSms"
-	apiVersion = "2017-05-25"
-	// defaultRegionID 是 RegionID 为空时的默认地域。
-	defaultRegionID = "cn-hangzhou"
-	// dateFormat 是 RPC 签名要求的时间戳格式（UTC）。
-	dateFormat = "2006-01-02T15:04:05Z"
-)
+// defaultRegionID 是 RegionID 为空时的默认地域。
+const defaultRegionID = "cn-hangzhou"
 
 // AliyunConfig 是阿里云短信配置。
 type AliyunConfig struct {
@@ -57,7 +45,7 @@ type AliyunConfig struct {
 	// RegionID 是地域，可选，默认 cn-hangzhou。
 	RegionID string
 
-	// Endpoint 可覆盖默认 endpoint（便于单测指向 httptest）。
+	// Endpoint 可覆盖默认 endpoint（便于单测指向 httptest），可含 scheme（http/https）也可仅 host。
 	// 为空时按 RegionID 推导为 https://dysmsapi.<RegionID>.aliyuncs.com。
 	Endpoint string
 }
@@ -85,18 +73,42 @@ func (c AliyunConfig) region() string {
 	return defaultRegionID
 }
 
-// endpoint 返回最终请求 URL。
-func (c AliyunConfig) endpoint() string {
+// endpointHost 返回用于 SDK 的 endpoint（仅 host，无 scheme）与协议（http/https）。
+//
+// SDK 的 openapi.Config.Endpoint 只接受 host（不含 scheme），协议由 Protocol 单独指定。
+// 因此这里把配置里可能携带的 scheme 拆出来，兼容历史「含 scheme 的 Endpoint」写法。
+func (c AliyunConfig) endpointHost() (host, protocol string) {
 	if e := strings.TrimSpace(c.Endpoint); e != "" {
-		return e
+		if u, err := url.Parse(e); err == nil && u.Host != "" {
+			scheme := strings.ToLower(u.Scheme)
+			if scheme == "" {
+				scheme = "https"
+			}
+			return u.Host, scheme
+		}
+		// 未带 scheme 的裸 host。
+		return strings.TrimPrefix(strings.TrimPrefix(e, "http://"), "https://"), "https"
 	}
-	return "https://dysmsapi." + c.region() + ".aliyuncs.com"
+	return "dysmsapi." + c.region() + ".aliyuncs.com", "https"
 }
 
 // notifier 是 "aliyun" 渠道的 [gnotify.Notifier] 实现。
 type notifier struct {
 	cfg  AliyunConfig
 	core gnotify.Config
+
+	// sdkClient 是官方 SDK 客户端。为 nil 时在首次 Send 时按 cfg 构建。
+	// 单测通过 [newWithSDKClient] 注入 mock 实现，或 [newWithHTTPClient] 注入自定义 transport。
+	sdkClient sdkSender
+
+	// httpClient 可选，透传给官方 SDK 作为底层 HTTP 客户端（单测注入 httptest transport 用）。
+	httpClient dara.HttpClient
+}
+
+// sdkSender 抽象「发送一条短信」的最小能力，便于单测注入 mock 实现。
+// 生产实现是 *dysmsapi.Client。
+type sdkSender interface {
+	SendSms(request *dysmsapi.SendSmsRequest) (*dysmsapi.SendSmsResponse, error)
 }
 
 // newNotifier 是注册进 gnotify 的 Factory。通过统一 gnotify.New("aliyun") 构造时不带凭据，
@@ -122,15 +134,40 @@ func NewWithCore(cfg AliyunConfig, opts ...gnotify.Option) (gnotify.Notifier, er
 	return New(cfg, opts...)
 }
 
+// newWithSDKClient 用注入的 SDK 发送器构造 notifier（供单测用，不导出）。
+func newWithSDKClient(cfg AliyunConfig, core gnotify.Config, s sdkSender) *notifier {
+	return &notifier{cfg: cfg, core: core, sdkClient: s}
+}
+
+// newWithHTTPClient 用注入的底层 HTTP 客户端构造 notifier（供单测用，不导出）。
+//
+// 走真实 SDK 客户端 + 自定义 transport，可端到端验证官方 SDK 的请求签名与参数拼装，
+// 同时把请求指向 httptest，不真连网。
+func newWithHTTPClient(cfg AliyunConfig, core gnotify.Config, hc dara.HttpClient) *notifier {
+	return &notifier{cfg: cfg, core: core, httpClient: hc}
+}
+
 // Channel 实现 [gnotify.Notifier]。
 func (n *notifier) Channel() string { return "aliyun" }
 
-// aliyunResponse 是 SendSms 响应体。Code=="OK" 表示成功。
-type aliyunResponse struct {
-	Code      string `json:"Code"`
-	Message   string `json:"Message"`
-	RequestID string `json:"RequestId"`
-	BizID     string `json:"BizId"`
+// buildClient 依据配置构建官方 SDK 客户端。
+func (n *notifier) buildClient() (sdkSender, error) {
+	host, protocol := n.cfg.endpointHost()
+	sdkCfg := &openapi.Config{
+		AccessKeyId:     dara.String(n.cfg.AccessKeyID),
+		AccessKeySecret: dara.String(n.cfg.AccessKeySecret),
+		RegionId:        dara.String(n.cfg.region()),
+		Endpoint:        dara.String(host),
+		Protocol:        dara.String(protocol),
+	}
+	if n.httpClient != nil {
+		sdkCfg.HttpClient = n.httpClient
+	}
+	client, err := dysmsapi.NewClient(sdkCfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: build aliyun sdk client: %v", gnotify.ErrSendFailed, err)
+	}
+	return client, nil
 }
 
 // Send 通过阿里云短信发送一条模板短信。
@@ -161,81 +198,33 @@ func (n *notifier) Send(ctx context.Context, msg gnotify.Message) error {
 		templateParam = string(raw)
 	}
 
-	params := map[string]string{
-		"Action":           apiAction,
-		"Version":          apiVersion,
-		"Format":           "JSON",
-		"AccessKeyId":      n.cfg.AccessKeyID,
-		"SignatureMethod":  "HMAC-SHA1",
-		"SignatureVersion": "1.0",
-		"SignatureNonce":   strconv.FormatInt(time.Now().UnixNano(), 10),
-		"Timestamp":        time.Now().UTC().Format(dateFormat),
-		"RegionId":         n.cfg.region(),
-		"PhoneNumbers":     strings.Join(phones, ","),
-		"SignName":         n.cfg.SignName,
-		"TemplateCode":     n.cfg.TemplateCode,
-		"TemplateParam":    templateParam,
+	client := n.sdkClient
+	if client == nil {
+		c, err := n.buildClient()
+		if err != nil {
+			return err
+		}
+		client = c
 	}
 
-	query := sign(params, n.cfg.AccessKeySecret, "GET")
-	reqURL := n.cfg.endpoint() + "/?" + query
+	req := (&dysmsapi.SendSmsRequest{}).
+		SetPhoneNumbers(strings.Join(phones, ",")).
+		SetSignName(n.cfg.SignName).
+		SetTemplateCode(n.cfg.TemplateCode).
+		SetTemplateParam(templateParam)
 
-	d := gnotify.EnsureHTTPDoer(n.core)
-	resp, err := d.Do(ctx, gnotify.HTTPRequest{Method: "GET", URL: reqURL})
+	resp, err := client.SendSms(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", gnotify.ErrSendFailed, err)
+		return fmt.Errorf("%w: aliyun send sms: %v", gnotify.ErrSendFailed, err)
+	}
+	if resp == nil || resp.Body == nil {
+		return fmt.Errorf("%w: aliyun empty response", gnotify.ErrSendFailed)
 	}
 
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("%w: http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(resp.Body)))
-	}
-
-	var ar aliyunResponse
-	if err := json.Unmarshal(resp.Body, &ar); err != nil {
-		return fmt.Errorf("%w: decode response: %v", gnotify.ErrSendFailed, err)
-	}
-	if ar.Code != "OK" {
-		return fmt.Errorf("%w: aliyun %s: %s (requestId=%s)", gnotify.ErrSendFailed, ar.Code, ar.Message, ar.RequestID)
+	body := resp.Body
+	if dara.StringValue(body.Code) != "OK" {
+		return fmt.Errorf("%w: aliyun %s: %s (requestId=%s)",
+			gnotify.ErrSendFailed, dara.StringValue(body.Code), dara.StringValue(body.Message), dara.StringValue(body.RequestId))
 	}
 	return nil
-}
-
-// sign 按阿里云 RPC 签名规范计算签名并返回完整查询串（含 Signature）。
-func sign(params map[string]string, secret, method string) string {
-	canonical := canonicalQuery(params)
-	stringToSign := method + "&" + percentEncode("/") + "&" + percentEncode(canonical)
-	mac := hmac.New(sha1.New, []byte(secret+"&"))
-	mac.Write([]byte(stringToSign))
-	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	return canonical + "&Signature=" + percentEncode(signature)
-}
-
-// canonicalQuery 将参数按键名字典序排序并 PercentEncode 拼成规范查询串。
-func canonicalQuery(params map[string]string) string {
-	keys := make([]string, 0, len(params))
-	for k := range params {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var b strings.Builder
-	for i, k := range keys {
-		if i > 0 {
-			b.WriteString("&")
-		}
-		b.WriteString(percentEncode(k))
-		b.WriteString("=")
-		b.WriteString(percentEncode(params[k]))
-	}
-	return b.String()
-}
-
-// percentEncode 按 RFC 3986 对字符编码：仅保留 A-Z a-z 0-9 - _ . ~ 不编码，
-// 并按阿里云要求把 "+" 编码为 "%20"、"*" 编码为 "%2A"、"%7E" 还原为 "~"。
-func percentEncode(s string) string {
-	encoded := url.QueryEscape(s)
-	encoded = strings.ReplaceAll(encoded, "+", "%20")
-	encoded = strings.ReplaceAll(encoded, "*", "%2A")
-	encoded = strings.ReplaceAll(encoded, "%7E", "~")
-	return encoded
 }

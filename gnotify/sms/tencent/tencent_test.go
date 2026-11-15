@@ -2,21 +2,18 @@ package tencent
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"net/url"
-	"strconv"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/morehao/golib/gnotify"
+	sms "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sms/v20210111"
 )
 
-func validConfig() TencentConfig {
+func validConfig(endpoint string) TencentConfig {
 	return TencentConfig{
 		SecretID:   "test-id",
 		SecretKey:  "test-key",
@@ -24,35 +21,37 @@ func validConfig() TencentConfig {
 		SignName:   "测试签名",
 		TemplateID: "123456",
 		Region:     "ap-guangzhou",
-		Endpoint:   "https://sms.example.com",
+		Endpoint:   endpoint,
 	}
 }
 
-// fakeDoer 记录最近一次请求并返回预置响应。
-type fakeDoer struct {
-	gotReq gnotify.HTTPRequest
-	gotURL *url.URL
-	calls  int
-	resp   gnotify.HTTPResponse
-	err    error
+// capturedBody 用于反序列化 SDK 实际发出的请求体。
+type capturedBody struct {
+	PhoneNumberSet   []string `json:"PhoneNumberSet"`
+	SmsSdkAppId      string   `json:"SmsSdkAppId"`
+	SignName         string   `json:"SignName"`
+	TemplateId       string   `json:"TemplateId"`
+	TemplateParamSet []string `json:"TemplateParamSet"`
 }
 
-func (f *fakeDoer) Do(_ context.Context, req gnotify.HTTPRequest) (gnotify.HTTPResponse, error) {
-	f.calls++
-	f.gotReq = req
-	if u, err := url.Parse(req.URL); err == nil {
-		f.gotURL = u
-	}
-	return f.resp, f.err
-}
+// TestSend_RealSDK_Success 端到端验证：官方 SDK 拼出正确请求（body 中 PhoneNumberSet 含
+// +86 前缀、TemplateParamSet 按模板顺序），并带 TC3-HMAC-SHA256 签名，成功响应正常返回。
+func TestSend_RealSDK_Success(t *testing.T) {
+	var gotMethod, gotHost, gotPath string
+	var gotHeaders http.Header
+	var gotBody capturedBody
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotHost = r.Host
+		gotPath = r.URL.Path
+		gotHeaders = r.Header.Clone()
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"Response":{"SendStatusSet":[{"Code":"Ok","Message":"send success"}],"RequestId":"req-1"}}`))
+	}))
+	defer srv.Close()
 
-func TestSend_Success(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Response":{"SendStatusSet":[{"Code":"Ok","Message":"send success"}],"RequestId":"req-1"}}`)}}
-	n, err := New(validConfig(), gnotify.WithHTTPDoer(d))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	err = n.Send(context.Background(), gnotify.Message{
+	n := &notifier{cfg: validConfig(srv.URL), core: gnotify.ApplyOptions()}
+	err := n.Send(context.Background(), gnotify.Message{
 		To:     []string{"13800000000"},
 		Params: map[string]string{"params": "123456,5"},
 	})
@@ -60,16 +59,12 @@ func TestSend_Success(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	if d.gotReq.Method != "POST" {
-		t.Errorf("method = %q", d.gotReq.Method)
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
 	}
-	if d.gotURL == nil || d.gotURL.Host != "sms.example.com" {
-		t.Errorf("url = %q", d.gotReq.URL)
-	}
-
-	var gotBody tencentRequest
-	if err := json.Unmarshal(d.gotReq.Body, &gotBody); err != nil {
-		t.Fatalf("body not json: %v", err)
+	_ = gotHost
+	if gotPath != "/" {
+		t.Errorf("path = %q, want /", gotPath)
 	}
 	if gotBody.SmsSdkAppId != "1400000000" {
 		t.Errorf("SmsSdkAppId = %q", gotBody.SmsSdkAppId)
@@ -84,74 +79,34 @@ func TestSend_Success(t *testing.T) {
 		t.Errorf("TemplateParamSet = %v", gotBody.TemplateParamSet)
 	}
 
-	// 头部。
-	h := d.gotReq.Headers
-	if h["X-TC-Action"] != "SendSms" || h["X-TC-Version"] != "2021-01-11" {
-		t.Errorf("action/version headers wrong: %q/%q", h["X-TC-Action"], h["X-TC-Version"])
+	// 头部：动作/版本/地域由官方 SDK 填。
+	if got := gotHeaders.Get("X-Tc-Action"); got != "SendSms" {
+		t.Errorf("X-Tc-Action = %q", got)
 	}
-	if h["X-TC-Region"] != "ap-guangzhou" {
-		t.Errorf("region header = %q", h["X-TC-Region"])
+	if got := gotHeaders.Get("X-Tc-Version"); got != "2021-01-11" {
+		t.Errorf("X-Tc-Version = %q", got)
 	}
-	if h["Content-Type"] != contentType {
-		t.Errorf("content-type = %q", h["Content-Type"])
+	if got := gotHeaders.Get("X-Tc-Region"); got != "ap-guangzhou" {
+		t.Errorf("X-Tc-Region = %q", got)
 	}
-
-	// 签名格式与正确性。
-	gotAuth := h["Authorization"]
-	if !strings.HasPrefix(gotAuth, "TC3-HMAC-SHA256 Credential=test-id/") {
-		t.Fatalf("Authorization prefix wrong: %q", gotAuth)
+	// 签名由官方 SDK 生成（本包已无手写签名代码）。
+	authz := gotHeaders.Get("Authorization")
+	if !strings.HasPrefix(authz, "TC3-HMAC-SHA256 Credential=test-id/") {
+		t.Errorf("Authorization prefix wrong: %q", authz)
 	}
-	if !strings.Contains(gotAuth, "SignedHeaders=content-type;host") {
-		t.Errorf("SignedHeaders wrong: %q", gotAuth)
-	}
-	tsStr := h["X-TC-Timestamp"]
-	ts, _ := strconv.ParseInt(tsStr, 10, 64)
-	wantSig := recomputeSignature(d.gotReq.Body, tsStr, "test-id", "test-key", "sms", time.Unix(ts, 0))
-	if !strings.Contains(gotAuth, "Signature="+wantSig) {
-		t.Errorf("signature mismatch:\n got  %q\n want %q", gotAuth, wantSig)
+	if !strings.Contains(authz, "SignedHeaders=content-type;host") || !strings.Contains(authz, "Signature=") {
+		t.Errorf("Authorization malformed: %q", authz)
 	}
 }
 
-// recomputeSignature 独立按 TC3 规范重算签名（不依赖被测 signTencent 的私有实现路径）。
-func recomputeSignature(payload []byte, tsStr, secretID, secretKey, service string, now time.Time) string {
-	date := now.UTC().Format("2006-01-02")
-	ph := sha256.Sum256(payload)
-	canonicalHeaders := "content-type:" + contentType + "\n" + "host:" + apiHost + "\n"
-	cr := strings.Join([]string{
-		"POST", "/", "", canonicalHeaders, "content-type;host", hex.EncodeToString(ph[:]),
-	}, "\n")
-	crHash := sha256.Sum256([]byte(cr))
-	scope := date + "/" + service + "/tc3_request"
-	sts := strings.Join([]string{signAlgo, tsStr, scope, hex.EncodeToString(crHash[:])}, "\n")
+// TestSend_RealSDK_SendStatusFailure 走真实 SDK，httptest 返回非 Ok 状态码，应包装 ErrSendFailed。
+func TestSend_RealSDK_SendStatusFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Response":{"SendStatusSet":[{"Code":"LimitExceeded.PhoneNumberDailyLimit","Message":"超限"}],"RequestId":"req-2"}}`))
+	}))
+	defer srv.Close()
 
-	hm := func(key []byte, data string) []byte {
-		m := hmac.New(sha256.New, key)
-		m.Write([]byte(data))
-		return m.Sum(nil)
-	}
-	kDate := hm([]byte("TC3"+secretKey), date)
-	kService := hm(kDate, service)
-	kSigning := hm(kService, "tc3_request")
-	sig := hex.EncodeToString(hm(kSigning, sts))
-	_ = secretID
-	return sig
-}
-
-func TestSend_APIError(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Response":{"Error":{"Code":"InvalidParameterValue.TemplateParamSet","Message":"模板参数错误"},"RequestId":"req-2"}}`)}}
-	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
-	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
-	if !errors.Is(err, gnotify.ErrSendFailed) {
-		t.Fatalf("want ErrSendFailed, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "InvalidParameterValue.TemplateParamSet") {
-		t.Errorf("err should include code: %v", err)
-	}
-}
-
-func TestSend_SendStatusFailure(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Response":{"SendStatusSet":[{"Code":"LimitExceeded.PhoneNumberDailyLimit","Message":"超限"}]}}`)}}
-	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
+	n := &notifier{cfg: validConfig(srv.URL), core: gnotify.ApplyOptions()}
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
@@ -161,9 +116,83 @@ func TestSend_SendStatusFailure(t *testing.T) {
 	}
 }
 
-func TestSend_HTTPStatusError(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 500, Body: []byte("boom")}}
-	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
+// TestSend_RealSDK_APIError 走真实 SDK，httptest 返回顶层 Error，应包装 ErrSendFailed。
+func TestSend_RealSDK_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Response":{"Error":{"Code":"InvalidParameterValue.TemplateParamSet","Message":"模板参数错误"},"RequestId":"req-3"}}`))
+	}))
+	defer srv.Close()
+
+	n := &notifier{cfg: validConfig(srv.URL), core: gnotify.ApplyOptions()}
+	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
+	if !errors.Is(err, gnotify.ErrSendFailed) {
+		t.Fatalf("want ErrSendFailed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "InvalidParameterValue.TemplateParamSet") {
+		t.Errorf("err should include code: %v", err)
+	}
+}
+
+// TestSend_RealSDK_HTTPError httptest 返回 500，SDK 返回 error，应包装 ErrSendFailed。
+func TestSend_RealSDK_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+	}))
+	defer srv.Close()
+
+	n := &notifier{cfg: validConfig(srv.URL), core: gnotify.ApplyOptions()}
+	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
+	if !errors.Is(err, gnotify.ErrSendFailed) {
+		t.Fatalf("want ErrSendFailed, got %v", err)
+	}
+}
+
+// fakeSender 是 sdkSender 的 mock，用于受控地测请求字段与错误分支。
+type fakeSender struct {
+	gotReq *sms.SendSmsRequest
+	resp   *sms.SendSmsResponse
+	err    error
+	calls  int
+}
+
+func (f *fakeSender) SendSms(req *sms.SendSmsRequest) (*sms.SendSmsResponse, error) {
+	f.calls++
+	f.gotReq = req
+	return f.resp, f.err
+}
+
+func TestSend_MockSender_RequestFields(t *testing.T) {
+	ok := "Ok"
+	f := &fakeSender{resp: &sms.SendSmsResponse{Response: &sms.SendSmsResponseParams{
+		SendStatusSet: []*sms.SendStatus{{Code: &ok}},
+	}}}
+	n := newWithSDKClient(validConfig("https://x"), gnotify.ApplyOptions(), f)
+
+	err := n.Send(context.Background(), gnotify.Message{
+		To:     []string{" 13800000000 ", "13900000000"},
+		Params: map[string]string{"params": "123456,5"},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if f.calls != 1 {
+		t.Fatalf("calls = %d", f.calls)
+	}
+	if len(f.gotReq.PhoneNumberSet) != 2 || strVal(f.gotReq.PhoneNumberSet[0]) != "+8613800000000" {
+		t.Errorf("PhoneNumberSet = %v", f.gotReq.PhoneNumberSet)
+	}
+	if strVal(f.gotReq.SmsSdkAppId) != "1400000000" || strVal(f.gotReq.TemplateId) != "123456" {
+		t.Errorf("appid/template = %q/%q", strVal(f.gotReq.SmsSdkAppId), strVal(f.gotReq.TemplateId))
+	}
+	if len(f.gotReq.TemplateParamSet) != 2 || strVal(f.gotReq.TemplateParamSet[0]) != "123456" {
+		t.Errorf("TemplateParamSet = %v", f.gotReq.TemplateParamSet)
+	}
+}
+
+func TestSend_MockSender_TransportError(t *testing.T) {
+	f := &fakeSender{err: errors.New("dial fail")}
+	n := newWithSDKClient(validConfig("https://x"), gnotify.ApplyOptions(), f)
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
@@ -171,7 +200,7 @@ func TestSend_HTTPStatusError(t *testing.T) {
 }
 
 func TestSend_NoRecipient(t *testing.T) {
-	n, _ := New(validConfig(), gnotify.WithHTTPDoer(&fakeDoer{}))
+	n := newWithSDKClient(validConfig("https://x"), gnotify.ApplyOptions(), &fakeSender{})
 	err := n.Send(context.Background(), gnotify.Message{})
 	if !errors.Is(err, gnotify.ErrNoRecipient) {
 		t.Fatalf("want ErrNoRecipient, got %v", err)
@@ -194,7 +223,7 @@ func TestNew_InvalidConfig(t *testing.T) {
 }
 
 func TestPhoneNumberPrefix(t *testing.T) {
-	n := &notifier{cfg: validConfig()}
+	n := &notifier{cfg: validConfig("https://x")}
 	got, err := n.phoneNumbers([]string{"13800000000", "+8613900000000", " ", ""})
 	if err != nil {
 		t.Fatalf("phoneNumbers: %v", err)
@@ -220,30 +249,34 @@ func TestEndpointAndRegion(t *testing.T) {
 	if got := (TencentConfig{}).region(); got != "ap-guangzhou" {
 		t.Errorf("default region = %q", got)
 	}
-	if got := (TencentConfig{Region: "ap-shanghai"}).endpoint(); got != "https://sms.tencentcloudapi.com" {
-		t.Errorf("endpoint = %q", got)
+	host, scheme := (TencentConfig{Region: "ap-shanghai"}).endpointHost()
+	if host != "sms.tencentcloudapi.com" || scheme != "https" {
+		t.Errorf("host/scheme = %q/%q", host, scheme)
 	}
-	if got := (TencentConfig{Endpoint: "http://x"}).endpoint(); got != "http://x" {
-		t.Errorf("override endpoint = %q", got)
+	// 含 scheme 覆盖。
+	host, scheme = (TencentConfig{Endpoint: "http://127.0.0.1:18080"}).endpointHost()
+	if host != "127.0.0.1:18080" || scheme != "http" {
+		t.Errorf("override host/scheme = %q/%q", host, scheme)
+	}
+	// 裸 host 覆盖。
+	host, scheme = (TencentConfig{Endpoint: "sms.test.com"}).endpointHost()
+	if host != "sms.test.com" || scheme != "https" {
+		t.Errorf("bare host/scheme = %q/%q", host, scheme)
 	}
 }
 
-func TestNewWithCore_UsesHTTPDoer(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Response":{"SendStatusSet":[{"Code":"Ok"}]}}`)}}
-	n, err := NewWithCore(validConfig(), gnotify.WithHTTPDoer(d))
+func TestNewWithCore_BuildsSDK(t *testing.T) {
+	n, err := NewWithCore(validConfig("http://127.0.0.1:1"))
 	if err != nil {
 		t.Fatalf("NewWithCore: %v", err)
 	}
-	if err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}}); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-	if d.calls != 1 {
-		t.Fatalf("injected HTTPDoer not used: calls = %d", d.calls)
+	if n.Channel() != "tencent" {
+		t.Fatalf("channel = %q", n.Channel())
 	}
 }
 
 func TestRegistry_Tencent(t *testing.T) {
-	n, err := gnotify.New("tencent", gnotify.WithHTTPDoer(&fakeDoer{}))
+	n, err := gnotify.New("tencent")
 	if err != nil {
 		t.Fatalf("gnotify.New(tencent): %v", err)
 	}

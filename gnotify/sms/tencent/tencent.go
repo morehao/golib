@@ -1,30 +1,22 @@
-// Package tencent 实现 gnotify 的 "tencent" 渠道：腾讯云短信 SendSms（API 3.0），
-// 纯标准库实现 TC3-HMAC-SHA256 签名，不依赖腾讯云 SDK。
+// Package tencent 实现 gnotify 的 "tencent" 渠道：腾讯云短信 SendSms（API 3.0）。
+//
+// 内部直接使用腾讯云官方 Go SDK（github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sms/v20210111
+// + .../common）完成 TC3-HMAC-SHA256 请求签名与发送，本包不再包含任何手写签名代码
+// （历史手写签名实现已整体删除，不存在 fallback 路径）。
 //
 // 注册：import 本包即触发 init() 注册 "tencent"。推荐用 [New] 携带 Secret/SDKAppID/签名/模板配置构造。
-//
-// 签名算法遵循腾讯云 API 3.0 TC3-HMAC-SHA256：
-//   - CanonicalRequest = HTTPMethod + "\n" + CanonicalURI + "\n" + CanonicalQueryString + "\n"
-//   - CanonicalHeaders + "\n" + SignedHeaders + "\n" + HashedRequestPayload；
-//   - StringToSign = "TC3-HMAC-SHA256" + "\n" + Timestamp + "\n" + CredentialScope + "\n" + hash(CanonicalRequest)；
-//   - Signature = HexHMAC(SecretSigning, StringToSign)，SecretSigning 由 SecretKey 逐层派生；
-//   - Authorization = "TC3-HMAC-SHA256 Credential=<id>/<scope>, SignedHeaders=<h>, Signature=<sig>"。
-//
-// HTTP 请求复用 [gnotify.EnsureHTTPDoer]（背后是 ghttp），超时/重试等由 gnotify.Config 统一负责。
 package tencent
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"strconv"
+	"net/url"
 	"strings"
-	"time"
 
 	"github.com/morehao/golib/gnotify"
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
+	sms "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sms/v20210111"
 )
 
 func init() {
@@ -33,12 +25,8 @@ func init() {
 
 // 固定 API 元信息（腾讯云短信 SendSms 3.0）。
 const (
-	apiAction   = "SendSms"
-	apiVersion  = "2021-01-11"
-	apiService  = "sms"
-	apiHost     = "sms.tencentcloudapi.com"
-	contentType = "application/json; charset=utf-8"
-	signAlgo    = "TC3-HMAC-SHA256"
+	apiService = "sms"
+	apiHost    = "sms.tencentcloudapi.com"
 	// defaultRegion 是 Region 为空时的默认地域。
 	defaultRegion = "ap-guangzhou"
 )
@@ -61,7 +49,7 @@ type TencentConfig struct {
 	// Region 是地域，可选，默认 ap-guangzhou。
 	Region string
 
-	// Endpoint 可覆盖默认 host（便于单测指向 httptest，含 scheme）。
+	// Endpoint 可覆盖默认 host（便于单测指向 httptest，可含 scheme 也可仅 host）。
 	// 为空时使用 https://sms.tencentcloudapi.com。
 	Endpoint string
 }
@@ -91,18 +79,38 @@ func (c TencentConfig) region() string {
 	return defaultRegion
 }
 
-// endpoint 返回最终请求 URL（含 scheme）。
-func (c TencentConfig) endpoint() string {
+// endpointHost 返回用于 SDK 的 endpoint（仅 host）与协议（http/https）。
+//
+// 兼容历史「含 scheme 的 Endpoint」写法：SDK 的 HttpProfile.Endpoint 只接受 host，
+// 协议走 HttpProfile.Scheme。
+func (c TencentConfig) endpointHost() (host, scheme string) {
 	if e := strings.TrimSpace(c.Endpoint); e != "" {
-		return e
+		if u, err := url.Parse(e); err == nil && u.Host != "" {
+			s := strings.ToLower(u.Scheme)
+			if s == "" {
+				s = "https"
+			}
+			return u.Host, s
+		}
+		return strings.TrimPrefix(strings.TrimPrefix(e, "http://"), "https://"), "https"
 	}
-	return "https://" + apiHost
+	return apiHost, "https"
 }
 
 // notifier 是 "tencent" 渠道的 [gnotify.Notifier] 实现。
 type notifier struct {
 	cfg  TencentConfig
 	core gnotify.Config
+
+	// sdkClient 是官方 SDK 客户端。为 nil 时在首次 Send 时按 cfg 构建。
+	// 单测通过 [newWithSDKClient] 注入 mock，或用 httptest endpoint + 真实 SDK。
+	sdkClient sdkSender
+}
+
+// sdkSender 抽象「发送一条短信」的最小能力，便于单测注入 mock 实现。
+// 生产实现是 *sms.Client。
+type sdkSender interface {
+	SendSms(request *sms.SendSmsRequest) (*sms.SendSmsResponse, error)
 }
 
 // newNotifier 是注册进 gnotify 的 Factory。统一 gnotify.New("tencent") 构造时不带凭据，
@@ -128,31 +136,31 @@ func NewWithCore(cfg TencentConfig, opts ...gnotify.Option) (gnotify.Notifier, e
 	return New(cfg, opts...)
 }
 
+// newWithSDKClient 用注入的 SDK 发送器构造 notifier（供单测用，不导出）。
+func newWithSDKClient(cfg TencentConfig, core gnotify.Config, s sdkSender) *notifier {
+	return &notifier{cfg: cfg, core: core, sdkClient: s}
+}
+
 // Channel 实现 [gnotify.Notifier]。
 func (n *notifier) Channel() string { return "tencent" }
 
-// tencentRequest 是 SendSms 请求体。
-type tencentRequest struct {
-	PhoneNumberSet   []string `json:"PhoneNumberSet"`
-	SmsSdkAppId      string   `json:"SmsSdkAppId"`
-	SignName         string   `json:"SignName"`
-	TemplateId       string   `json:"TemplateId"`
-	TemplateParamSet []string `json:"TemplateParamSet"`
-}
+// buildClient 依据配置构建官方 SDK 客户端。
+func (n *notifier) buildClient() (sdkSender, error) {
+	host, scheme := n.cfg.endpointHost()
 
-// tencentResponse 是 SendSms 响应体。Response.Error 非空表示失败。
-type tencentResponse struct {
-	Response struct {
-		SendStatusSet []struct {
-			Code    string `json:"Code"`
-			Message string `json:"Message"`
-		} `json:"SendStatusSet"`
-		Error *struct {
-			Code    string `json:"Code"`
-			Message string `json:"Message"`
-		} `json:"Error"`
-		RequestId string `json:"RequestId"`
-	} `json:"Response"`
+	credential := common.NewCredential(n.cfg.SecretID, n.cfg.SecretKey)
+	cpf := profile.NewClientProfile()
+	cpf.HttpProfile.Endpoint = host
+	cpf.HttpProfile.Scheme = scheme
+	cpf.HttpProfile.ReqMethod = "POST"
+	// 单测走本地 httptest 时关闭地域自动切换，避免打真实 backup endpoint。
+	cpf.DisableRegionBreaker = true
+
+	client, err := sms.NewClient(credential, n.cfg.region(), cpf)
+	if err != nil {
+		return nil, fmt.Errorf("%w: build tencent sdk client: %v", gnotify.ErrSendFailed, err)
+	}
+	return client, nil
 }
 
 // Send 通过腾讯云短信发送一条模板短信。
@@ -169,54 +177,38 @@ func (n *notifier) Send(ctx context.Context, msg gnotify.Message) error {
 		return err
 	}
 
-	body := tencentRequest{
-		PhoneNumberSet:   phones,
-		SmsSdkAppId:      n.cfg.SdkAppID,
-		SignName:         n.cfg.SignName,
-		TemplateId:       n.cfg.TemplateID,
-		TemplateParamSet: templateParams(msg.Params),
+	client := n.sdkClient
+	if client == nil {
+		c, err := n.buildClient()
+		if err != nil {
+			return err
+		}
+		client = c
 	}
-	payload, err := json.Marshal(body)
+
+	paramSet := templateParams(msg.Params)
+	req := &sms.SendSmsRequest{
+		PhoneNumberSet:   stringPtrSlice(phones),
+		SmsSdkAppId:      strPtr(n.cfg.SdkAppID),
+		SignName:         strPtr(n.cfg.SignName),
+		TemplateId:       strPtr(n.cfg.TemplateID),
+		TemplateParamSet: stringPtrSlice(paramSet),
+	}
+
+	resp, err := client.SendSms(req)
 	if err != nil {
-		return fmt.Errorf("%w: marshal body: %v", gnotify.ErrSendFailed, err)
+		return fmt.Errorf("%w: tencent send sms: %v", gnotify.ErrSendFailed, err)
 	}
-
-	now := time.Now()
-	timestamp := strconv.FormatInt(now.Unix(), 10)
-	headers := map[string]string{
-		"Content-Type":   contentType,
-		"X-TC-Action":    apiAction,
-		"X-TC-Version":   apiVersion,
-		"X-TC-Region":    n.cfg.region(),
-		"X-TC-Timestamp": timestamp,
+	if resp == nil || resp.Response == nil {
+		return fmt.Errorf("%w: tencent empty response", gnotify.ErrSendFailed)
 	}
-	headers["Authorization"] = tencentAuthorization(payload, timestamp, n.cfg.SecretID, n.cfg.SecretKey, apiService, now)
-
-	d := gnotify.EnsureHTTPDoer(n.core)
-	resp, err := d.Do(ctx, gnotify.HTTPRequest{
-		Method:  "POST",
-		URL:     n.cfg.endpoint(),
-		Body:    payload,
-		Headers: headers,
-	})
-	if err != nil {
-		return fmt.Errorf("%w: %v", gnotify.ErrSendFailed, err)
-	}
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("%w: http status %d: %s", gnotify.ErrSendFailed, resp.StatusCode, strings.TrimSpace(string(resp.Body)))
-	}
-
-	var tr tencentResponse
-	if err := json.Unmarshal(resp.Body, &tr); err != nil {
-		return fmt.Errorf("%w: decode response: %v", gnotify.ErrSendFailed, err)
-	}
-	if e := tr.Response.Error; e != nil && e.Code != "" {
-		return fmt.Errorf("%w: tencent %s: %s (requestId=%s)", gnotify.ErrSendFailed, e.Code, e.Message, tr.Response.RequestId)
-	}
-	for _, st := range tr.Response.SendStatusSet {
-		if st.Code != "" && st.Code != "Ok" {
-			return fmt.Errorf("%w: tencent send status %s: %s (requestId=%s)", gnotify.ErrSendFailed, st.Code, st.Message, tr.Response.RequestId)
+	for _, st := range resp.Response.SendStatusSet {
+		if st == nil {
+			continue
+		}
+		if code := strVal(st.Code); code != "" && code != "Ok" {
+			return fmt.Errorf("%w: tencent send status %s: %s (requestId=%s)",
+				gnotify.ErrSendFailed, code, strVal(st.Message), strVal(resp.Response.RequestId))
 		}
 	}
 	return nil
@@ -257,54 +249,21 @@ func templateParams(params map[string]string) []string {
 	return []string{}
 }
 
-// tencentAuthorization 计算 TC3-HMAC-SHA256 签名并返回 Authorization 头值。
-//
-// 请求固定为 POST + "/" + 空 query + content-type/host 两个签名头。
-func tencentAuthorization(payload []byte, timestamp, secretID, secretKey, service string, now time.Time) string {
-	date := now.UTC().Format("2006-01-02")
-
-	// 1. 拼接规范请求串。
-	canonicalHeaders := "content-type:" + contentType + "\n" + "host:" + apiHost + "\n"
-	signedHeaders := "content-type;host"
-	hashedPayload := sha256Hex(payload)
-	canonicalRequest := strings.Join([]string{
-		"POST",
-		"/",
-		"",
-		canonicalHeaders,
-		signedHeaders,
-		hashedPayload,
-	}, "\n")
-
-	// 2. 拼接待签名字符串。
-	credentialScope := date + "/" + service + "/tc3_request"
-	stringToSign := strings.Join([]string{
-		signAlgo,
-		timestamp,
-		credentialScope,
-		sha256Hex([]byte(canonicalRequest)),
-	}, "\n")
-
-	// 3. 派生签名密钥并计算签名。
-	secretDate := hmacSHA256([]byte("TC3"+secretKey), date)
-	secretService := hmacSHA256(secretDate, service)
-	secretSigning := hmacSHA256(secretService, "tc3_request")
-	signature := hex.EncodeToString(hmacSHA256(secretSigning, stringToSign))
-
-	// 4. 拼接 Authorization。
-	return signAlgo + " Credential=" + secretID + "/" + credentialScope +
-		", SignedHeaders=" + signedHeaders + ", Signature=" + signature
+// strPtr / strVal 是 *string 的便捷转换。
+func strPtr(s string) *string { return &s }
+func strVal(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
-// sha256Hex 返回 data 的 SHA-256 十六进制小写摘要。
-func sha256Hex(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
-}
-
-// hmacSHA256 返回 HMAC-SHA256(key, data) 的原始字节。
-func hmacSHA256(key []byte, data string) []byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(data))
-	return mac.Sum(nil)
+// stringPtrSlice 把 []string 转成 SDK 需要的 []*string。
+func stringPtrSlice(ss []string) []*string {
+	out := make([]*string, 0, len(ss))
+	for i := range ss {
+		s := ss[i]
+		out = append(out, &s)
+	}
+	return out
 }

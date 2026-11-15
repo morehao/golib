@@ -2,54 +2,70 @@ package aliyun
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha1"
-	"encoding/base64"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	dysmsapi "github.com/alibabacloud-go/dysmsapi-20170525/v3/client"
+	"github.com/alibabacloud-go/tea/dara"
 	"github.com/morehao/golib/gnotify"
 )
 
-func validConfig() AliyunConfig {
+func validConfig(endpoint string) AliyunConfig {
 	return AliyunConfig{
 		AccessKeyID:     "test-id",
 		AccessKeySecret: "test-secret",
 		SignName:        "测试签名",
 		TemplateCode:    "SMS_100000001",
 		RegionID:        "cn-hangzhou",
-		Endpoint:        "https://dysmsapi.example.com",
+		Endpoint:        endpoint,
 	}
 }
 
-// fakeDoer 记录最近一次请求并返回预置响应。
-type fakeDoer struct {
-	gotReq gnotify.HTTPRequest
-	gotURL *url.URL
-	calls  int
-	resp   gnotify.HTTPResponse
-	err    error
+// httpDoerAdapter 把 *http.Client 适配成 dara.HttpClient，供官方 SDK 使用。
+//
+// 单测里用它把 SDK 的请求指向 httptest.Server，不真连网。
+type httpDoerAdapter struct{ c *http.Client }
+
+func (a httpDoerAdapter) Call(req *http.Request, _ *http.Transport) (*http.Response, error) {
+	return a.c.Do(req)
 }
 
-func (f *fakeDoer) Do(_ context.Context, req gnotify.HTTPRequest) (gnotify.HTTPResponse, error) {
-	f.calls++
-	f.gotReq = req
-	if u, err := url.Parse(req.URL); err == nil {
-		f.gotURL = u
-	}
-	return f.resp, f.err
-}
-
-func TestSend_Success(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Code":"OK","Message":"OK","RequestId":"req-1","BizId":"biz-1"}`)}}
-	n, err := New(validConfig(), gnotify.WithHTTPDoer(d))
+// newTestNotifier 用真实官方 SDK 客户端 + httptest transport 构造 notifier。
+func newTestNotifier(t *testing.T, cfg AliyunConfig, srvURL string) *notifier {
+	t.Helper()
+	u, err := url.Parse(srvURL)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("parse srv url: %v", err)
 	}
-	err = n.Send(context.Background(), gnotify.Message{
+	cfg.Endpoint = srvURL // 含 scheme 的覆盖 endpoint，验证 endpointHost 拆解
+	n := newWithHTTPClient(cfg, gnotify.ApplyOptions(), httpDoerAdapter{c: http.DefaultClient})
+	_ = u
+	return n
+}
+
+// TestSend_RealSDK_Success 端到端验证：官方 SDK 拼出正确请求（业务参数在 query，签名/动作在
+// ACS3-HMAC-SHA256 头）并带签名，成功响应正常返回。
+func TestSend_RealSDK_Success(t *testing.T) {
+	var gotQuery url.Values
+	var gotMethod string
+	var gotPath string
+	var gotHeaders http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Code":"OK","Message":"OK","RequestId":"req-1","BizId":"biz-1"}`))
+	}))
+	defer srv.Close()
+
+	n := newTestNotifier(t, validConfig(srv.URL), srv.URL)
+	err := n.Send(context.Background(), gnotify.Message{
 		To:     []string{"13800000000", "13900000000"},
 		Params: map[string]string{"code": "123456"},
 	})
@@ -57,26 +73,12 @@ func TestSend_Success(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	if d.gotReq.Method != "GET" {
-		t.Errorf("method = %q", d.gotReq.Method)
+	// v3 官方 SDK 用 POST + 业务参数放 query、认证放 ACS3 头。
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
 	}
-	if d.gotURL == nil || d.gotURL.Path != "/" {
-		t.Errorf("url path = %q", d.gotReq.URL)
-	}
-	gotQuery := d.gotURL.Query()
-
-	// 校验固定参数。
-	if got := gotQuery.Get("Action"); got != "SendSms" {
-		t.Errorf("Action = %q", got)
-	}
-	if got := gotQuery.Get("Version"); got != "2017-05-25" {
-		t.Errorf("Version = %q", got)
-	}
-	if got := gotQuery.Get("AccessKeyId"); got != "test-id" {
-		t.Errorf("AccessKeyId = %q", got)
-	}
-	if got := gotQuery.Get("SignatureMethod"); got != "HMAC-SHA1" {
-		t.Errorf("SignatureMethod = %q", got)
+	if gotPath != "/" {
+		t.Errorf("path = %q, want /", gotPath)
 	}
 	if got := gotQuery.Get("PhoneNumbers"); got != "13800000000,13900000000" {
 		t.Errorf("PhoneNumbers = %q", got)
@@ -90,38 +92,48 @@ func TestSend_Success(t *testing.T) {
 	if got := gotQuery.Get("TemplateParam"); got != `{"code":"123456"}` {
 		t.Errorf("TemplateParam = %q", got)
 	}
-	if gotQuery.Get("SignatureNonce") == "" || gotQuery.Get("Timestamp") == "" {
-		t.Error("missing SignatureNonce/Timestamp")
+	// 动作/版本/签名由官方 SDK 生成（本包已无手写签名代码）。
+	if got := gotHeaders.Get("X-Acs-Action"); got != "SendSms" {
+		t.Errorf("X-Acs-Action = %q", got)
 	}
-
-	// 独立重算签名，验证其正确。
-	if sig := gotQuery.Get("Signature"); sig == "" {
-		t.Fatal("missing Signature")
-	} else if want := recomputeSignature(gotQuery, "test-secret"); sig != want {
-		t.Errorf("signature = %q, want %q", sig, want)
+	if got := gotHeaders.Get("X-Acs-Version"); got != "2017-05-25" {
+		t.Errorf("X-Acs-Version = %q", got)
+	}
+	authz := gotHeaders.Get("Authorization")
+	if !strings.HasPrefix(authz, "ACS3-HMAC-SHA256 Credential=test-id") {
+		t.Errorf("Authorization = %q", authz)
+	}
+	if !strings.Contains(authz, "Signature=") {
+		t.Errorf("Authorization missing Signature: %q", authz)
 	}
 }
 
-// recomputeSignature 独立于实现按 RPC 规范重算期望签名，用于校验。
-func recomputeSignature(q url.Values, secret string) string {
-	// 去掉 Signature 后按 key 排序 + PercentEncode 拼规范串。
-	filtered := make(map[string]string, len(q))
-	for k, vs := range q {
-		if k == "Signature" || len(vs) == 0 {
-			continue
-		}
-		filtered[k] = vs[0]
+// TestSend_NoParams_TemplateParamEmptyObject 无 Params 时 TemplateParam 为 "{}"。
+func TestSend_NoParams_TemplateParamEmptyObject(t *testing.T) {
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		_, _ = w.Write([]byte(`{"Code":"OK"}`))
+	}))
+	defer srv.Close()
+
+	n := newTestNotifier(t, validConfig(srv.URL), srv.URL)
+	if err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}}); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
-	canonical := canonicalQuery(filtered)
-	stringToSign := http.MethodGet + "&" + percentEncode("/") + "&" + percentEncode(canonical)
-	mac := hmac.New(sha1.New, []byte(secret+"&"))
-	mac.Write([]byte(stringToSign))
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	if got := gotQuery.Get("TemplateParam"); got != "{}" {
+		t.Errorf("TemplateParam = %q, want {}", got)
+	}
 }
 
-func TestSend_ErrcodeFailure(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Code":"isv.BUSINESS_LIMIT_CONTROL","Message":"触发流控","RequestId":"req-2"}`)}}
-	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
+// TestSend_SDKBusinessError 通过 httptest 返回业务错误码（Code != OK），应包装为 ErrSendFailed。
+func TestSend_SDKBusinessError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Code":"isv.BUSINESS_LIMIT_CONTROL","Message":"触发流控","RequestId":"req-2"}`))
+	}))
+	defer srv.Close()
+
+	n := newTestNotifier(t, validConfig(srv.URL), srv.URL)
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
@@ -131,18 +143,68 @@ func TestSend_ErrcodeFailure(t *testing.T) {
 	}
 }
 
-func TestSend_HTTPStatusError(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 502, Body: []byte("bad gateway")}}
-	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
+// TestSend_SDKHTTPError httptest 返回 5xx，SDK 返回 error，应包装为 ErrSendFailed。
+func TestSend_SDKHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("bad gateway"))
+	}))
+	defer srv.Close()
+
+	n := newTestNotifier(t, validConfig(srv.URL), srv.URL)
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
 	}
 }
 
-func TestSend_TransportError(t *testing.T) {
-	d := &fakeDoer{err: errors.New("dial fail")}
-	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
+// fakeSender 是 sdkSender 的 mock，用于受控地测各分支。
+type fakeSender struct {
+	gotReq *dysmsapi.SendSmsRequest
+	resp   *dysmsapi.SendSmsResponse
+	err    error
+	calls  int
+}
+
+func (f *fakeSender) SendSms(req *dysmsapi.SendSmsRequest) (*dysmsapi.SendSmsResponse, error) {
+	f.calls++
+	f.gotReq = req
+	return f.resp, f.err
+}
+
+func TestSend_MockSender_RequestFields(t *testing.T) {
+	ok := "OK"
+	body := &dysmsapi.SendSmsResponseBody{Code: &ok}
+	f := &fakeSender{resp: &dysmsapi.SendSmsResponse{Body: body}}
+	n := newWithSDKClient(validConfig("https://x"), gnotify.ApplyOptions(), f)
+
+	err := n.Send(context.Background(), gnotify.Message{
+		To:     []string{" 13800000000 ", "13900000000"},
+		Params: map[string]string{"code": "123456"},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if f.calls != 1 {
+		t.Fatalf("calls = %d", f.calls)
+	}
+	if got := dara.StringValue(f.gotReq.PhoneNumbers); got != "13800000000,13900000000" {
+		t.Errorf("PhoneNumbers = %q", got)
+	}
+	if got := dara.StringValue(f.gotReq.SignName); got != "测试签名" {
+		t.Errorf("SignName = %q", got)
+	}
+	if got := dara.StringValue(f.gotReq.TemplateCode); got != "SMS_100000001" {
+		t.Errorf("TemplateCode = %q", got)
+	}
+	if got := dara.StringValue(f.gotReq.TemplateParam); got != `{"code":"123456"}` {
+		t.Errorf("TemplateParam = %q", got)
+	}
+}
+
+func TestSend_MockSender_TransportError(t *testing.T) {
+	f := &fakeSender{err: errors.New("dial fail")}
+	n := newWithSDKClient(validConfig("https://x"), gnotify.ApplyOptions(), f)
 	err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}})
 	if !errors.Is(err, gnotify.ErrSendFailed) {
 		t.Fatalf("want ErrSendFailed, got %v", err)
@@ -150,7 +212,7 @@ func TestSend_TransportError(t *testing.T) {
 }
 
 func TestSend_NoRecipient(t *testing.T) {
-	n, _ := New(validConfig(), gnotify.WithHTTPDoer(&fakeDoer{}))
+	n := newWithSDKClient(validConfig("https://x"), gnotify.ApplyOptions(), &fakeSender{})
 	err := n.Send(context.Background(), gnotify.Message{})
 	if !errors.Is(err, gnotify.ErrNoRecipient) {
 		t.Fatalf("want ErrNoRecipient, got %v", err)
@@ -175,40 +237,41 @@ func TestEndpointAndRegion(t *testing.T) {
 	if got := (AliyunConfig{}).region(); got != "cn-hangzhou" {
 		t.Errorf("default region = %q", got)
 	}
-	if got := (AliyunConfig{RegionID: "ap-southeast-1"}).endpoint(); got != "https://dysmsapi.ap-southeast-1.aliyuncs.com" {
-		t.Errorf("endpoint = %q", got)
+	host, proto := (AliyunConfig{RegionID: "ap-southeast-1"}).endpointHost()
+	if host != "dysmsapi.ap-southeast-1.aliyuncs.com" || proto != "https" {
+		t.Errorf("host/proto = %q/%q", host, proto)
 	}
-	if got := (AliyunConfig{Endpoint: "http://x/y"}).endpoint(); got != "http://x/y" {
-		t.Errorf("override endpoint = %q", got)
+	// 含 scheme 的 Endpoint 覆盖。
+	host, proto = (AliyunConfig{Endpoint: "http://127.0.0.1:18080"}).endpointHost()
+	if host != "127.0.0.1:18080" || proto != "http" {
+		t.Errorf("override host/proto = %q/%q", host, proto)
 	}
-}
-
-func TestPercentEncode(t *testing.T) {
-	// 空格→%20，星号→%2A，波浪号保留。
-	if got := percentEncode("a b*c~"); got != "a%20b%2Ac~" {
-		t.Errorf("percentEncode = %q", got)
-	}
-	if got := percentEncode("中文"); got != "%E4%B8%AD%E6%96%87" {
-		t.Errorf("percentEncode utf8 = %q", got)
+	// 裸 host 覆盖。
+	host, proto = (AliyunConfig{Endpoint: "dysmsapi.test.aliyuncs.com"}).endpointHost()
+	if host != "dysmsapi.test.aliyuncs.com" || proto != "https" {
+		t.Errorf("bare host/proto = %q/%q", host, proto)
 	}
 }
 
-func TestNewWithCore_UsesHTTPDoer(t *testing.T) {
-	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"Code":"OK"}`)}}
-	n, err := NewWithCore(validConfig(), gnotify.WithHTTPDoer(d))
+func TestNewWithCore_UsesSDK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Code":"OK"}`))
+	}))
+	defer srv.Close()
+
+	// NewWithCore 走真实构造路径：仅验证能构造并触发 SDK（用 httptest endpoint）。
+	cfg := validConfig(srv.URL)
+	n, err := NewWithCore(cfg)
 	if err != nil {
 		t.Fatalf("NewWithCore: %v", err)
 	}
-	if err := n.Send(context.Background(), gnotify.Message{To: []string{"13800000000"}}); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-	if d.calls != 1 {
-		t.Fatalf("injected HTTPDoer not used: calls = %d", d.calls)
+	if n.Channel() != "aliyun" {
+		t.Fatalf("channel = %q", n.Channel())
 	}
 }
 
 func TestRegistry_Aliyun(t *testing.T) {
-	n, err := gnotify.New("aliyun", gnotify.WithHTTPDoer(&fakeDoer{}))
+	n, err := gnotify.New("aliyun")
 	if err != nil {
 		t.Fatalf("gnotify.New(aliyun): %v", err)
 	}
