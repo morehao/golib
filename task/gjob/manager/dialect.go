@@ -66,7 +66,73 @@ func (d Dialect) nowExpr() string {
 	case DialectPostgres:
 		return "now()"
 	case DialectSQLite:
-		return "strftime('%Y-%m-%d %H:%M:%f','now')"
+		// 存进来的时间列是 Go time.Time 的默认文本（如 "2026-11-15 16:09:19.05 +0800 CST"），
+		// SQLite 的 Text 比较无法与 strftime 生成的 UTC 串直接对齐。这里统一返回
+		// julianday('now')（一个 UTC 浮点标量），配合 colLE 对列侧也用 julianday() 包裹。
+		return "julianday('now')"
+	default:
+		return "CURRENT_TIMESTAMP"
+	}
+}
+
+// nowValueExpr 返回可写入时间列、及用于 COALESCE 的「当前 DB 时间」值表达式。
+//
+// 与 nowExpr 的区别：nowExpr 对 SQLite 返回 julianday('now')（比较用标量），
+// 而写入列需要 datetime 文本，故 SQLite 这里用 datetime('now')。
+func (d Dialect) nowValueExpr() string {
+	switch d {
+	case DialectSQLite:
+		return "datetime('now')"
+	default:
+		return d.nowExpr()
+	}
+}
+
+// colLE 返回「列 col <= now」的 SQL 布尔表达式。
+//
+//   - MySQL/PG：col <= <nowExpr>（列即时间类型，原生可比）
+//   - SQLite：julianday(col) <= julianday('now')——列是文本且时区后缀不规范，
+//     必须两侧都 julian 化后比较（实测 datetime(col)/julianday(col) 都能解析 Go 的
+//     time.Time 文本并归一到 UTC）。
+func (d Dialect) colLE(col string) string {
+	switch d {
+	case DialectSQLite:
+		return fmt.Sprintf("julianday(%s) <= julianday('now')", col)
+	default:
+		return fmt.Sprintf("%s <= %s", col, d.nowExpr())
+	}
+}
+
+// colLTNowExpr 返回「列 col < now」的 SQL 布尔表达式（用于租约过期判断）。
+func (d Dialect) colLT(col string) string {
+	switch d {
+	case DialectSQLite:
+		return fmt.Sprintf("julianday(%s) < julianday('now')", col)
+	default:
+		return fmt.Sprintf("%s < %s", col, d.nowExpr())
+	}
+}
+
+// colLEAfter 返回「列 col <= now - dur」的布尔表达式（清理：finished_at < now-Retention）。
+// 参数由调用方按 afterArg 的负数形式传入。
+func (d Dialect) colLTBefore(col string) string {
+	switch d {
+	case DialectSQLite:
+		return fmt.Sprintf("julianday(%s) < julianday('now', ?)", col)
+	default:
+		return fmt.Sprintf("%s < %s", col, d.beforeExpr())
+	}
+}
+
+// beforeExpr 返回「now - dur」的时间表达式（参数占 ?）。
+func (d Dialect) beforeExpr() string {
+	switch d {
+	case DialectMySQL:
+		return fmt.Sprintf("DATE_SUB(%s, INTERVAL ? MICROSECOND)", d.nowExpr())
+	case DialectPostgres:
+		return fmt.Sprintf("%s - ? * interval '1 microsecond'", d.nowExpr())
+	case DialectSQLite:
+		return "julianday('now', ?)"
 	default:
 		return "CURRENT_TIMESTAMP"
 	}

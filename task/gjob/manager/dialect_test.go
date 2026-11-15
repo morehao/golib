@@ -58,7 +58,7 @@ func TestDialectSnapshots(t *testing.T) {
 			iso:    "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
 		},
 		DialectSQLite: {
-			now:    "strftime('%Y-%m-%d %H:%M:%f','now')",
+			now:    "julianday('now')",
 			after:  "datetime('now', ?)",
 			lock:   "",
 			empty:  "NULLIF(?, '')",
@@ -101,6 +101,38 @@ func TestAfterArg(t *testing.T) {
 	}
 	if got := DialectSQLite.afterArg(d); got != "+1.500 seconds" {
 		t.Errorf("sqlite afterArg = %v", got)
+	}
+}
+
+// TestDialectCmpHelpers 断言时间比较表达式按方言生成。
+func TestDialectCmpHelpers(t *testing.T) {
+	// MySQL/PG：列与 now 原生比较。
+	if got := DialectMySQL.colLE("next_run_at"); got != "next_run_at <= NOW(3)" {
+		t.Errorf("mysql colLE = %q", got)
+	}
+	if got := DialectPostgres.colLT("lease_until"); got != "lease_until < now()" {
+		t.Errorf("pg colLT = %q", got)
+	}
+	// SQLite：两侧 julianday 化。
+	if got := DialectSQLite.colLE("next_run_at"); got != "julianday(next_run_at) <= julianday('now')" {
+		t.Errorf("sqlite colLE = %q", got)
+	}
+	if got := DialectSQLite.colLT("lease_until"); got != "julianday(lease_until) < julianday('now')" {
+		t.Errorf("sqlite colLT = %q", got)
+	}
+	// nowValueExpr：SQLite 用 datetime 文本供写入/COALESCE。
+	if got := DialectSQLite.nowValueExpr(); got != "datetime('now')" {
+		t.Errorf("sqlite nowValue = %q", got)
+	}
+	if got := DialectMySQL.nowValueExpr(); got != "NOW(3)" {
+		t.Errorf("mysql nowValue = %q", got)
+	}
+	// colLTBefore：清理用 now-Retention。
+	if got := DialectSQLite.colLTBefore("finished_at"); got != "julianday(finished_at) < julianday('now', ?)" {
+		t.Errorf("sqlite colLTBefore = %q", got)
+	}
+	if got := DialectMySQL.colLTBefore("finished_at"); got != "finished_at < DATE_SUB(NOW(3), INTERVAL ? MICROSECOND)" {
+		t.Errorf("mysql colLTBefore = %q", got)
 	}
 }
 
