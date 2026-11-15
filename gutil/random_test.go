@@ -86,3 +86,17 @@ func TestRandomFromSetEdgeCases(t *testing.T) {
 		}
 	}
 }
+
+func TestGenUUID_V7Format(t *testing.T) {
+	s := GenUUID()
+	// 标准 v7 UUID: 36 字符，第 15 位为版本号 '7'
+	if len(s) != 36 {
+		t.Fatalf("GenUUID() = %q, want 36 chars", s)
+	}
+	if s[14] != '7' {
+		t.Fatalf("GenUUID() = %q, want version nibble '7'", s)
+	}
+	if a, b := GenUUID(), GenUUID(); a == b {
+		t.Fatalf("GenUUID() returned duplicate: %q", a)
+	}
+}
