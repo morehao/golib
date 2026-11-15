@@ -54,10 +54,31 @@ type WorkerConfig struct {
 
 	// PollInterval 是「无通知器」时的轮询间隔语义，默认 500ms。
 	//
-	// 本卡（T-W1）没有通知器，等待一律走轮询；T-N1 会接入唤醒信号，
-	// 届时等待变成「定时器或唤醒信号，谁先到就 Fetch 一次」。这里预留字段，
-	// T-N1 只需在其上补齐 notifier 分支即可，不改 Worker 结构。
+	// T-N1 起接入唤醒信号：等待变成「定时器或唤醒信号，谁先到就 Fetch 一次」。
+	// 有唤醒通道时定时器取 FallbackPollInterval（兜底轮询），无则取 PollInterval。
 	PollInterval time.Duration
+
+	// FallbackPollInterval 是「有唤醒信号」时的兜底轮询周期（默认 30s）。
+	//
+	// 通知器只负责尽快叫醒执行侧，不参与正确性：信号丢了由这个兜底定时器补上；
+	// 没接入唤醒信号（WakeSource 为 nil）时该字段不生效，等待走 PollInterval。
+	FallbackPollInterval time.Duration
+
+	// WakeSource 是唤醒信号来源（可选）。非 nil 时 Worker 在等待时同时监听它，
+	// 收到信号立即 Fetch 一次；定时器取 FallbackPollInterval。
+	//
+	// 依赖边界（A10）：worker 包不 import manager/asynq。接入方（如 manager 的
+	// notifier 消费端）把 wake(taskType) 回调转成向 Wake 通道投递类型即可。
+	WakeSource WakeSource
+}
+
+// WakeSource 抽象「某任务类型有新任务」的唤醒信号来源。
+//
+// 实现返回一个每类型可读的通道；每次收到（读出一个值）即代表「该类型有新任务，
+// 去 Fetch 一次」。通道关闭或 ctx 取消表示不再有信号。Worker 侧读取即消费。
+type WakeSource interface {
+	// Wake 返回该任务类型的唤醒通道；返回 nil 表示该类型不可用唤醒（退回纯轮询）。
+	Wake(taskType string) <-chan struct{}
 }
 
 // handlerEntry 是某任务类型的注册项：处理器 + 选项 + 该类型的默认值。
@@ -102,6 +123,9 @@ func applyDefaults(c *WorkerConfig) {
 	}
 	if c.PollInterval <= 0 {
 		c.PollInterval = 500 * time.Millisecond
+	}
+	if c.FallbackPollInterval <= 0 {
+		c.FallbackPollInterval = 30 * time.Second
 	}
 	if strings.TrimSpace(c.WorkerID) == "" {
 		c.WorkerID = defaultWorkerID()
@@ -308,7 +332,7 @@ func (w *Worker) slotLoop(taskType string) {
 		job, err := w.fetch(taskType)
 		if err != nil {
 			if errors.Is(err, gjob.ErrNoJob) {
-				if !w.wait() {
+				if !w.wait(taskType) {
 					return // 停机
 				}
 				continue
@@ -318,13 +342,13 @@ func (w *Worker) slotLoop(taskType string) {
 				return
 			}
 			w.logger.Errorw(w.fetchCtx, "gjob worker fetch error", "task_type", taskType, "error", err)
-			if !w.wait() {
+			if !w.wait(taskType) {
 				return
 			}
 			continue
 		}
 		if job == nil {
-			if !w.wait() {
+			if !w.wait(taskType) {
 				return
 			}
 			continue
@@ -343,13 +367,30 @@ func (w *Worker) fetch(taskType string) (*gjob.Job, error) {
 	return w.src.Fetch(w.fetchCtx, taskType)
 }
 
-// wait 等待 PollInterval 或停机信号，返回 true 表示可继续。
-func (w *Worker) wait() bool {
-	timer := time.NewTimer(w.cfg.PollInterval)
+// wait 等待「定时器 或 唤醒信号」，谁先到就返回 true（可继续，去 Fetch 一次）；
+// 停机返回 false。
+//
+// 定时器：接入唤醒信号（WakeSource 对该类型返回非 nil 通道）时取
+// FallbackPollInterval（兜底轮询，默认 30s），否则取 PollInterval（默认 500ms）。
+// 唤醒信号：读到一次即代表「该类型有新任务」，立即返回。通知器不参与正确性，
+// 信号丢了由兜底定时器补上。
+func (w *Worker) wait(taskType string) bool {
+	interval := w.cfg.PollInterval
+	var wake <-chan struct{}
+	if w.cfg.WakeSource != nil {
+		if ch := w.cfg.WakeSource.Wake(taskType); ch != nil {
+			wake = ch
+			interval = w.cfg.FallbackPollInterval
+		}
+	}
+
+	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	select {
 	case <-w.fetchCtx.Done():
 		return false
+	case <-wake:
+		return true
 	case <-timer.C:
 		return true
 	}
