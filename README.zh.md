@@ -215,27 +215,35 @@ go get github.com/morehao/golib
 ## distlock
 
 ### 简介
-`distlock` 是基于 Redis（redsync / Redlock）的分布式锁：恒开的自动续期、租约级锁丢失通知，以及构建在同一租约核心之上的**尽力而为（best-effort）主从选举**。它是 **efficiency 锁**，不是 correctness 锁（不提供 fencing token）——确切的安全边界见 [distlock README](distlock/README.md)。
+`distlock` 是基于 Redis 的分布式锁：恒开的自动续期、租约级锁丢失通知，以及构建在同一租约核心之上的**尽力而为（best-effort）主从选举**。另外提供进程内形态，供单副本部署使用。它是 **efficiency 锁**，不是 correctness 锁（不提供 fencing token）——确切的安全边界见 [distlock README](distlock/README.md)。
 
 ### 特性
-- Redis 后端：单节点，或多节点 quorum（多个相互独立的 Redis master）
+- 后端由 `Config.Driver` 选择、driver 子包注册（`distlock/driver/redis`、`distlock/driver/memory`）；一个进程一种后端：`redis` 跨进程互斥，`memory` 进程内（单副本部署 / CLI / 本地开发，**不可**用于多副本）
+- 核心包零后端依赖（只有 `google/uuid`）；`RedisConfig` 是纯数据，连接池由 redis driver 自建并由 `Close` 释放
 - `Lease` 句柄：自动续期恒开；`Lost()` / `Context()` / `Cause()` 提供锁丢失通知
-- 哨兵错误区分三种结果：竞争失败（`ErrLocked`）、锁丢失（`ErrLockLost` / `ErrRenewFailed`）、存储故障
-- 瞬时续期故障在续期窗口内重试，不再被误报成锁丢失
-- 阻塞式 `Acquire`（带抖动重试）与非阻塞 `TryAcquire`；`Release` 幂等且有界
+- 哨兵错误区分结果：竞争失败（`ErrLocked`）、锁丢失（`ErrLockLost` / `ErrRenewFailed`）、获取超时（`ErrAcquireTimeout`）、配置非法（`ErrInvalidConfig`）、后端未注册（`ErrDriverNotRegistered`）、已关闭（`ErrClosed`）、存储故障
+- 慢失败的续期在确认窗口内继续重试（窗口至少容纳两次尝试），不会误杀健康租约；判定时刻不早于确认窗口，也不会被无限推迟
+- 阻塞式 `Acquire`（指数退避 + full jitter）与非阻塞 `TryAcquire`；`Release` 幂等，且所有并发调用者拿到同一结果
+- 可观测性：构造期一次性设置 `Hooks`（`OnAcquire` / `OnRenew` / `OnLost` / `OnRelease`，均带 `ctx`）
 - **主从选举**复用同一租约核心：k8s 风格的 `OnStartedLeading` / `OnStoppedLeading` 回调，只有真丢失才让位
 
 ### 使用示例
 ```go
-// 进程内一个门面即可；多节点 quorum 传多个 client
-locker, err := distlock.NewRedis(redisClient)
+// import _ "github.com/morehao/golib/distlock/driver/redis"
+locker, err := distlock.New(distlock.Config{
+	Driver: "redis",
+	Redis:   &distlock.RedisConfig{Addr: "10.0.0.8:6379", Password: "***"},
+}) // 进程内一个门面
+if err != nil { /* ErrInvalidConfig / ErrDriverNotRegistered / 连接失败 */ }
+defer locker.Close()
+// 单副本部署：Driver 换成 "memory"，并 blank import distlock/driver/memory
 
 lease, err := locker.TryAcquire(ctx, "order:pay:10086", 30*time.Second)
 switch {
 case errors.Is(err, distlock.ErrLocked):
 	// 被其他实例持有（正常竞争，不是错误）
 case err != nil:
-	// 存储故障
+	// 存储故障或配置非法
 }
 defer lease.Release(context.Background())
 

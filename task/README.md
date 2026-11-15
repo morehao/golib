@@ -12,7 +12,7 @@
 两个子包都在**创建实例时默认建表**（幂等 `AutoMigrate`），常规接入不需要额外步骤：
 
 ```go
-s, err := gcron.New(db, cfg, lock)    // 表不存在就建
+s, err := gcron.New(db, cfg)         // 表不存在就建
 srv, err := gasync.NewServer(cfg, db) // 表不存在就建
 ```
 
@@ -29,7 +29,7 @@ if err := gasync.AutoMigrate(db); err != nil {
 }
 
 // 服务侧（账号只有 DML 权限）
-s, err := gcron.New(db, cfg, lock, gcron.WithoutAutoMigrate())
+s, err := gcron.New(db, cfg, gcron.WithoutAutoMigrate())
 srv, err := gasync.NewServer(cfg, db, gasync.WithoutAutoMigrate())
 ```
 
@@ -78,12 +78,12 @@ srv, err := gasync.NewServer(cfg, db, gasync.WithoutAutoMigrate())
 
 - 支持秒级 cron 表达式（`WithSeconds`）
 - 支持自定义时区（`Location`）
-- 支持多实例分布式锁互斥（基于 distlock，可选自动续期）
+- 支持多实例分布式锁互斥（基于 distlock，租约自动续期）
 - 执行记录自动落库（running/success/failed/skipped/timed_out）
 - 自动注入 TraceID、RequestID、RunID 与日志
 - 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`，超时记录为 timed_out）
 - 同实例防重叠：上一轮未结束时本轮跳过（记录 skipped，与分布式锁互补），且判定先于抢锁
-- 分布式锁生命周期：抢锁失败/锁存储故障分别记录 skipped 原因；开启自动续期后续期失败会立即取消 handler 并记为 lock_lost
+- 分布式锁生命周期：抢锁失败/锁存储故障分别记录 skipped 原因；租约丢失（被抢占/过期，或续期持续失败到续期窗口耗尽）会立即取消 handler 并记为 lock_lost
 - 注册幂等：同一任务 `ID` 已在 DB 中存在时自动 upsert 更新定义（**不覆盖既有 `status`**），进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
 - 运行时管理：`Disable` 暂停（定义保留）、`Enable` 恢复、`Remove` 移除（软删除定义并停止调度，可重新注册）；`status` 以 DB 为准，DB 为 `disabled` 的任务注册后只登记不调度，运营侧下线不会被重启抹掉
 - 执行记录兜底：配置 `Config.StaleRunningCutoff` / `Config.RunRetention` 后，`Start` 会启动内置循环（启动即跑一次，之后按 `RunCleanupInterval` 周期执行）回收崩溃残留的 `running` 记录、清理过期执行记录；也可继续手动调用 `store.MarkStaleRunningAsFailed` / `store.CleanupRuns`
@@ -109,6 +109,7 @@ import (
 	"context"
 
 	"github.com/morehao/golib/distlock"
+	_ "github.com/morehao/golib/distlock/driver/redis" // 注册 "redis" 后端
 	"github.com/morehao/golib/task/gcron"
 	"gorm.io/gorm"
 )
@@ -121,16 +122,27 @@ func main() {
 		panic(err)
 	}
 
-	// 创建调度器（锁为可选，仅当任务开启互斥时需要）
-	// 装配层构造一次 distlock 门面即可全进程复用；不开启互斥时传 nil。
-	var locker *distlock.Locker // locker, _ := distlock.NewRedis(rdbClient)
-	s, err := gcron.New(db, &gcron.Config{WithSeconds: true}, locker)
+	// 创建调度器（锁为可选，仅当任务开启互斥时需要）。
+	// 锁门面是运行期依赖，只通过 WithLocker 传入（New 没有锁的位置参数）：
+	//   - 多副本部署：Driver="redis" + blank import distlock/driver/redis，跨进程互斥；
+	//   - 单进程/本地开发：Driver="memory" + blank import distlock/driver/memory，仅进程内互斥。
+	// 装配层构造一次即可全进程复用，并在进程退出时 Close；不开启互斥
+	// （Task.EnableLock=false 且 Config.EnableLock=false）时可以不传 WithLocker。
+	locker, err := distlock.New(distlock.Config{
+		Driver: "redis",
+		Redis:   &distlock.RedisConfig{Service: "order-svc", Addr: "10.0.0.8:6379", Password: "***"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = locker.Close() }()
+	s, err := gcron.New(db, &gcron.Config{WithSeconds: true}, gcron.WithLocker(locker))
 	if err != nil {
 		panic(err)
 	}
 
-	// 等价写法：用选项配置（New 的位置参数优先）
-	// s, err := gcron.New(db, &gcron.Config{WithSeconds: true}, nil, gcron.WithLocker(locker))
+	// 开启互斥的任务（Task.EnableLock 或 Config.EnableLock）必须配置锁门面，
+	// 否则 Register 返回 ErrLockNotSet。
 
 	// 注册任务
 	if err := s.Register(gcron.Task{
@@ -175,7 +187,7 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 - **超时依赖 handler 配合 ctx**：`Timeout` 通过 `context.WithTimeout` 取消 handler 的 ctx，但无法强杀忽略 ctx 的 handler（如泄漏的后台 goroutine）。若 handler 不响应 ctx 取消，超时后任务仍可能继续在后台执行，且防重叠标记已复位，下一轮会再次触发。handler 内应监听 `ctx.Done()`。是否超时**以 ctx 为准**：ctx 到期后即使 handler 忽略取消、稍后返回 `nil`，该次执行仍记为 `timed_out`（`error_msg` 写明超时时长），与普通失败 `failed` 区分。
 - **panic 会带调用栈**：handler panic 由框架 recover 并记为 `failed`，`error_msg` 为 `gcron task panic: <值>` 加调用栈（落库前按 1024 字节截断，故栈顶帧保留、尾部截断）。
-- **锁租约与锁丢失**：默认 `LockTTL=60s`，**自动续期恒开**（由 `distlock` 负责，handler 跑多久都不会因 TTL 到期而丢锁），因此 `Timeout` 与 `LockTTL` 的大小关系不再影响互斥性，`AutoRenewal` / `StrictLockTTL` 两个开关已移除。`LockTTL` 现在只决定「实例静默宕机后被其他实例接管」的上限；低于 `distlock.MinTTL`（200ms）会在 `Register` 直接返回 `ErrInvalidLockTTL`。
+- **锁租约与锁丢失**：默认 `LockTTL=60s`，**自动续期恒开**（由 `distlock` 负责，handler 跑多久都不会因 TTL 到期而丢锁），因此 `Timeout` 与 `LockTTL` 的大小关系不再影响互斥性，`AutoRenewal` / `StrictLockTTL` 两个开关已移除。`LockTTL` 现在只决定「实例静默宕机后被其他实例接管」的上限；低于 `distlock.MinTTL`（1s）会在 `Register` 直接返回 `ErrInvalidLockTTL`。锁门面只通过 `gcron.WithLocker` 配置（构造函数的锁位置参数与 `Config.Locker` 字段已移除）。
   只有**真的**丢锁（被抢占/过期，或续期持续失败到超过续期窗口）才会取消 handler 的 ctx 并把记录标为 `lock_lost`；瞬时 Redis 抖动不会再误判（旧实现会，导致正常执行被中断并误记 `lock_lost`）。临界区不成立时 handler 应监听 `ctx.Done()` 尽快退出。
 - **同实例防重叠先于抢锁**：上一轮未结束时本轮直接跳过（记录 `skipped`），不会再去抢分布式锁——抢到即释放会把锁短暂让给其他实例，反而扩大并发窗口。抢锁未获取（`distlock.ErrLocked`，正常竞争）与锁存储故障（其他错误）分别以不同的 `error_msg` 记录为 `skipped`，便于区分"竞争"与"故障"。
 - **跳过记录策略**：默认每次跳过都写一行 `skipped`（补齐 `end_at`、`duration_ms=0`）。任务被高频跳过（如多实例竞争同一把锁）时会产生写放大：`Config.RecordSkippedRuns=false` 可完全不落库（仅打日志），`Config.SkipRunMinInterval>0` 可让同一任务同一原因在窗口内只落一行（被抑制的次数记入下一次日志的 `suppressed` 字段）。

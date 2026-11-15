@@ -2,32 +2,37 @@ package distlock
 
 import "errors"
 
-// 组件内部供 errors.Is 判定的哨兵错误。约定：调用方只需要区分「正常竞争 / 锁丢失 / 存储故障」
-// 三类，任何未命中下列哨兵的错误都按存储故障处理。
+// 组件对外的哨兵错误。约定：调用方只需要区分「正常竞争 / 租约丢失 / 存储故障 / 配置非法」
+// 四类，任何未命中下列哨兵的错误都按存储故障处理。
 var (
-	// ErrLocked 锁已被他人持有（TryAcquire），或本实例已不再持有（Refresh）。
+	// ErrLocked 锁已被他人持有（TryAcquire/Acquire），或本实例已不再持有（内部续期）。
+	// 这是正常竞争结果，不是故障。
 	ErrLocked = errors.New("distlock: lock is held by another owner")
 
 	// ErrLockLost 租约丢失：底层明确报告「不再持有」（key 已过期 / value 不匹配 / 已被抢占）。
 	// 这是 Lease.Cause() 的取值之一。
 	ErrLockLost = errors.New("distlock: lease lost")
 
-	// ErrRenewFailed 租约无法确认：续期持续返回存储故障，直到超过 renewDeadline 仍无法确认
-	// 是否仍持有，于是保守地判定为丢失。这是 Lease.Cause() 的另一种取值。
+	// ErrRenewFailed 租约无法确认：续期持续失败直到租约确认窗口耗尽，仍无法确认是否持有，
+	// 于是保守地判定为丢失。这是 Lease.Cause() 的另一种取值。
 	//
 	// 与 ErrLockLost 的区别仅用于排障：前者是「确认被别人拿走了」，后者是「没确认上」。
 	// 对临界区而言两者等价 —— 都必须立即停止工作。
 	ErrRenewFailed = errors.New("distlock: lease cannot be renewed")
 
-	// ErrInvalidKey 锁 key 为空。
-	ErrInvalidKey = errors.New("distlock: key is empty")
+	// ErrAcquireTimeout 阻塞式 Acquire 等待超时（包装 ctx 的错误）。
+	// 它不会同时命中 ErrLocked：超时与「仍被别人持有」是两种不同结果。
+	ErrAcquireTimeout = errors.New("distlock: acquire timed out")
 
-	// ErrInvalidTTL 租约时长非法（小于 MinTTL 或非正）。
-	ErrInvalidTTL = errors.New("distlock: ttl is invalid")
+	// ErrInvalidConfig 构造参数或获取参数非法（Driver 为空、缺 RedisConfig、空 key、
+	// TTL 小于 MinTTL 等）。
+	ErrInvalidConfig = errors.New("distlock: invalid config")
 
-	// ErrInvalidOption 获取选项非法（例如非正的续期窗口）。
-	ErrInvalidOption = errors.New("distlock: acquire option is invalid")
+	// ErrDriverNotRegistered 指定的 driver 没有注册，通常是漏了对应 driver 子包的 blank import。
+	// 错误文案会列出当前已注册的 driver（Drivers），便于区分"漏 import"与"名字拼错"。
+	ErrDriverNotRegistered = errors.New("distlock: driver not registered")
 
-	// ErrNilFactory 后端工厂为 nil。
-	ErrNilFactory = errors.New("distlock: nil factory")
+	// ErrClosed 门面已关闭：Close 之后的 TryAcquire / Acquire 返回它。
+	// 已持有的 Lease 不受 Close 影响，仍需调用方 Release。
+	ErrClosed = errors.New("distlock: locker is closed")
 )

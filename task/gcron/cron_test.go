@@ -2,7 +2,6 @@ package gcron
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,9 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/distlock"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+
+	"github.com/morehao/golib/distlock"
+	_ "github.com/morehao/golib/distlock/driver/redis" // 注册 "redis" 后端
+	_ "github.com/morehao/golib/glog/driver/zap"       // dbredis.New 需要 glog driver
 )
 
 // cronWaitTimeout 是"等 1 秒粒度的 cron 触发一次"的上限。
@@ -24,82 +27,129 @@ import (
 // 放宽上限不削弱检测力：调度器若真的不触发，这些用例仍会失败。
 const cronWaitTimeout = 15 * time.Second
 
-// fakeLock / fakeLockFactory 用于在单测中模拟分布式锁后端，避免依赖真实 Redis。
+// countingDriver 是测试用的内存 Driver：只实现存储原语，用于断言「到底发生了几次抢锁」。
 //
-// 零值语义为"抢到锁、续期正常"；负向场景按需设置字段：
-//   - notLocked：TryLock 返回 distlock.ErrLocked（模拟其他实例持有）；
-//   - lockErr：返回存储故障；
-//   - renewalFailed：Refresh 返回 ErrLocked，经 Lease 的续期循环触发锁丢失
-//     （与真实路径一致：底层明确不持有才判定丢失）。
-type fakeLock struct {
-	notLocked     bool
-	lockErr       error
-	renewalFailed bool
-
-	lockCount   atomic.Int32
-	unlockCount atomic.Int32
+// 之所以不再挂在 go-redis 客户端上数命令：注入 client 的构造入口已随 v1.37 移除
+// （distlock 改为 driver 自建连接），而这几条用例真正要断言的是调度语义（重叠加持时
+// 不再抢锁、被占用时每个 tick 都尝试一次），与 Redis wire 行为无关。
+type countingDriver struct {
+	mu       sync.Mutex
+	held     map[string]string
+	acquires int
+	releases int
 }
 
-func (f *fakeLock) TryLock(ctx context.Context) error {
-	if f.lockErr != nil {
-		return f.lockErr
+func newCountingDriver() *countingDriver {
+	return &countingDriver{held: make(map[string]string)}
+}
+
+func (s *countingDriver) Acquire(_ context.Context, key, token string, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acquires++
+	if _, ok := s.held[key]; ok {
+		return distlock.ErrLocked
 	}
-	f.lockCount.Add(1)
-	if f.notLocked {
+	s.held[key] = token
+	return nil
+}
+
+func (s *countingDriver) Renew(_ context.Context, key, token string, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.held[key] != token {
 		return distlock.ErrLocked
 	}
 	return nil
 }
 
-func (f *fakeLock) Refresh(ctx context.Context) error {
-	if f.renewalFailed {
+func (s *countingDriver) Release(_ context.Context, key, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releases++
+	if s.held[key] != token {
 		return distlock.ErrLocked
 	}
+	delete(s.held, key)
 	return nil
 }
 
-func (f *fakeLock) Unlock(ctx context.Context) error {
-	f.unlockCount.Add(1)
-	return nil
+// acquireCount 返回累计抢锁尝试次数。
+func (s *countingDriver) acquireCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acquires
 }
 
-func (f *fakeLock) Token() string { return "fake" }
-
-// fakeLockFactory 每次 NewMutex 返回同一个替身（便于断言加解锁次数）；
-// lock 为 nil 时返回零值替身（抢到锁），newErr 用于模拟后端故障。
-type fakeLockFactory struct {
-	lock   *fakeLock
-	newErr error
+// resetCounts 清空计数（用于先占住 key、再只统计调度器自己的尝试）。
+func (s *countingDriver) resetCounts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acquires = 0
+	s.releases = 0
 }
 
-func (f *fakeLockFactory) NewMutex(key string, ttl time.Duration) (distlock.Mutex, error) {
-	if f.newErr != nil {
-		return nil, f.newErr
-	}
-	if f.lock != nil {
-		return f.lock, nil
-	}
-	return &fakeLock{}, nil
+// holds 报告 key 当前是否被持有。
+func (s *countingDriver) holds(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.held[key]
+	return ok
 }
 
-// newFakeLocker 用 fake 后端构造 distlock 门面。
-func newFakeLocker(t *testing.T, f distlock.Factory) *distlock.Locker {
+// newCountingLocker 用给定 store 构造门面：同一张占用表上再建一个门面即可模拟
+// "另一个实例持有同一把锁"，且能精确数出抢锁尝试。
+func newCountingLocker(t *testing.T, store *countingDriver) distlock.Locker {
 	t.Helper()
-	locker, err := distlock.New(f)
+	l, err := distlock.NewWithDriver(store)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
+	return l
+}
+
+// newTestLocker 用 miniredis 构造真实 Redis 后端门面（经注册表 + driver 自建连接），
+// 与生产装配（distlock.New + driver/redis）一致；返回的 miniredis 用于 key 存在性断言
+// 与故障注入（Close 模拟存储故障）。
+func newTestLocker(t *testing.T) (distlock.Locker, *miniredis.Miniredis) {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	return newTestLockerOn(t, mr), mr
+}
+
+// newTestLockerOn 在给定 miniredis 上再构造一个 Locker：同一实例上起两个 Locker
+// 即可模拟"另一个实例已持有同一把锁"，不需要 fake 后端。
+func newTestLockerOn(t *testing.T, mr *miniredis.Miniredis) distlock.Locker {
+	t.Helper()
+	locker, err := distlock.New(distlock.Config{
+		Driver: "redis",
+		Redis:  &distlock.RedisConfig{Addr: mr.Addr(), Service: "gcron-test"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = locker.Close() })
 	return locker
+}
+
+// holdKey 用另一个 Locker 在同一 miniredis 上占住 key，并保持租约到测试结束，
+// 模拟“别的实例正在执行同一任务”（原 fakeLock.notLocked 场景）。
+func holdKey(t *testing.T, mr *miniredis.Miniredis, key string) *distlock.Lease {
+	t.Helper()
+	holder := newTestLockerOn(t, mr)
+	lease, err := holder.TryAcquire(context.Background(), key, distlock.MinTTL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lease.Release(context.Background()) })
+	return lease
 }
 
 func TestRegisterValidation(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
-	s, err := New(db, nil, nil)
+	s, err := New(db, nil)
 	require.NoError(t, err)
 	require.Error(t, s.Register(Task{ID: "", TaskType: "report", Spec: "* * * * *", Handler: func(ctx context.Context) error { return nil }}))
 	require.Error(t, s.Register(Task{ID: "x", TaskType: "", Spec: "* * * * *", Handler: func(ctx context.Context) error { return nil }}))
 	require.Error(t, s.Register(Task{ID: "x", TaskType: "report", Spec: "", Handler: func(ctx context.Context) error { return nil }}))
 	require.Error(t, s.Register(Task{ID: "x", TaskType: "report", Spec: "* * * * *"}))
-	_, err = New(nil, nil, nil)
+	_, err = New(nil, nil)
 	require.Error(t, err)
 }
 
@@ -108,7 +158,7 @@ func TestRegisterAndExecute(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	var count int32
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID:       "tick",
@@ -140,12 +190,12 @@ func TestRegisterRestartIdempotent(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	// 第一次"进程"：注册并更新定义
-	s1, err := New(db, nil, nil, WithSeconds(true))
+	s1, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s1.Register(Task{ID: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error { return nil }}))
 
 	// 模拟重启：新 Scheduler 复用同一 DB，重新注册同一 ID 应成功
-	s2, err := New(db, nil, nil, WithSeconds(true))
+	s2, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s2.Register(Task{ID: "tick", TaskType: "report", Spec: "*/2 * * * * *", Handler: func(ctx context.Context) error { return nil }}))
 	// 同进程内重复注册仍被拒绝
@@ -157,7 +207,7 @@ func TestRegisterRestartIdempotent(t *testing.T) {
 
 	// 新 Scheduler 能正常执行
 	var count int32
-	s3, err := New(db, nil, nil, WithSeconds(true))
+	s3, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s3.Register(Task{ID: "tick", TaskType: "report", Spec: "* * * * * *", Handler: func(ctx context.Context) error {
 		atomic.AddInt32(&count, 1)
@@ -182,7 +232,7 @@ func TestOverlapGuard(t *testing.T) {
 	var runningCount atomic.Int32
 	var maxRunning atomic.Int32
 
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID:       "slow",
@@ -257,7 +307,7 @@ func TestLastRunAtWrittenAfterCompletion(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID:       "lastrun",
@@ -296,7 +346,7 @@ func TestTaskTimeout(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID:       "slow-timeout",
@@ -331,7 +381,7 @@ func TestRegisterInvalidSpecNotPersisted(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	err = s.Register(Task{
 		ID:       "bad-spec",
@@ -352,7 +402,7 @@ func TestTaskLifecycleDisableEnableRemove(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	var count atomic.Int32
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	task := Task{
 		ID:       "lifecycle",
@@ -406,13 +456,14 @@ func TestTaskLifecycleDisableEnableRemove(t *testing.T) {
 	require.ErrorIs(t, s.Remove("nope"), ErrTaskNotFound)
 }
 
-// TestWithLockerOption 验证 WithLocker 选项生效（New 的位置参数优先）。
+// TestWithLockerOption 验证 WithLocker 是锁门面的唯一入口：未配置时开启互斥的任务
+// 注册返回 ErrLockNotSet，配置后注册成功（New 已没有位置参数入口）。
 func TestWithLockerOption(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	// 开启锁但未配置工厂 → ErrLockNotSet
-	s, err := New(db, nil, nil, WithEnableLock(true))
+	// 开启锁但未配置门面 → ErrLockNotSet
+	s, err := New(db, nil, WithEnableLock(true))
 	require.NoError(t, err)
 	err = s.Register(Task{
 		ID: "lock1", TaskType: "report", Spec: "* * * * *", EnableLock: true,
@@ -421,7 +472,8 @@ func TestWithLockerOption(t *testing.T) {
 	require.ErrorIs(t, err, ErrLockNotSet)
 
 	// WithLocker 配置门面后注册成功
-	s2, err := New(db, nil, nil, WithEnableLock(true), WithLocker(newFakeLocker(t, &fakeLockFactory{})))
+	locker, _ := newTestLocker(t)
+	s2, err := New(db, nil, WithEnableLock(true), WithLocker(locker))
 	require.NoError(t, err)
 	require.NoError(t, s2.Register(Task{
 		ID: "lock2", TaskType: "report", Spec: "* * * * *", EnableLock: true,
@@ -429,13 +481,15 @@ func TestWithLockerOption(t *testing.T) {
 	}))
 }
 
-// TestTaskWithLockExecutes 验证开启分布式锁（fake 工厂）时任务可正常执行，覆盖锁获取路径。
+// TestTaskWithLockExecutes 验证开启分布式锁（真实 Redis Locker）时任务可正常执行，
+// 覆盖抢锁 → handler → 释放的完整路径。
 func TestTaskWithLockExecutes(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
+	locker, _ := newTestLocker(t)
 	var count atomic.Int32
-	s, err := New(db, nil, nil, WithSeconds(true), WithLocker(newFakeLocker(t, &fakeLockFactory{})))
+	s, err := New(db, nil, WithSeconds(true), WithLocker(locker))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "locked-run", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -456,7 +510,7 @@ func TestRegisterKeepsDisabledStatusAcrossRestart(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s1, err := New(db, nil, nil, WithSeconds(true))
+	s1, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s1.Register(Task{
 		ID: "disabled-task", TaskType: "report", Spec: "* * * * * *",
@@ -466,7 +520,7 @@ func TestRegisterKeepsDisabledStatusAcrossRestart(t *testing.T) {
 
 	// 模拟重启：新进程重新注册同一任务
 	var count atomic.Int32
-	s2, err := New(db, nil, nil, WithSeconds(true))
+	s2, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s2.Register(Task{
 		ID: "disabled-task", TaskType: "report", Spec: "* * * * * *",
@@ -501,7 +555,7 @@ func TestRegisterAfterRemoveResetsStatus(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	var count atomic.Int32
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 
 	register := func() Task {
@@ -533,7 +587,7 @@ func TestStartReapsStaleRunning(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithStaleRunningCutoff(time.Hour))
+	s, err := New(db, nil, WithStaleRunningCutoff(time.Hour))
 	require.NoError(t, err)
 
 	stale := &CronTaskRun{ID: "stale-run", TaskID: "foo", StartAt: time.Now().Add(-2 * time.Hour), Status: TaskRunRunning}
@@ -559,7 +613,7 @@ func TestStartCleansUpOldRuns(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithRunRetention(24*time.Hour))
+	s, err := New(db, nil, WithRunRetention(24*time.Hour))
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -591,14 +645,14 @@ func TestMaintenanceLifecycle(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	// 未配置开关：不启动循环
-	plain, err := New(db, nil, nil)
+	plain, err := New(db, nil)
 	require.NoError(t, err)
 	plain.Start()
 	require.Nil(t, plain.maintainStop, "未配置开关时不应启动兜底循环")
 	require.NoError(t, plain.Stop(context.Background()))
 
 	// 配置开关：Start 启动，重复 Start 不重复启动
-	s, err := New(db, nil, nil, WithRunRetention(time.Hour), WithRunCleanupInterval(time.Hour))
+	s, err := New(db, nil, WithRunRetention(time.Hour), WithRunCleanupInterval(time.Hour))
 	require.NoError(t, err)
 	s.Start()
 	require.NotNil(t, s.maintainStop)
@@ -639,12 +693,14 @@ func TestOverlapCheckedBeforeLock(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	lock := &fakeLock{}
+	store := newCountingDriver()
+	locker := newCountingLocker(t, store)
+	const lockKey = "cron:lock:overlap-lock"
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var once sync.Once
 
-	s, err := New(db, nil, nil, WithSeconds(true), WithLocker(newFakeLocker(t, &fakeLockFactory{lock: lock})))
+	s, err := New(db, nil, WithSeconds(true), WithLocker(locker))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "overlap-lock", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -669,11 +725,13 @@ func TestOverlapCheckedBeforeLock(t *testing.T) {
 		return hasRunLike(listTaskRuns(t, s, "overlap-lock"), TaskRunSkipped, "previous run still in progress")
 	}, cronWaitTimeout, 20*time.Millisecond)
 
-	require.Equal(t, int32(1), lock.lockCount.Load(), "重叠加持的那一轮不应再抢锁")
-	require.Zero(t, lock.unlockCount.Load(), "首轮仍在执行，锁不应被释放")
+	// 抢锁尝试只发生 1 次；首轮仍在执行，租约还在、store 里仍持有该 key。
+	require.EqualValues(t, 1, store.acquireCount(), "重叠加持的那一轮不应再抢锁")
+	require.True(t, store.holds(lockKey), "首轮仍在执行，锁不应被释放")
 
 	close(release)
-	require.Eventually(t, func() bool { return lock.unlockCount.Load() == 1 }, cronWaitTimeout, 20*time.Millisecond)
+	// 释放后 key 不再被持有；下一轮 tick 会再次抢锁，所以用 Eventually 轮询空窗。
+	require.Eventually(t, func() bool { return !store.holds(lockKey) }, cronWaitTimeout, 20*time.Millisecond)
 }
 
 // TestLockNotAcquiredRecordsSkipped 验证"竞争未获取"记录 skipped 且不执行 handler。
@@ -681,9 +739,13 @@ func TestLockNotAcquiredRecordsSkipped(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
+	locker, mr := newTestLocker(t)
+	// 另一个 Locker 在同一 miniredis 上占住该 key 并保持到测试结束：
+	// 等价于“其他实例正在执行同一任务”，cron 抢锁会拿到 distlock.ErrLocked。
+	holdKey(t, mr, "cron:lock:lock-busy")
+
 	var count atomic.Int32
-	s, err := New(db, nil, nil, WithSeconds(true),
-		WithLocker(newFakeLocker(t, &fakeLockFactory{lock: &fakeLock{notLocked: true}})))
+	s, err := New(db, nil, WithSeconds(true), WithLocker(locker))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "lock-busy", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -699,14 +761,20 @@ func TestLockNotAcquiredRecordsSkipped(t *testing.T) {
 	require.Zero(t, count.Load(), "未抢到锁时不应执行 handler")
 }
 
-// TestLockErrorRecordsSkipped 验证锁存储故障（Lock 返回 error）与竞争未获取区分记录。
+// TestLockErrorRecordsSkipped 验证锁存储故障时记录 skipped（与竞争未获取区分记录）。
+//
+// 旧实现里“后端构造失败（Factory.NewMutex 返回 error）”与“抢锁失败”是两个分支；
+// 新 distlock 没有 per-acquire 构造（NewRedis 只在装配期校验 client 非 nil），
+// 该分支已合并进抢锁存储故障，因此只保留这一条用例，覆盖 cron.go 的 lerr != nil 分支。
 func TestLockErrorRecordsSkipped(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
+	locker, mr := newTestLocker(t)
+	mr.Close() // 存储故障：之后抢锁/续期都返回连接错误
+
 	var count atomic.Int32
-	s, err := New(db, nil, nil, WithSeconds(true),
-		WithLocker(newFakeLocker(t, &fakeLockFactory{lock: &fakeLock{lockErr: errors.New("redis unavailable")}})))
+	s, err := New(db, nil, WithSeconds(true), WithLocker(locker))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "lock-err", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -722,53 +790,45 @@ func TestLockErrorRecordsSkipped(t *testing.T) {
 	require.Zero(t, count.Load())
 }
 
-// TestLockCreateErrorRecordsSkipped 验证后端构造故障（NewMutex 返回 error）记录 skipped。
-func TestLockCreateErrorRecordsSkipped(t *testing.T) {
-	db := newTestDB(t)
-	require.NoError(t, AutoMigrate(db))
-
-	var count atomic.Int32
-	s, err := New(db, nil, nil, WithSeconds(true),
-		WithLocker(newFakeLocker(t, &fakeLockFactory{newErr: errors.New("factory unavailable")})))
-	require.NoError(t, err)
-	require.NoError(t, s.Register(Task{
-		ID: "lock-new-err", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
-		Handler: func(context.Context) error { count.Add(1); return nil },
-	}))
-
-	s.Start()
-	t.Cleanup(func() { _ = s.Stop(context.Background()) })
-
-	require.Eventually(t, func() bool {
-		return hasRunLike(listTaskRuns(t, s, "lock-new-err"), TaskRunSkipped, "lock store error")
-	}, cronWaitTimeout, 20*time.Millisecond)
-	require.Zero(t, count.Load())
-}
-
-// TestLockLostCancelsHandlerAndRecordsStatus 验证锁丢失（自动续期失败）时：
+// TestLockLostCancelsHandlerAndRecordsStatus 验证锁丢失（续期窗口耗尽）时：
 // 立即取消 handler 的 ctx，并把执行记录为 lock_lost 而不是普通失败。
+//
+// 故障注入：handler 拿到锁后关闭 miniredis，续期全部失败；TTL=distlock.MinTTL（1s）时
+// 约 2/3 TTL（≈700ms）判定丢锁。走真实 Locker + 真实续期循环，覆盖 cron.go 里
+// lease.Context() → cancelHandler 的接线。
 func TestLockLostCancelsHandlerAndRecordsStatus(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSeconds(true),
-		WithLocker(newFakeLocker(t, &fakeLockFactory{lock: &fakeLock{renewalFailed: true}})))
+	locker, mr := newTestLocker(t)
+	s, err := New(db, nil, WithSeconds(true), WithLocker(locker))
 	require.NoError(t, err)
 
+	handlerStarted := make(chan struct{})
 	handlerDone := make(chan struct{})
-	var once sync.Once
+	var startOnce, doneOnce sync.Once
 	require.NoError(t, s.Register(Task{
 		ID: "lock-lost", TaskType: "report", Spec: "* * * * * *",
-		EnableLock: true, LockTTL: 300 * time.Millisecond,
+		EnableLock: true, LockTTL: distlock.MinTTL,
 		Handler: func(ctx context.Context) error {
+			startOnce.Do(func() { close(handlerStarted) })
 			<-ctx.Done() // 正常情况下一直阻塞，直到锁丢失取消 ctx
-			once.Do(func() { close(handlerDone) })
+			doneOnce.Do(func() { close(handlerDone) })
 			return ctx.Err()
 		},
 	}))
 
 	s.Start()
 	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(cronWaitTimeout):
+		t.Fatal("handler did not start")
+	}
+
+	// 首轮已持有租约：关掉存储，后续续期无法确认持有，续期窗口耗尽即判丢锁。
+	mr.Close()
 
 	select {
 	case <-handlerDone:
@@ -792,7 +852,8 @@ func TestInvalidLockTTLRejectsRegister(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSeconds(true), WithLocker(newFakeLocker(t, &fakeLockFactory{})))
+	locker, _ := newTestLocker(t)
+	s, err := New(db, nil, WithSeconds(true), WithLocker(locker))
 	require.NoError(t, err)
 
 	rerr := s.Register(Task{
@@ -818,10 +879,16 @@ func TestSkipNotRecordedWhenDisabled(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	lock := &fakeLock{notLocked: true}
+	store := newCountingDriver()
+	holder := newCountingLocker(t, store)
+	held, err := holder.TryAcquire(context.Background(), "cron:lock:no-skip-record", distlock.MinTTL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = held.Release(context.Background()) })
+	store.resetCounts() // 只统计调度器自己的抢锁尝试
+	locker := newCountingLocker(t, store)
 	var count atomic.Int32
-	s, err := New(db, nil, nil, WithSeconds(true),
-		WithRecordSkippedRuns(false), WithLocker(newFakeLocker(t, &fakeLockFactory{lock: lock})))
+	s, err := New(db, nil, WithSeconds(true),
+		WithRecordSkippedRuns(false), WithLocker(locker))
 	require.NoError(t, err)
 	require.False(t, s.cfg.recordSkippedRuns())
 
@@ -833,8 +900,8 @@ func TestSkipNotRecordedWhenDisabled(t *testing.T) {
 	s.Start()
 	t.Cleanup(func() { _ = s.Stop(context.Background()) })
 
-	// 至少发生过两次跳过（抢锁次数即跳过次数）
-	require.Eventually(t, func() bool { return lock.lockCount.Load() >= 2 }, cronWaitTimeout, 20*time.Millisecond)
+	// 至少发生过两次抢锁尝试（每次都被占用的锁拒绝）= 两次跳过。
+	require.Eventually(t, func() bool { return store.acquireCount() >= 2 }, cronWaitTimeout, 20*time.Millisecond)
 	require.Zero(t, count.Load())
 	require.Empty(t, listTaskRuns(t, s, "no-skip-record"), "关闭记录后不应写入 skipped 行")
 }
@@ -845,7 +912,7 @@ func TestAllowSkipRecordThrottle(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSkipRunMinInterval(time.Hour))
+	s, err := New(db, nil, WithSkipRunMinInterval(time.Hour))
 	require.NoError(t, err)
 
 	rec, sup := s.allowSkipRecord("t1", "reason")
@@ -867,7 +934,7 @@ func TestAllowSkipRecordThrottle(t *testing.T) {
 	require.True(t, rec)
 
 	// 默认配置：不节流，且默认记录 skipped
-	s2, err := New(db, nil, nil)
+	s2, err := New(db, nil)
 	require.NoError(t, err)
 	require.True(t, s2.cfg.recordSkippedRuns())
 	rec, _ = s2.allowSkipRecord("t1", "reason")
@@ -882,9 +949,11 @@ func TestSkipRecordThrottledByInterval(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSeconds(true),
+	locker, mr := newTestLocker(t)
+	holdKey(t, mr, "cron:lock:throttle")
+	s, err := New(db, nil, WithSeconds(true),
 		WithSkipRunMinInterval(time.Hour),
-		WithLocker(newFakeLocker(t, &fakeLockFactory{lock: &fakeLock{notLocked: true}})))
+		WithLocker(locker))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "throttle", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -919,7 +988,7 @@ func TestLifecycleCtxDeadline(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithLifecycleTimeout(50*time.Millisecond))
+	s, err := New(db, nil, WithLifecycleTimeout(50*time.Millisecond))
 	require.NoError(t, err)
 	ctx, cancel := s.lifecycleCtx()
 	defer cancel()
@@ -927,7 +996,7 @@ func TestLifecycleCtxDeadline(t *testing.T) {
 	require.True(t, ok)
 	require.WithinDuration(t, time.Now().Add(50*time.Millisecond), dl, 30*time.Millisecond)
 
-	s2, err := New(db, &Config{}, nil)
+	s2, err := New(db, &Config{})
 	require.NoError(t, err)
 	ctx2, cancel2 := s2.lifecycleCtx()
 	defer cancel2()
@@ -943,7 +1012,7 @@ func TestLifecycleTimeoutAbortsHangingDB(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	// 先建好 Scheduler（其内部 AutoMigrate 不能经过下面的阻塞回调）
-	s, err := New(db, nil, nil, WithSeconds(true), WithLifecycleTimeout(100*time.Millisecond))
+	s, err := New(db, nil, WithSeconds(true), WithLifecycleTimeout(100*time.Millisecond))
 	require.NoError(t, err)
 
 	db.Callback().Query().Before("gorm:query").Register("test:block_query", func(tx *gorm.DB) {
@@ -967,7 +1036,7 @@ func TestTimedOutWithNilError(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "nil-timeout", TaskType: "report", Spec: "* * * * * *",
@@ -1003,7 +1072,7 @@ func TestPanicRunRecordsStack(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "panic-task", TaskType: "report", Spec: "* * * * * *",
@@ -1037,7 +1106,7 @@ func TestNewDoesNotMutateConfig(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	cfg := &Config{}
-	s, err := New(db, cfg, nil, WithSeconds(true), WithLockTTL(3*time.Second), WithRecordSkippedRuns(false))
+	s, err := New(db, cfg, WithSeconds(true), WithLockTTL(3*time.Second), WithRecordSkippedRuns(false))
 	require.NoError(t, err)
 
 	require.False(t, cfg.WithSeconds, "选项不应写回调用方 Config")
@@ -1062,7 +1131,7 @@ func TestStopWaitsInFlightRuns(t *testing.T) {
 
 	started := make(chan struct{})
 	var once sync.Once
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "inflight", TaskType: "report", Spec: "* * * * * *",
@@ -1100,7 +1169,7 @@ func TestConcurrentRegisterDisableEnableRemove(t *testing.T) {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	s, err := New(db, nil, nil, WithSeconds(true))
+	s, err := New(db, nil, WithSeconds(true))
 	require.NoError(t, err)
 
 	const workers = 8

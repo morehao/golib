@@ -14,9 +14,11 @@ type Option interface {
 }
 
 // newOptions 是构造期选项载体：内嵌调用方可见的 Config（保持"选项写进 Config"的既有语义），
-// 另加只对构造函数有意义的开关（如是否自动建表）。
+// 另加只对构造函数有意义的依赖与开关（锁门面、是否自动建表）。
 type newOptions struct {
 	*Config
+	// Locker 分布式锁门面。它是运行期依赖而不是配置数据，故不放进 Config。
+	Locker      distlock.Locker
 	autoMigrate bool
 }
 
@@ -35,10 +37,15 @@ func WithoutAutoMigrate() Option {
 	return optionFunc(func(o *newOptions) { o.autoMigrate = false })
 }
 
-// WithLocker 配置分布式锁门面（推荐用法；New 的位置参数优先）。
+// WithLocker 配置分布式锁门面：这是 New 获取锁门面的唯一入口（已没有位置参数）。
 //
-// 装配层用 distlock.NewRedis(rdb) 或 distlock.New(customFactory) 构造一次，全进程复用。
-func WithLocker(l *distlock.Locker) Option {
+// 装配层构造一次、全进程复用（并在进程退出时 Close）：
+//   - 多副本部署：Driver="redis" + blank import distlock/driver/redis（跨进程互斥）；
+//   - 单进程/本地开发：Driver="memory" + blank import distlock/driver/memory（仅进程内互斥）。
+//
+// 开启互斥的任务（Task.EnableLock 或 Config.EnableLock）必须配置锁门面，
+// 否则 Register 返回 ErrLockNotSet。
+func WithLocker(l distlock.Locker) Option {
 	return optionFunc(func(o *newOptions) { o.Locker = l })
 }
 

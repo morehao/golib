@@ -24,7 +24,7 @@ func setupRouter(t *testing.T) (*gin.Engine, *gcron.Scheduler) {
 	require.NoError(t, err)
 	require.NoError(t, gcron.AutoMigrate(db))
 
-	s, err := gcron.New(db, nil, nil)
+	s, err := gcron.New(db, nil)
 	require.NoError(t, err)
 
 	noop := func(ctx context.Context) error { return nil }

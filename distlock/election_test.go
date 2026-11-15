@@ -3,7 +3,6 @@ package distlock
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,75 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
-
-// ---- 共享内存后端（多个 elector 竞争同一把锁） ----
-
-type memStore struct {
-	mu       sync.Mutex
-	held     map[string]string
-	seq      atomic.Int64
-	refreshN atomic.Int64
-	failNext atomic.Bool
-}
-
-type memMutex struct {
-	store *memStore
-	key   string
-	token string
-}
-
-func (m *memMutex) TryLock(ctx context.Context) error {
-	m.store.mu.Lock()
-	defer m.store.mu.Unlock()
-	if _, ok := m.store.held[m.key]; ok {
-		return ErrLocked
-	}
-	m.store.held[m.key] = m.token
-	return nil
-}
-
-func (m *memMutex) Refresh(ctx context.Context) error {
-	m.store.refreshN.Add(1)
-	if m.store.failNext.CompareAndSwap(true, false) {
-		return errors.New("transient refresh failure")
-	}
-	m.store.mu.Lock()
-	defer m.store.mu.Unlock()
-	if v, ok := m.store.held[m.key]; !ok || v != m.token {
-		return ErrLocked
-	}
-	return nil
-}
-
-func (m *memMutex) Unlock(ctx context.Context) error {
-	m.store.mu.Lock()
-	defer m.store.mu.Unlock()
-	if v, ok := m.store.held[m.key]; ok && v == m.token {
-		delete(m.store.held, m.key)
-	}
-	return nil
-}
-
-func (m *memMutex) Token() string { return m.token }
-
-type memFactory struct{ store *memStore }
-
-func (f *memFactory) NewMutex(key string, ttl time.Duration) (Mutex, error) {
-	return &memMutex{store: f.store, key: key, token: fmt.Sprintf("node-%d", f.store.seq.Add(1))}, nil
-}
-
-func newMemLocker(t *testing.T) (*Locker, *memStore) {
-	t.Helper()
-	st := &memStore{held: map[string]string{}}
-	return newLockerWithFactory(t, &memFactory{store: st}), st
-}
-
-func newMemElector(t *testing.T, locker *Locker, key string, ttl time.Duration) *LeaderElector {
-	t.Helper()
-	e, err := NewLeaderElector(locker, LeaderConfig{Key: key, TTL: ttl, RetryInterval: 100 * time.Millisecond})
-	require.NoError(t, err)
-	return e
-}
 
 func holdUntilDone(ctx context.Context) { <-ctx.Done() }
 
@@ -91,6 +21,13 @@ func countLeaders(es ...*LeaderElector) int {
 		}
 	}
 	return n
+}
+
+func newTestElector(t *testing.T, l Locker, key string, ttl time.Duration) *LeaderElector {
+	t.Helper()
+	e, err := NewLeaderElector(l, LeaderConfig{Key: key, TTL: ttl, RetryInterval: 100 * time.Millisecond})
+	require.NoError(t, err)
+	return e
 }
 
 type recorder struct {
@@ -124,36 +61,37 @@ func (r *recorder) stoppedCause() error {
 }
 
 func TestLeaderElectorValidation(t *testing.T) {
-	locker, _ := newMemLocker(t)
+	l := newTestLocker(newFakeDriver())
 
-	_, err := NewLeaderElector(nil, LeaderConfig{Key: "k", TTL: time.Second})
-	require.Error(t, err)
+	_, err := NewLeaderElector(nil, LeaderConfig{Key: "k", TTL: MinTTL})
+	require.ErrorIs(t, err, ErrInvalidConfig)
 
-	_, err = NewLeaderElector(locker, LeaderConfig{TTL: time.Second})
-	require.ErrorIs(t, err, ErrInvalidKey)
+	_, err = NewLeaderElector(l, LeaderConfig{TTL: MinTTL})
+	require.ErrorIs(t, err, ErrInvalidConfig)
 
-	_, err = NewLeaderElector(locker, LeaderConfig{Key: "k", TTL: MinTTL - time.Millisecond})
-	require.ErrorIs(t, err, ErrInvalidTTL)
+	_, err = NewLeaderElector(l, LeaderConfig{Key: "k", TTL: MinTTL - time.Millisecond})
+	require.ErrorIs(t, err, ErrInvalidConfig)
 
-	_, err = NewLeaderElector(locker, LeaderConfig{
-		Key: "k", TTL: time.Second, RetryInterval: 2 * time.Second,
+	_, err = NewLeaderElector(l, LeaderConfig{
+		Key: "k", TTL: MinTTL, RetryInterval: 2 * MinTTL,
 	})
-	require.ErrorIs(t, err, ErrInvalidOption)
+	require.ErrorIs(t, err, ErrInvalidConfig)
 
-	e, err := NewLeaderElector(locker, LeaderConfig{Key: "k", TTL: time.Second})
+	e, err := NewLeaderElector(l, LeaderConfig{Key: "k", TTL: MinTTL})
 	require.NoError(t, err)
 	require.False(t, e.IsLeader())
 	require.Zero(t, e.Term())
 	// RetryInterval 默认取 TTL/6。
-	require.Equal(t, time.Second/6, e.cfg.RetryInterval)
+	require.Equal(t, MinTTL/6, e.cfg.RetryInterval)
 }
 
 func TestLeaderElectorOnlyOneLeader(t *testing.T) {
 	const key = "svc:leader"
-	locker, st := newMemLocker(t)
-	a := newMemElector(t, locker, key, 600*time.Millisecond)
-	b := newMemElector(t, locker, key, 600*time.Millisecond)
-	c := newMemElector(t, locker, key, 600*time.Millisecond)
+	st := newFakeDriver()
+	l := newTestLocker(st)
+	a := newTestElector(t, l, key, MinTTL)
+	b := newTestElector(t, l, key, MinTTL)
+	c := newTestElector(t, l, key, MinTTL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
@@ -175,16 +113,14 @@ func TestLeaderElectorOnlyOneLeader(t *testing.T) {
 	cancel()
 	wg.Wait()
 	require.Equal(t, 0, countLeaders(a, b, c))
-	st.mu.Lock()
-	require.Empty(t, st.held[key], "leader must release the lock on shutdown")
-	st.mu.Unlock()
+	require.False(t, st.holds(key), "leader must release the lock on shutdown")
 }
 
 func TestLeaderElectorFailover(t *testing.T) {
 	const key = "svc:leader"
-	locker, _ := newMemLocker(t)
-	first := newMemElector(t, locker, key, 600*time.Millisecond)
-	second := newMemElector(t, locker, key, 600*time.Millisecond)
+	l := newTestLocker(newFakeDriver())
+	first := newTestElector(t, l, key, MinTTL)
+	second := newTestElector(t, l, key, MinTTL)
 
 	firstCtx, stopFirst := context.WithCancel(context.Background())
 	secondCtx, stopSecond := context.WithCancel(context.Background())
@@ -212,13 +148,19 @@ func TestLeaderElectorFailover(t *testing.T) {
 	require.GreaterOrEqual(t, standby.Term(), uint64(1))
 }
 
-// 瞬时续期错误不得导致让位（旧实现会 churn）。
+// 瞬时续期错误不得导致让位。
 func TestLeaderElectorNoChurnOnTransientRenewalError(t *testing.T) {
 	const key = "svc:leader"
-	locker, st := newMemLocker(t)
-	st.failNext.Store(true) // 下一次续期注入一次瞬时故障
+	st := newFakeDriver()
+	st.renewFn = func(call int, _ context.Context) error {
+		if call == 1 {
+			return errors.New("transient refresh failure")
+		}
+		return nil
+	}
 
-	e := newMemElector(t, locker, key, 600*time.Millisecond)
+	l := newTestLocker(st)
+	e := newTestElector(t, l, key, MinTTL)
 
 	var stopped atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
@@ -232,7 +174,10 @@ func TestLeaderElectorNoChurnOnTransientRenewalError(t *testing.T) {
 
 	require.Eventually(t, e.IsLeader, 2*time.Second, 10*time.Millisecond)
 	// 等到「一次失败 + 一次成功」即证明重试路径被覆盖。
-	require.Eventually(t, func() bool { return st.refreshN.Load() >= 2 }, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		_, renew, _ := st.counts()
+		return renew >= 2
+	}, 3*time.Second, 10*time.Millisecond)
 
 	require.True(t, e.IsLeader(), "transient renewal error must not step down")
 	require.Equal(t, int32(0), stopped.Load())
@@ -245,8 +190,8 @@ func TestLeaderElectorNoChurnOnTransientRenewalError(t *testing.T) {
 // 回调必须成对且有序：每个任期 started 一次、stopped 一次。
 func TestLeaderElectorCallbackOrder(t *testing.T) {
 	const key = "svc:leader"
-	locker, _ := newMemLocker(t)
-	e := newMemElector(t, locker, key, 600*time.Millisecond)
+	l := newTestLocker(newFakeDriver())
+	e := newTestElector(t, l, key, MinTTL)
 
 	r := &recorder{}
 	ctx, cancel := context.WithCancel(context.Background())
