@@ -4,9 +4,9 @@
 
 - **gcron**: 定时任务，基于 `robfig/cron/v3`，支持秒级 cron、多实例分布式锁互斥、执行记录落库。
 - **gasync**: 异步任务，基于 `hibiken/asynq`，支持重试、超时、延迟、优先级队列、执行记录落库、跨进程 trace 传递。
-- **gjob**: 有状态任务中心，按任务类型注册 handler，单条任务可查状态 / 取消 / 重放、保留每次尝试记录、跨实例不重跑，支持轮询与「轮询 + 通知器」两种唤醒形态，并有远程 HTTP 形态。
+- **gasync**: 有状态任务中心，按任务类型注册 handler，单条任务可查状态 / 取消 / 重放、保留每次尝试记录、跨实例不重跑，支持轮询与「轮询 + 通知器」两种唤醒形态，并有远程 HTTP 形态。
 
-三个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID；gjob 任务与每次尝试记录各有独立 `id`），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
+三个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID；gasync 任务与每次尝试记录各有独立 `id`），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
 
 ### 三选一判据
 
@@ -16,12 +16,12 @@
 |---|---|
 | 按 cron 表达式周期触发 | `gcron` |
 | 一次性投递，只要「被执行到」，不需要单条任务的状态与撤回 | `gasync` |
-| 需要单条任务实体：查状态 / 取消 / 重放 / 保留每次尝试 / 跨实例不重跑 | `gjob` |
-| 需要管理界面与运维动作 | `gjob`（`manager` + `ginjob`） |
-| 上述需求 + 已有 Redis，要毫秒级起跑 | `gjob`（`manager` + 通知器） |
-| Worker 拿不到数据库（只有任务中心地址） | `gjob`（`worker` + `source/remote`） |
+| 需要单条任务实体：查状态 / 取消 / 重放 / 保留每次尝试 / 跨实例不重跑 | `gasync` |
+| 需要管理界面与运维动作 | `gasync`（`manager` + `ginjob`） |
+| 上述需求 + 已有 Redis，要毫秒级起跑 | `gasync`（`manager` + 通知器） |
+| Worker 拿不到数据库（只有任务中心地址） | `gasync`（`worker` + `source/remote`） |
 
-组合规则：`gcron` 触发 + `gjob` 执行是推荐组合；**不要在 `gjob` 的 handler 内再投 `gasync`**（两套重试叠加）。
+组合规则：`gcron` 触发 + `gasync` 执行是推荐组合；**不要在 `gasync` 的 handler 内再投 `gasync`**（两套重试叠加）。
 
 ## 建表与迁移
 
@@ -58,7 +58,7 @@ center, err := manager.New(&manager.Config{}, db, manager.WithoutAutoMigrate())
   显式 `AutoMigrate(db)` 永远执行；
 - `gasync.NewClient` 不接触 DB，与迁移无关；
 - 要交给 DBA 手工执行，用文末[附录：手工建表 DDL](#附录手工建表-ddl)，或
-  `go run internal/ddlgen/main.go gcron`（`gasync` / `gjob` 同理）从 `model.go` 的 gorm tag 重新生成。
+  `go run internal/ddlgen/main.go gcron`（`gasync` / `gasync` 同理）从 `model.go` 的 gorm tag 重新生成。
 
 ### 升级注意：request_id 索引改名（旧库需手工清理）
 
@@ -220,126 +220,7 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 ### 简介
 
-`gasync` 是基于 `hibiken/asynq` 的异步任务队列，提供生产端（Client）与消费端（Server）封装，支持重试、超时、保留时长、优先级队列，将每次执行记录持久化到数据库，并在跨进程投递时自动传递 trace 信息。
-
-### 特性
-
-- 内置重试、超时、保留时长等默认策略，可在投递时覆盖
-- 支持多队列优先级配置
-- 基于 Redis 的任务队列
-- 执行记录自动落库（processing/completed/failed；同一任务 ID 只保留一行，重试覆盖该行，最终状态反映最后一次尝试）
-- 运行时启停：`Disable` / `Enable` 通过任务定义表（core_async_task）实时上下线任务类型，被下线类型已投递的任务会被消费端丢弃，无需重启
-- 跨进程 trace 传递与统一日志
-- 跨进程 request id 透传：生产端 ctx 携带的 `app.request.id` 会随任务 headers 传递，消费端写入执行记录
-- asynq 内部日志（调度/重试/归档）已桥接至 glog
-- 自动注入 RunID，可通过日志 `extra_keys` 配置 `task.run.id`
-- 支持自定义并发数与优雅停机超时（`ShutdownTimeout`，生产端 `Client.Close`、消费端 `Server.ShutdownContext`）
-- 执行记录兜底：`store.MarkStaleProcessingAsFailed` 将崩溃残留的 processing 记录标记为 failed；`store.CleanupRuns` 按保留策略清理旧记录
-- 支持注入 `asynq.RedisConnOpt`（TLS / Cluster / 已有 client 等场景）
-
-### 数据表
-
-`gasync.NewServer` 默认就会调用 `gasync.AutoMigrate` 创建以下两张表（关闭方式见[建表与迁移](#建表与迁移)）：
-
-| 表名 | 说明 |
-|---|---|
-| `core_async_task` | 异步任务定义（id=任务类型、名称、描述、启停状态；由 `Register` 自动维护，新类型以 enabled 创建，已存在时保留既有状态） |
-| `core_async_task_run` | 异步任务执行记录（id=任务实例 ID、task_type、队列、状态、重试、request id 等） |
-
-两张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
-
-### 使用示例
-
-```go
-package main
-
-import (
-	"context"
-	"encoding/json"
-
-	"github.com/morehao/golib/task/gasync"
-	"gorm.io/gorm"
-)
-
-// 自定义任务：实现 gasync.Task 接口
-type emailTask struct {
-	To string `json:"to"`
-}
-
-func (e emailTask) TypeName() string { return "email:send" }
-
-func (e emailTask) Payload() ([]byte, error) {
-	return json.Marshal(e)
-}
-
-// 处理器：实现 gasync.Handler，即 func(ctx, payload []byte) error
-func handleEmail(ctx context.Context, payload []byte) error {
-	var t emailTask
-	if err := json.Unmarshal(payload, &t); err != nil {
-		return err
-	}
-	// TODO: 发送邮件
-	return nil
-}
-
-func main() {
-	db, _ := openDB() // *gorm.DB，用于执行记录落库
-
-	// 建表：NewServer 内部已默认执行；这里显式调用只是把失败提前到启动阶段（幂等，可省）
-	if err := gasync.AutoMigrate(db); err != nil {
-		panic(err)
-	}
-
-	cfg := &gasync.Config{RedisAddr: "127.0.0.1:6379", Concurrency: 10}
-	// 复杂连接（TLS / Cluster / 已有 client）可通过 Config.RedisConnOpt 或 WithRedisConnOpt 注入 asynq.RedisConnOpt
-
-	// 消费端
-	server, err := gasync.NewServer(cfg, db)
-	if err != nil {
-		panic(err)
-	}
-	if err := server.Register("email:send", handleEmail); err != nil {
-		panic(err)
-	}
-	go func() {
-		_ = server.Run()
-	}()
-	defer server.Shutdown()
-
-	// 生产端
-	client, err := gasync.NewClient(cfg)
-	if err != nil {
-		panic(err)
-	}
-	if _, err := client.Enqueue(context.Background(), emailTask{To: "a@b.c"}); err != nil {
-		panic(err)
-	}
-}
-```
-
-#### 运行时启停
-
-注册后可通过 `Disable` / `Enable` 管理任务类型的上线/下线（定义保留，可反复切换）：
-
-```go
-server.Disable("email:send") // 下线：DB 标记 disabled，已投递未消费的任务被消费端丢弃，定义保留
-server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务立即恢复处理，无需重启
-```
-
-`Register` 时会自动维护定义表：新任务类型以 `enabled` 创建，已存在（含被 `Disable` 或软删除的历史行）时保留既有状态——重启重新注册不会覆盖运营侧的下线操作；被下线类型仍会注册 handler 并输出告警日志，由消费中间件在运行时丢弃其任务，便于 `Enable` 后即时恢复。
-
-#### 注意事项
-
-- **超时依赖 handler 配合 ctx**：asynq 的 `Timeout` 通过取消 ctx 实现，handler 不响应 `ctx.Done()` 时任务仍可能在后台继续执行（asynq 会在超时后将任务重新入队）。handler 内应监听 `ctx.Done()`。
-- **启停语义**：生产端 `Enqueue` 不做启停检查（Client 不依赖 DB），下线期间投递的任务会被消费端丢弃（不落执行记录、不触发重试/死信堆积）；任务定义不存在时视为启用（fail-open），兼容未建定义表的存量部署，也避免状态查询故障导致任务被误丢弃。启停状态在消费端按 `Config.StatusCacheTTL`（默认 30s，<=0 时每个任务查库）缓存，跨实例的 DB 变更最迟一个 TTL 后生效。
-- **执行记录为 at-least-once 语义下的快照**：同一任务可能被并发处理（lease 过期后重新入队），执行记录通过主键 `id`（任务实例 ID）原子 upsert，只保留一行；进程被强杀时记录会停留在 `processing`，可通过 `store.MarkStaleProcessingAsFailed(ctx, cutoff, taskType)` 兜底标记为 failed，`store.CleanupRuns(ctx, before, taskType)` 用于按保留策略清理旧记录。
-- **落库字段截断**：payload 超过 4KB、错误信息超过 1KB 时会截断存储，避免撑大执行记录表。
-
-## gjob
-
-### 简介
-
-`gjob` 是有状态任务中心。与 `gcron`（周期触发）、`gasync`（一次性投递）不同，它把**单条任务当作有状态的实体**管理：提交后落到任务中心，执行侧通过 `Source` 取任务执行，任务可查状态、取消、重放，并保留每一次尝试记录；多实例部署下靠租约（lease）保证同一条任务同一时刻只被一个执行者持有、不会重复执行。唤醒方式（纯轮询 / 轮询 + 通知器）与取任务方式（本地认领 / 远程 HTTP）都是可替换的实现，不是组件的前提。
+`gasync` 是有状态任务中心。与 `gcron`（周期触发）、`gasync`（一次性投递）不同，它把**单条任务当作有状态的实体**管理：提交后落到任务中心，执行侧通过 `Source` 取任务执行，任务可查状态、取消、重放，并保留每一次尝试记录；多实例部署下靠租约（lease）保证同一条任务同一时刻只被一个执行者持有、不会重复执行。唤醒方式（纯轮询 / 轮询 + 通知器）与取任务方式（本地认领 / 远程 HTTP）都是可替换的实现，不是组件的前提。
 
 ### 特性
 
@@ -349,20 +230,31 @@ server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务�
 - 重试与退避：失败按可配置退避策略重试，达到 `max_attempts` 进入终态；`ErrNoRetry` / `ErrSkip` 控制是否重试与跳过
 - 租约与续租：执行者持有租约并在执行中续租，进程崩溃后由回收器接管，跨实例不重跑
 - 两种唤醒形态：纯轮询（`ModePoll`）、轮询 + 通知器（`ModePollNotify`，依赖 Redis 队列，毫秒级起跑，通知丢失由兜底轮询接手）
-- 远程形态：`task/gjob/source/remote` 走 HTTP 与远端任务中心交互，Worker 侧无需直连数据库
+- 远程形态：`task/gasync/source/remote` 走 HTTP 与远端任务中心交互，Worker 侧无需直连数据库
 - 管理面：`manager` 提供 Submit/Get/List/Cancel/Replay/Stats，可接 `ginjob` 暴露 HTTP 端点
 - 自动建表（幂等 `AutoMigrate`）、自动注入 TraceID / RequestID，打通 glog 日志与 gtrace 链路追踪
 
+### 增强能力（P1–P4）
+
+- **每类型独立并发**：`worker.WithHandlerConcurrency(n)` 为单个任务类型设置执行槽数，未设回落全局 `WorkerConfig.Concurrency`。
+- **步骤化任务链**：`Job`/`JobSpec` 带 `ChainID / Step / PrevStep`；`manager.SubmitAfter(ctx, 上游ID, spec)` 提交「上游成功后」的下一步，认领时要求前序 step 已 `succeeded`。`manager.Config.FailFastChain=true` 时某步失败会级联取消同链后续步（默认关闭）。
+- **超时独立状态**：执行超时落 `StatusTimeout`（独立于 `failed`，`Stats.Timeout` 计数；旧 `failed+failure_kind=timeout` 数据查询层兼容）。
+- **业务维度 labels**：`JobSpec.Labels map[string]string` 落 `labels` JSON 列，`JobCond.Labels` 按 label 精确过滤（AND）。
+- **富查询**：`JobCond` 支持 `ChainID`、`CreatedAfter/Before` 时间区间、`OrderBy`（白名单 `created_at/updated_at/priority/status`，非法值回退默认）。
+- **worker 存活判定/上报**：`manager.Registry()` 返回默认「租约推导」判活器（`lease_until>now` 视为在线，零外部依赖）；worker 可配 `HealthReporter` + `HealthReportInterval` 周期上报；需要主动心跳时用可选子包 `manager/health/redis`（仅该子包 import redis）。
+- **类型级启停（Disable/Enable）**：`manager.Disable(ctx, type)` / `Enable(ctx, type)` 运行时下线/恢复某任务类型（写 `core_job_type`，跨实例，无行=启用 fail-open）。disabled 期间该类型任务**不被认领、停在 pending 不丢**，Enable 后自动恢复。worker 侧经 `WorkerConfig.TypeGate`（由 `manager.TypeGate(ttl)` 提供，带缓存）感知开关；`nil` 时行为不变。
+
 ### 数据表
 
-`manager.New` 默认就会调用 `manager.AutoMigrate` 创建以下两张表（关闭方式见[建表与迁移](#建表与迁移)）：
+`manager.New` 默认就会调用 `manager.AutoMigrate` 创建以下三张表（关闭方式见[建表与迁移](#建表与迁移)）：
 
 | 表名 | 说明 |
 |---|---|
-| `core_job` | 任务实体（id=任务 ID、task_type=任务类型、status=状态、priority=优先级、payload=入参、uniq_key=幂等键、biz_id/biz_type=业务维度、generation/attempt/max_attempts=重放与尝试计数、next_run_at/lease_until=调度与租约、各时间与 request id 等） |
-| `core_job_run` | 单次尝试记录（id=尝试 ID、job_id=所属任务、generation/attempt=轮次与第几次尝试、状态、失败分类、起止时间、耗时、错误、request id 等） |
+| `core_async_task` | 任务实体（id=任务 ID、task_type=任务类型、status=状态、priority=优先级、payload=入参、uniq_key=幂等键、biz_id/biz_type=业务维度、chain_id/step/prev_step=任务链、labels=业务标签、generation/attempt/max_attempts=重放与尝试计数、next_run_at/lease_until=调度与租约、各时间与 request id 等） |
+| `core_async_task_run` | 单次尝试记录（id=尝试 ID、async_task_id=所属任务、generation/attempt=轮次与第几次尝试、状态、失败分类、起止时间、耗时、错误、request id 等） |
+| `core_job_type` | 任务类型开关（id、task_type 唯一、enabled；**无行 = 启用**，仅记录被 Disable 的类型，fail-open） |
 
-两表无物理外键（`job_id` 为逻辑关联），也无软删除。两张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
+三表无物理外键（`async_task_id` 为逻辑关联），也无软删除。三张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
 
 ### 使用示例
 
@@ -374,16 +266,16 @@ package main
 import (
 	"context"
 
-	"github.com/morehao/golib/task/gjob"
-	"github.com/morehao/golib/task/gjob/manager"
-	"github.com/morehao/golib/task/gjob/worker"
+	"github.com/morehao/golib/task/gasync"
+	"github.com/morehao/golib/task/gasync/manager"
+	"github.com/morehao/golib/task/gasync/worker"
 	"gorm.io/gorm"
 )
 
 type InvoiceHandler struct{ db *gorm.DB }
 
 // 执行单条任务。返回 nil 表示成功；返回 worker.ErrNoRetry 表示失败但不再重试。
-func (h *InvoiceHandler) Execute(ctx context.Context, t *gjob.Job) error {
+func (h *InvoiceHandler) Execute(ctx context.Context, t *gasync.Job) error {
 	var p InvoicePayload
 	if err := t.Bind(&p); err != nil {
 		return worker.ErrNoRetry // 参数非法，重试无意义
@@ -392,8 +284,8 @@ func (h *InvoiceHandler) Execute(ctx context.Context, t *gjob.Job) error {
 }
 
 // 成功回调：本地形态下 tx 非 nil，与任务终态同事务（远程形态为 nil）。
-func (h *InvoiceHandler) OnSuccess(ctx context.Context, t *gjob.Job) error {
-	tx, ok := gjob.TxFromContext(ctx).(*gorm.DB)
+func (h *InvoiceHandler) OnSuccess(ctx context.Context, t *gasync.Job) error {
+	tx, ok := gasync.TxFromContext(ctx).(*gorm.DB)
 	if !ok || tx == nil {
 		return nil
 	}
@@ -410,15 +302,18 @@ func main() {
 	}
 	defer center.Close()
 
-	// 执行侧：按任务类型注册 handler，然后 Run。
+	// 执行侧：按任务类型注册 handler，然后 Start（同步非阻塞，内部自起 goroutine；启动错误经返回值上报）。
 	w := worker.New(center.Source(), &worker.WorkerConfig{Concurrency: 10})
 	if err := w.Register("invoice:issue", &InvoiceHandler{db: db}); err != nil {
 		panic(err)
 	}
-	go func() { _ = w.Run(context.Background()) }()
+	if err := w.Start(context.Background()); err != nil {
+		panic(err) // 未注册类型 ErrNoType、重复启动 ErrWorkerAlreadyRunning 等在此暴露
+	}
+	// 退出时停机：w.Shutdown(ctx)（等待在途 → 释放租约）。
 
 	// 提交一条任务（UniqKey 相同则命中幂等，不重复建）。
-	task, submitted, err := center.Submit(context.Background(), &gjob.JobSpec{
+	task, submitted, err := center.Submit(context.Background(), &gasync.JobSpec{
 		Type:    "invoice:issue",
 		Payload: payload,
 		BizType: "order",
@@ -430,6 +325,24 @@ func main() {
 ```
 
 换成远程形态只需把取任务源从 `center.Source()` 换成 `remote.New(remoteCfg)`：`worker.New(remote.New(remoteCfg), &worker.WorkerConfig{Concurrency: 10})`。远程形态下 Worker 不直连数据库。
+
+#### 简单用法：只要「投递 + 执行」，不拖管理面
+
+若不需要 Submit/List/Cancel/Replay 等管理面，可跳过 `manager`，直接把 `source/db`（DB Source）交给 `worker`，两者组合即为一套轻量异步任务：
+
+```go
+src, _ := sourcedb.New(sourcedb.Config{DB: db})              // 基于 DB 的 Source
+w := worker.New(src, &worker.WorkerConfig{Concurrency: 10})  // 只认 Source
+w.Register("email:send", handler)
+if err := w.Start(ctx); err != nil {                         // 同步非阻塞，不写 go
+	return err
+}
+defer w.Shutdown(shutdownCtx)
+
+_, _, _ = src.Submit(ctx, &gasync.JobSpec{Type: "email:send", Payload: payload}) // 投递
+```
+
+`source/db` 与 `source/remote` 是 `gasync.Source` 的两种平级实现（DB / HTTP），`worker` 只依赖接口。`manager` 内部同样复用 `source/db`，二者单向依赖、无循环引用（`bash scripts/check-gasync-deps.sh` 可断言）。
 
 #### 注意事项
 
@@ -444,16 +357,16 @@ func main() {
 
 | 字段 | glog 常量 | 含义 |
 |---|---|---|
-| `task.type` | `glog.KeyTaskType` | 任务类型（gcron 为 `TaskType`，gasync 为任务类型名/`async`，gjob 为 `JobSpec.Type`） |
-| `task.id` | `glog.KeyTaskID` | 任务唯一标识（gcron 为任务定义表主键 id，gjob 为任务实体 id） |
-| `task.run.id` | `glog.KeyRunID` | 单次运行的唯一标识（即运行记录表主键 id，gjob 为尝试记录 id） |
+| `task.type` | `glog.KeyTaskType` | 任务类型（gcron 为 `TaskType`，gasync 为任务类型名/`async`，gasync 为 `JobSpec.Type`） |
+| `task.id` | `glog.KeyTaskID` | 任务唯一标识（gcron 为任务定义表主键 id，gasync 为任务实体 id） |
+| `task.run.id` | `glog.KeyRunID` | 单次运行的唯一标识（即运行记录表主键 id，gasync 为尝试记录 id） |
 
 在服务启动的日志配置里将 `task.run.id` 加入 `extra_keys`，即可在任务执行日志中追踪单次运行。
 
 ## 附录：手工建表 DDL
 
 下面就是 `gcron.AutoMigrate` / `gasync.AutoMigrate` / `manager.AutoMigrate` 实际执行的语句，由
-`go run internal/ddlgen/main.go gcron`（`gasync` / `gjob` 同理）从 `model.go` 的 gorm tag 离线生成
+`go run internal/ddlgen/main.go gcron`（`gasync` / `gasync` 同理）从 `model.go` 的 gorm tag 离线生成
 （**不手写**，避免 DDL 与实体漂移）。改完 gorm tag 后请重新生成并同步本节。
 
 - MySQL 8.0+：`ENGINE` / `CHARSET` 取服务端默认（InnoDB + utf8mb4）。要显式指定可在迁移前
@@ -586,96 +499,6 @@ COMMENT ON COLUMN "core_cron_task_run"."request_id" IS '请求 ID';
 
 ```sql
 CREATE TABLE `core_async_task` (
-  `id` varchar(128) COMMENT '任务类型（asynq TypeName，业务方注册时指定）',
-  `created_at` datetime(3) NULL,
-  `updated_at` datetime(3) NULL,
-  `deleted_at` datetime(3) NULL,
-  `name` varchar(128) NOT NULL DEFAULT '' COMMENT '任务名称（展示用）',
-  `description` varchar(256) COMMENT '任务描述',
-  `status` varchar(16) NOT NULL DEFAULT 'enabled' COMMENT '状态',
-  PRIMARY KEY (`id`),
-  INDEX `idx_core_async_task_deleted_at` (`deleted_at`)
-);
-
-CREATE TABLE `core_async_task_run` (
-  `id` varchar(64) COMMENT '任务实例 ID（asynq 任务唯一标识，重试复用同一行）',
-  `created_at` datetime(3) NULL,
-  `task_type` varchar(128) COMMENT '任务类型',
-  `queue` varchar(64) COMMENT '队列',
-  `status` varchar(16) NOT NULL COMMENT '状态',
-  `retried` bigint NOT NULL DEFAULT 0 COMMENT '已重试次数',
-  `max_retry` bigint NOT NULL DEFAULT 0 COMMENT '最大重试次数',
-  `start_at` datetime(3) NULL COMMENT '开始时间',
-  `end_at` datetime(3) NULL COMMENT '结束时间',
-  `duration_ms` bigint NOT NULL DEFAULT 0 COMMENT '耗时毫秒',
-  `error_msg` text COMMENT '错误信息',
-  `payload` text COMMENT '原始 payload 快照',
-  `request_id` varchar(64) COMMENT '请求 ID',
-  PRIMARY KEY (`id`),
-  INDEX `idx_task_type` (`task_type`),
-  INDEX `idx_core_async_task_run_request_id` (`request_id`)
-);
-```
-
-### gasync - PostgreSQL
-
-```sql
-CREATE TABLE "core_async_task" (
-  "id" varchar(128),
-  "created_at" timestamptz,
-  "updated_at" timestamptz,
-  "deleted_at" timestamptz,
-  "name" varchar(128) NOT NULL DEFAULT '',
-  "description" varchar(256),
-  "status" varchar(16) NOT NULL DEFAULT 'enabled',
-  PRIMARY KEY ("id")
-);
-
-CREATE INDEX IF NOT EXISTS "idx_core_async_task_deleted_at" ON "core_async_task" ("deleted_at");
-
-COMMENT ON COLUMN "core_async_task"."id" IS '任务类型（asynq TypeName，业务方注册时指定）';
-COMMENT ON COLUMN "core_async_task"."name" IS '任务名称（展示用）';
-COMMENT ON COLUMN "core_async_task"."description" IS '任务描述';
-COMMENT ON COLUMN "core_async_task"."status" IS '状态';
-
-CREATE TABLE "core_async_task_run" (
-  "id" varchar(64),
-  "created_at" timestamptz,
-  "task_type" varchar(128),
-  "queue" varchar(64),
-  "status" varchar(16) NOT NULL,
-  "retried" bigint NOT NULL DEFAULT 0,
-  "max_retry" bigint NOT NULL DEFAULT 0,
-  "start_at" timestamptz,
-  "end_at" timestamptz,
-  "duration_ms" bigint NOT NULL DEFAULT 0,
-  "error_msg" text,
-  "payload" text,
-  "request_id" varchar(64),
-  PRIMARY KEY ("id")
-);
-
-CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_request_id" ON "core_async_task_run" ("request_id");
-CREATE INDEX IF NOT EXISTS "idx_task_type" ON "core_async_task_run" ("task_type");
-
-COMMENT ON COLUMN "core_async_task_run"."id" IS '任务实例 ID（asynq 任务唯一标识，重试复用同一行）';
-COMMENT ON COLUMN "core_async_task_run"."task_type" IS '任务类型';
-COMMENT ON COLUMN "core_async_task_run"."queue" IS '队列';
-COMMENT ON COLUMN "core_async_task_run"."status" IS '状态';
-COMMENT ON COLUMN "core_async_task_run"."retried" IS '已重试次数';
-COMMENT ON COLUMN "core_async_task_run"."max_retry" IS '最大重试次数';
-COMMENT ON COLUMN "core_async_task_run"."start_at" IS '开始时间';
-COMMENT ON COLUMN "core_async_task_run"."end_at" IS '结束时间';
-COMMENT ON COLUMN "core_async_task_run"."duration_ms" IS '耗时毫秒';
-COMMENT ON COLUMN "core_async_task_run"."error_msg" IS '错误信息';
-COMMENT ON COLUMN "core_async_task_run"."payload" IS '原始 payload 快照';
-COMMENT ON COLUMN "core_async_task_run"."request_id" IS '请求 ID';
-```
-
-### gjob - MySQL
-
-```sql
-CREATE TABLE `core_job` (
   `id` varchar(36) COMMENT '任务 ID（UUID v4）',
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
@@ -686,6 +509,9 @@ CREATE TABLE `core_job` (
   `uniq_key` varchar(128) COMMENT '幂等键',
   `biz_type` varchar(64) NOT NULL DEFAULT '' COMMENT '业务类型',
   `biz_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务 ID',
+  `chain_id` varchar(36) NOT NULL DEFAULT '' COMMENT '任务链 ID（空=独立任务）',
+  `step` int NOT NULL DEFAULT 0 COMMENT '步骤序号',
+  `prev_step` int NOT NULL DEFAULT -1 COMMENT '前序步骤序号（-1=首步）',
   `generation` int NOT NULL DEFAULT 1 COMMENT '重放轮次',
   `attempt` int NOT NULL DEFAULT 0 COMMENT '本轮已尝试次数',
   `max_attempts` int NOT NULL DEFAULT 3 COMMENT '本轮最大尝试次数',
@@ -700,19 +526,21 @@ CREATE TABLE `core_job` (
   `result` text COMMENT '结果快照',
   `request_id` varchar(64) NOT NULL DEFAULT '' COMMENT '请求 ID',
   `trace_id` varchar(64) NOT NULL DEFAULT '' COMMENT 'TraceID',
+  `labels` text COMMENT '业务维度标签（JSON）',
   PRIMARY KEY (`id`),
-  INDEX `idx_core_job_task_type_status_created_at` (`task_type`,`status`,`created_at`),
-  INDEX `idx_core_job_task_type_status_next_run_at` (`task_type`,`status`,`next_run_at`),
-  INDEX `idx_core_job_status_lease_until` (`status`,`lease_until`),
-  INDEX `idx_core_job_status_finished_at` (`status`,`finished_at`),
-  UNIQUE INDEX `uk_core_job_uniq_key` (`uniq_key`),
-  INDEX `idx_core_job_biz_type_biz_id` (`biz_type`,`biz_id`)
+  INDEX `idx_core_async_task_task_type_status_created_at` (`task_type`,`status`,`created_at`),
+  INDEX `idx_core_async_task_task_type_status_next_run_at` (`task_type`,`status`,`next_run_at`),
+  INDEX `idx_core_async_task_status_lease_until` (`status`,`lease_until`),
+  INDEX `idx_core_async_task_status_finished_at` (`status`,`finished_at`),
+  UNIQUE INDEX `uk_core_async_task_uniq_key` (`uniq_key`),
+  INDEX `idx_core_async_task_biz_type_biz_id` (`biz_type`,`biz_id`),
+  INDEX `idx_core_async_task_chain_id_step` (`chain_id`,`step`)
 );
 
-CREATE TABLE `core_job_run` (
+CREATE TABLE `core_async_task_run` (
   `id` varchar(36) COMMENT '尝试 ID（UUID v4）',
   `created_at` datetime(3) NULL COMMENT '创建时间',
-  `job_id` varchar(36) NOT NULL COMMENT '所属任务 ID',
+  `async_task_id` varchar(36) NOT NULL COMMENT '所属任务 ID',
   `generation` int NOT NULL DEFAULT 1 COMMENT '所属重放轮次',
   `attempt` int NOT NULL COMMENT '本轮第几次尝试',
   `status` varchar(16) NOT NULL COMMENT '尝试状态',
@@ -726,17 +554,26 @@ CREATE TABLE `core_job_run` (
   `request_id` varchar(64) NOT NULL DEFAULT '' COMMENT '请求 ID',
   `trace_id` varchar(64) NOT NULL DEFAULT '' COMMENT '本次执行的 TraceID',
   PRIMARY KEY (`id`),
-  INDEX `idx_core_job_run_created_at` (`created_at`),
-  UNIQUE INDEX `uk_core_job_run_task_id_generation_attempt` (`job_id`,`generation`,`attempt`),
-  INDEX `idx_core_job_run_status_started_at` (`status`,`started_at`),
-  INDEX `idx_core_job_run_request_id` (`request_id`)
+  INDEX `idx_core_async_task_run_created_at` (`created_at`),
+  UNIQUE INDEX `uk_core_async_task_run_async_task_id_generation_attempt` (`async_task_id`,`generation`,`attempt`),
+  INDEX `idx_core_async_task_run_status_started_at` (`status`,`started_at`),
+  INDEX `idx_core_async_task_run_request_id` (`request_id`)
+);
+
+CREATE TABLE `core_async_task_type` (
+  `id` varchar(36) COMMENT '主键',
+  `task_type` varchar(128) NOT NULL COMMENT '任务类型',
+  `enabled` boolean NOT NULL DEFAULT true COMMENT '是否启用',
+  `updated_at` datetime(3) NULL COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE INDEX `uk_core_async_task_type_task_type` (`task_type`)
 );
 ```
 
-### gjob - PostgreSQL
+### gasync - PostgreSQL
 
 ```sql
-CREATE TABLE "core_job" (
+CREATE TABLE "core_async_task" (
   "id" varchar(36),
   "created_at" timestamptz,
   "updated_at" timestamptz,
@@ -747,6 +584,9 @@ CREATE TABLE "core_job" (
   "uniq_key" varchar(128),
   "biz_type" varchar(64) NOT NULL DEFAULT '',
   "biz_id" varchar(64) NOT NULL DEFAULT '',
+  "chain_id" varchar(36) NOT NULL DEFAULT '',
+  "step" integer NOT NULL DEFAULT 0,
+  "prev_step" integer NOT NULL DEFAULT -1,
   "generation" integer NOT NULL DEFAULT 1,
   "attempt" integer NOT NULL DEFAULT 0,
   "max_attempts" integer NOT NULL DEFAULT 3,
@@ -761,69 +601,80 @@ CREATE TABLE "core_job" (
   "result" text,
   "request_id" varchar(64) NOT NULL DEFAULT '',
   "trace_id" varchar(64) NOT NULL DEFAULT '',
+  "labels" text,
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX IF NOT EXISTS "idx_core_job_biz_type_biz_id" ON "core_job" ("biz_type","biz_id");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_chain_id_step" ON "core_async_task" ("chain_id","step");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_job_uniq_key" ON "core_job" ("uniq_key");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_biz_type_biz_id" ON "core_async_task" ("biz_type","biz_id");
 
-CREATE INDEX IF NOT EXISTS "idx_core_job_status_finished_at" ON "core_job" ("status","finished_at");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_async_task_uniq_key" ON "core_async_task" ("uniq_key");
 
-CREATE INDEX IF NOT EXISTS "idx_core_job_status_lease_until" ON "core_job" ("status","lease_until");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_status_finished_at" ON "core_async_task" ("status","finished_at");
 
-CREATE INDEX IF NOT EXISTS "idx_core_job_task_type_status_next_run_at" ON "core_job" ("task_type","status","next_run_at");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_status_lease_until" ON "core_async_task" ("status","lease_until");
 
-CREATE INDEX IF NOT EXISTS "idx_core_job_task_type_status_created_at" ON "core_job" ("task_type","status","created_at");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_task_type_status_next_run_at" ON "core_async_task" ("task_type","status","next_run_at");
 
-COMMENT ON COLUMN "core_job"."id" IS '任务 ID（UUID v4）';
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_task_type_status_created_at" ON "core_async_task" ("task_type","status","created_at");
 
-COMMENT ON COLUMN "core_job"."task_type" IS '任务类型';
+COMMENT ON COLUMN "core_async_task"."id" IS '任务 ID（UUID v4）';
 
-COMMENT ON COLUMN "core_job"."status" IS '任务状态';
+COMMENT ON COLUMN "core_async_task"."task_type" IS '任务类型';
 
-COMMENT ON COLUMN "core_job"."priority" IS '优先级';
+COMMENT ON COLUMN "core_async_task"."status" IS '任务状态';
 
-COMMENT ON COLUMN "core_job"."payload" IS '任务入参';
+COMMENT ON COLUMN "core_async_task"."priority" IS '优先级';
 
-COMMENT ON COLUMN "core_job"."uniq_key" IS '幂等键';
+COMMENT ON COLUMN "core_async_task"."payload" IS '任务入参';
 
-COMMENT ON COLUMN "core_job"."biz_type" IS '业务类型';
+COMMENT ON COLUMN "core_async_task"."uniq_key" IS '幂等键';
 
-COMMENT ON COLUMN "core_job"."biz_id" IS '业务 ID';
+COMMENT ON COLUMN "core_async_task"."biz_type" IS '业务类型';
 
-COMMENT ON COLUMN "core_job"."generation" IS '重放轮次';
+COMMENT ON COLUMN "core_async_task"."biz_id" IS '业务 ID';
 
-COMMENT ON COLUMN "core_job"."attempt" IS '本轮已尝试次数';
+COMMENT ON COLUMN "core_async_task"."chain_id" IS '任务链 ID（空=独立任务）';
 
-COMMENT ON COLUMN "core_job"."max_attempts" IS '本轮最大尝试次数';
+COMMENT ON COLUMN "core_async_task"."step" IS '步骤序号';
 
-COMMENT ON COLUMN "core_job"."timeout_ms" IS '单次执行超时毫秒';
+COMMENT ON COLUMN "core_async_task"."prev_step" IS '前序步骤序号（-1=首步）';
 
-COMMENT ON COLUMN "core_job"."next_run_at" IS '最早可认领时间';
+COMMENT ON COLUMN "core_async_task"."generation" IS '重放轮次';
 
-COMMENT ON COLUMN "core_job"."lease_until" IS '租约到期时间';
+COMMENT ON COLUMN "core_async_task"."attempt" IS '本轮已尝试次数';
 
-COMMENT ON COLUMN "core_job"."worker_id" IS '持有租约的执行者';
+COMMENT ON COLUMN "core_async_task"."max_attempts" IS '本轮最大尝试次数';
 
-COMMENT ON COLUMN "core_job"."started_at" IS '本轮首次开始时间';
+COMMENT ON COLUMN "core_async_task"."timeout_ms" IS '单次执行超时毫秒';
 
-COMMENT ON COLUMN "core_job"."finished_at" IS '进入终态的时间';
+COMMENT ON COLUMN "core_async_task"."next_run_at" IS '最早可认领时间';
 
-COMMENT ON COLUMN "core_job"."duration_ms" IS '累计耗时毫秒';
+COMMENT ON COLUMN "core_async_task"."lease_until" IS '租约到期时间';
 
-COMMENT ON COLUMN "core_job"."last_error" IS '最后一次错误';
+COMMENT ON COLUMN "core_async_task"."worker_id" IS '持有租约的执行者';
 
-COMMENT ON COLUMN "core_job"."result" IS '结果快照';
+COMMENT ON COLUMN "core_async_task"."started_at" IS '本轮首次开始时间';
 
-COMMENT ON COLUMN "core_job"."request_id" IS '请求 ID';
+COMMENT ON COLUMN "core_async_task"."finished_at" IS '进入终态的时间';
 
-COMMENT ON COLUMN "core_job"."trace_id" IS 'TraceID';
+COMMENT ON COLUMN "core_async_task"."duration_ms" IS '累计耗时毫秒';
 
-CREATE TABLE "core_job_run" (
+COMMENT ON COLUMN "core_async_task"."last_error" IS '最后一次错误';
+
+COMMENT ON COLUMN "core_async_task"."result" IS '结果快照';
+
+COMMENT ON COLUMN "core_async_task"."request_id" IS '请求 ID';
+
+COMMENT ON COLUMN "core_async_task"."trace_id" IS 'TraceID';
+
+COMMENT ON COLUMN "core_async_task"."labels" IS '业务维度标签（JSON）';
+
+CREATE TABLE "core_async_task_run" (
   "id" varchar(36),
   "created_at" timestamptz,
-  "job_id" varchar(36) NOT NULL,
+  "async_task_id" varchar(36) NOT NULL,
   "generation" integer NOT NULL DEFAULT 1,
   "attempt" integer NOT NULL,
   "status" varchar(16) NOT NULL,
@@ -839,41 +690,59 @@ CREATE TABLE "core_job_run" (
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX IF NOT EXISTS "idx_core_job_run_request_id" ON "core_job_run" ("request_id");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_request_id" ON "core_async_task_run" ("request_id");
 
-CREATE INDEX IF NOT EXISTS "idx_core_job_run_status_started_at" ON "core_job_run" ("status","started_at");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_status_started_at" ON "core_async_task_run" ("status","started_at");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_job_run_task_id_generation_attempt" ON "core_job_run" ("job_id","generation","attempt");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_async_task_run_async_task_id_generation_attempt" ON "core_async_task_run" ("async_task_id","generation","attempt");
 
-CREATE INDEX IF NOT EXISTS "idx_core_job_run_created_at" ON "core_job_run" ("created_at");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_created_at" ON "core_async_task_run" ("created_at");
 
-COMMENT ON COLUMN "core_job_run"."id" IS '尝试 ID（UUID v4）';
+COMMENT ON COLUMN "core_async_task_run"."id" IS '尝试 ID（UUID v4）';
 
-COMMENT ON COLUMN "core_job_run"."created_at" IS '创建时间';
+COMMENT ON COLUMN "core_async_task_run"."created_at" IS '创建时间';
 
-COMMENT ON COLUMN "core_job_run"."job_id" IS '所属任务 ID';
+COMMENT ON COLUMN "core_async_task_run"."async_task_id" IS '所属任务 ID';
 
-COMMENT ON COLUMN "core_job_run"."generation" IS '所属重放轮次';
+COMMENT ON COLUMN "core_async_task_run"."generation" IS '所属重放轮次';
 
-COMMENT ON COLUMN "core_job_run"."attempt" IS '本轮第几次尝试';
+COMMENT ON COLUMN "core_async_task_run"."attempt" IS '本轮第几次尝试';
 
-COMMENT ON COLUMN "core_job_run"."status" IS '尝试状态';
+COMMENT ON COLUMN "core_async_task_run"."status" IS '尝试状态';
 
-COMMENT ON COLUMN "core_job_run"."failure_kind" IS '失败分类';
+COMMENT ON COLUMN "core_async_task_run"."failure_kind" IS '失败分类';
 
-COMMENT ON COLUMN "core_job_run"."worker_id" IS '执行该次尝试的执行者';
+COMMENT ON COLUMN "core_async_task_run"."worker_id" IS '执行该次尝试的执行者';
 
-COMMENT ON COLUMN "core_job_run"."started_at" IS '开始时间';
+COMMENT ON COLUMN "core_async_task_run"."started_at" IS '开始时间';
 
-COMMENT ON COLUMN "core_job_run"."finished_at" IS '结束时间';
+COMMENT ON COLUMN "core_async_task_run"."finished_at" IS '结束时间';
 
-COMMENT ON COLUMN "core_job_run"."duration_ms" IS '本次耗时毫秒';
+COMMENT ON COLUMN "core_async_task_run"."duration_ms" IS '本次耗时毫秒';
 
-COMMENT ON COLUMN "core_job_run"."result" IS '本次结果快照';
+COMMENT ON COLUMN "core_async_task_run"."result" IS '本次结果快照';
 
-COMMENT ON COLUMN "core_job_run"."error_msg" IS '本次错误';
+COMMENT ON COLUMN "core_async_task_run"."error_msg" IS '本次错误';
 
-COMMENT ON COLUMN "core_job_run"."request_id" IS '请求 ID';
+COMMENT ON COLUMN "core_async_task_run"."request_id" IS '请求 ID';
 
-COMMENT ON COLUMN "core_job_run"."trace_id" IS '本次执行的 TraceID';
+COMMENT ON COLUMN "core_async_task_run"."trace_id" IS '本次执行的 TraceID';
+
+CREATE TABLE "core_async_task_type" (
+  "id" varchar(36),
+  "task_type" varchar(128) NOT NULL,
+  "enabled" boolean NOT NULL DEFAULT true,
+  "updated_at" timestamptz,
+  PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_async_task_type_task_type" ON "core_async_task_type" ("task_type");
+
+COMMENT ON COLUMN "core_async_task_type"."id" IS '主键';
+
+COMMENT ON COLUMN "core_async_task_type"."task_type" IS '任务类型';
+
+COMMENT ON COLUMN "core_async_task_type"."enabled" IS '是否启用';
+
+COMMENT ON COLUMN "core_async_task_type"."updated_at" IS '更新时间';
 ```

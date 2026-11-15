@@ -4,7 +4,7 @@
 // 为什么单独放一个包：既有用例把 A1/A2/A3 建在 SQLite 内存库上——建表语句能跑通，
 // 但 SQLite 不校验 MySQL/PG 的方言细节（列类型、索引、NOT NULL），也验证不了
 // 「空库首启」「组件升级补列」这两条真实部署里最常发生的路径。本包补的就是这一段：
-// 同一份机制 × {mysql, postgres} × {filestore, gsetting, gcron, gasync, gjob} 全矩阵真库执行。
+// 同一份机制 × {mysql, postgres} × {filestore, gsetting, gcron, gasync, gasync} 全矩阵真库执行。
 //
 // 期望值全部来自各模型的 gorm tag（parseModel），不在测试里另抄一份列名/索引清单；
 // 库内实况一律从 information_schema / pg_catalog 读回（introspect_test.go），
@@ -24,9 +24,8 @@ import (
 	"github.com/morehao/golib/gsetting"
 	"github.com/morehao/golib/gtest/gtest"
 	"github.com/morehao/golib/gutil"
-	"github.com/morehao/golib/task/gasync"
 	"github.com/morehao/golib/task/gcron"
-	gjobmanager "github.com/morehao/golib/task/gjob/manager"
+	gasyncmanager "github.com/morehao/golib/task/gasync/manager"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -150,42 +149,22 @@ var components = []component{
 	},
 	{
 		name:    "gasync",
-		models:  gasync.SchemaModels(),
-		migrate: gasync.AutoMigrate,
-		withAuto: func(t *testing.T, db *gorm.DB) error {
-			// NewServer 只构造对象、不连接 Redis（asynq server 在 Start 时才连）。
-			_, err := gasync.NewServer(&gasync.Config{RedisAddr: "127.0.0.1:6379"}, db)
-			return err
-		},
-		withoutAuto: func(t *testing.T, db *gorm.DB) error {
-			_, err := gasync.NewServer(&gasync.Config{RedisAddr: "127.0.0.1:6379"}, db, gasync.WithoutAutoMigrate())
-			return err
-		},
-		typeChecks: map[string][]columnTypeCheck{
-			"core_async_task_run": {
-				{column: "payload", mysql: "text", postgres: "text"},
-				{column: "retried", mysql: "bigint", postgres: "bigint"},
-			},
-		},
-	},
-	{
-		name:    "gjob",
-		models:  gjobmanager.SchemaModels(),
-		migrate: gjobmanager.AutoMigrate,
+		models:  gasyncmanager.SchemaModels(),
+		migrate: gasyncmanager.AutoMigrate,
 		withAuto: func(t *testing.T, db *gorm.DB) error {
 			// New 默认执行 AutoMigrate，构造期唯一副作用就是建表：
 			// 不启动后台循环、不消费消息（契约「manager.New 副作用」）。
 			// Config 显式给出合法值：PollInterval < 100ms 会被判 ErrInvalidConfig，
 			// 传一份带契约默认值的 Config，避免依赖 New 内部对零值的兜底。
-			_, err := gjobmanager.New(gjobDefaultConfig(), db)
+			_, err := gasyncmanager.New(gasyncDefaultConfig(), db)
 			return err
 		},
 		withoutAuto: func(t *testing.T, db *gorm.DB) error {
-			_, err := gjobmanager.New(gjobDefaultConfig(), db, gjobmanager.WithoutAutoMigrate())
+			_, err := gasyncmanager.New(gasyncDefaultConfig(), db, gasyncmanager.WithoutAutoMigrate())
 			return err
 		},
 		typeChecks: map[string][]columnTypeCheck{
-			"core_job": {
+			"core_async_task": {
 				// status 是 varchar(16)：方言落点 character varying(16)。
 				{column: "status", mysql: "varchar(16)", postgres: "character varying(16)"},
 				// priority 是 Go int32：MySQL int / PG integer（Go int 会映射成 bigint）。
@@ -196,7 +175,7 @@ var components = []component{
 				{column: "uniq_key", mysql: "varchar(128)", postgres: "character varying(128)"},
 				{column: "payload", mysql: "text", postgres: "text"},
 			},
-			"core_job_run": {
+			"core_async_task_run": {
 				{column: "error_msg", mysql: "text", postgres: "text"},
 				{column: "duration_ms", mysql: "bigint", postgres: "bigint"},
 			},
@@ -204,13 +183,13 @@ var components = []component{
 	},
 }
 
-// gjobDefaultConfig 返回带契约默认值的 manager.Config（与 manager.defaultConfig 对齐）。
+// gasyncDefaultConfig 返回带契约默认值的 manager.Config（与 manager.defaultConfig 对齐）。
 //
 // 这里单独构造而不是传 &manager.Config{}：New 会校验 PollInterval 等字段，
 // 零值（PollInterval=0 < 100ms）会被判 ErrInvalidConfig。显式给默认值让 withAuto
 // 在「New 已实现」后能直接建表，不依赖 New 内部是否对零值兜底。
-func gjobDefaultConfig() *gjobmanager.Config {
-	return &gjobmanager.Config{
+func gasyncDefaultConfig() *gasyncmanager.Config {
+	return &gasyncmanager.Config{
 		PollInterval:         500 * time.Millisecond,
 		FallbackPollInterval: 30 * time.Second,
 		BatchSize:            50,
@@ -221,7 +200,7 @@ func gjobDefaultConfig() *gjobmanager.Config {
 		DefaultTimeout:       30 * time.Second,
 		MaxPayloadBytes:      4096,
 		Retention:            30 * 24 * time.Hour,
-		NotifierQueuePrefix:  "gjob",
+		NotifierQueuePrefix:  "gasync",
 	}
 }
 
