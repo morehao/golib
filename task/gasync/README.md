@@ -49,26 +49,66 @@ task/gasync                     契约内核：AsyncTask / AsyncTaskRun / AsyncT
 - **提交侧**只需 `manager`——`manager.New → Submit → Close`，**不引入 worker**（「只提交、不执行」是合法用法）。
 - **执行侧**只需 `source/db` + `worker`，**不构造 Manager、不引 ginasync 管理面**。
 
+**执行侧进程**（只跑 worker，不需要管理面）：
+
 ```go
-// —— 执行侧进程：只跑 worker，不需要管理面 ——
-src, _ := sourcedb.New(sourcedb.Config{DB: db})              // DB Source（认领/续租/保存）
-w := worker.New(src, &worker.WorkerConfig{Concurrency: 10})  // 只认 Source
-w.Register("email:send", worker.HandlerFunc(func(ctx context.Context, t *gasync.AsyncTask) error {
-	var p EmailPayload
-	if err := t.Bind(&p); err != nil {
-		return worker.ErrNoRetry
+package workerapp
+
+import (
+	"context"
+
+	"github.com/morehao/golib/task/gasync"
+	sourcedb "github.com/morehao/golib/task/gasync/source/db" // 包名就叫 db，别名为 sourcedb 以免和 *gorm.DB 变量重名
+	"github.com/morehao/golib/task/gasync/worker"
+)
+
+// RunWorkers 启动执行侧。db 是调用方打开好的 *gorm.DB 写主库，gasync 不负责连库。
+// 注意：source/db.New 不建表，表由 manager.New 或 manager.AutoMigrate 负责（见下文）。
+func RunWorkers(ctx context.Context, db *gorm.DB) error {
+	src, err := sourcedb.New(sourcedb.Config{DB: db}) // 构造 DB Source（认领/续租/保存）
+	if err != nil {
+		return err
 	}
-	return sendEmail(ctx, p)
-}))
-if err := w.Start(ctx); err != nil {   // 同步非阻塞，不写 go 关键字
+
+	w := worker.New(src, &worker.WorkerConfig{Concurrency: 10}) // Worker 只认 gasync.Source，不 import manager
+	_ = w.Register("email:send", worker.HandlerFunc(func(ctx context.Context, t *gasync.AsyncTask) error {
+		var p EmailPayload
+		if err := t.Bind(&p); err != nil { // payload 反序列化失败：不重试，直接 failed
+			return worker.ErrNoRetry
+		}
+		return sendEmail(ctx, p)
+	}))
+
+	if err := w.Start(ctx); err != nil { // 同步非阻塞，不写 go 关键字
+		return err
+	}
+	defer w.Shutdown(context.Background()) // 实际用带超时的 ctx
+	return nil
+}
+```
+
+**提交侧进程**（可同进程也可分离；只提交，不跑 worker）：
+
+```go
+package producer
+
+import (
+	"context"
+
+	"github.com/morehao/golib/task/gasync"
+	"github.com/morehao/golib/task/gasync/manager"
+)
+
+func SubmitEmail(ctx context.Context, db *gorm.DB, payload []byte) error {
+	center, err := manager.New(&manager.Config{}, db) // 默认 AutoMigrate 建表（执行侧没建表时由这里补上）
+	if err != nil {
+		return err
+	}
+	defer center.Close()
+
+	_, _, err = center.Submit(ctx, &gasync.AsyncTaskSpec{Type: "email:send", Payload: payload})
 	return err
 }
-defer w.Shutdown(shutdownCtx)
-
-// —— 提交侧进程（可同进程也可分离）：只提交，不跑 worker ——
-center, _ := manager.New(&manager.Config{}, db)
-defer center.Close()
-_, _, _ = center.Submit(ctx, &gasync.AsyncTaskSpec{Type: "email:send", Payload: payload})
 ```
 
 > 投递（`Submit`）始终经 `manager`；`source/db` 只提供 `Source`（`Fetch/Renew/Save`）与只读 `Store`，不含提交入口。若执行进程也承担提交，注入一个 `manager` 即可；若只执行，则完全不碰 `manager` / `ginasync`。
@@ -76,22 +116,37 @@ _, _, _ = center.Submit(ctx, &gasync.AsyncTaskSpec{Type: "email:send", Payload: 
 ### 形态 B：完整任务中心（要查状态 / 取消 / 重放 / 管理面）
 
 ```go
-center, err := manager.New(&manager.Config{}, db) // 默认 AutoMigrate 建表
-if err != nil {
-	return err
-}
-defer center.Close()
+package invoiceapp
 
-w := worker.New(center.Source(), &worker.WorkerConfig{Concurrency: 10})
-w.Register("invoice:issue", &InvoiceHandler{db: db})
-if err := w.Start(ctx); err != nil {
-	return err
-}
+import (
+	"context"
 
-task, submitted, err := center.Submit(ctx, &gasync.AsyncTaskSpec{
-	Type: "invoice:issue", Payload: payload,
-	BizType: "order", BizID: orderNo, UniqKey: "invoice:issue:" + orderNo,
-})
+	"github.com/morehao/golib/task/gasync"
+	"github.com/morehao/golib/task/gasync/manager"
+	"github.com/morehao/golib/task/gasync/worker"
+)
+
+// Start 起任务中心 + 内置执行循环。db 为调用方打开的 *gorm.DB 写主库。
+func Start(ctx context.Context, db *gorm.DB, payload []byte, orderNo string) (*gasync.AsyncTask, bool, error) {
+	center, err := manager.New(&manager.Config{}, db) // 默认 AutoMigrate 建表
+	if err != nil {
+		return nil, false, err
+	}
+	defer center.Close()
+
+	w := worker.New(center.Source(), &worker.WorkerConfig{Concurrency: 10}) // 复用 manager 内部的 DB Source
+	_ = w.Register("invoice:issue", &InvoiceHandler{db: db})                // InvoiceHandler 需实现 Execute(ctx, *gasync.AsyncTask) error
+	if err := w.Start(ctx); err != nil {
+		return nil, false, err
+	}
+	defer w.Shutdown(context.Background())
+
+	// UniqKey 命中时 submitted=false，返回既有 task（幂等投递）。
+	return center.Submit(ctx, &gasync.AsyncTaskSpec{
+		Type: "invoice:issue", Payload: payload,
+		BizType: "order", BizID: orderNo, UniqKey: "invoice:issue:" + orderNo,
+	})
+}
 ```
 
 可接 `ginasync` HTTP 适配层暴露管理端点（见 `biz/gserver/`）。
@@ -99,8 +154,38 @@ task, submitted, err := center.Submit(ctx, &gasync.AsyncTaskSpec{
 ### 形态 C：远程 Worker（执行节点只连中心、不连库）
 
 ```go
-src, _ := remote.New(remote.Config{BaseURL: "https://center/gasync", WorkerID: "w-1"})
-w := worker.New(src, &worker.WorkerConfig{Concurrency: 10}) // 与形态 A 完全相同的 Worker 代码
+package remoteapp
+
+import (
+	"context"
+
+	"github.com/morehao/golib/task/gasync"
+	"github.com/morehao/golib/task/gasync/source/remote" // 远程 Source：HTTP 三段 Fetch/Renew/Save
+	"github.com/morehao/golib/task/gasync/worker"
+)
+
+// RunWorker 起一个只连中心、不连库的执行节点。Worker 代码与形态 A 完全一致，只是换了 Source。
+func RunWorker(ctx context.Context) error {
+	src, err := remote.New(remote.Config{BaseURL: "https://center/gasync", WorkerID: "w-1"})
+	if err != nil {
+		return err
+	}
+
+	w := worker.New(src, &worker.WorkerConfig{Concurrency: 10})
+	_ = w.Register("email:send", worker.HandlerFunc(func(ctx context.Context, t *gasync.AsyncTask) error {
+		var p EmailPayload
+		if err := t.Bind(&p); err != nil {
+			return worker.ErrNoRetry
+		}
+		return sendEmail(ctx, p)
+	}))
+
+	if err := w.Start(ctx); err != nil {
+		return err
+	}
+	defer w.Shutdown(context.Background())
+	return nil
+}
 ```
 
 同一份 `Handler` + `Worker` 可在本地 / 远程两种 `Source` 上运行，流程结论一致（见 `TestA12_SourceReplaceable`）。远程形态下钩子拿不到事务（`gasync.TxFromContext` 返回 nil）。
@@ -116,15 +201,19 @@ w := worker.New(src, &worker.WorkerConfig{Concurrency: 10}) // 与形态 A 完�
 
 ### `source/db`
 
+包路径 `github.com/morehao/golib/task/gasync/source/db`，**包名就叫 `db`**（与 `*gorm.DB` 变量重名时会冲突，引用时通常别名成 `sourcedb`）：
+
 ```go
-func New(cfg Config) (*Source, error) // Config{DB, LeaseTTL, Backoff, WorkerID, FailFastChain}
+import sourcedb "github.com/morehao/golib/task/gasync/source/db"
+
+func New(cfg Config) (*Source, error) // Config{DB *gorm.DB, LeaseTTL, Backoff, WorkerID, FailFastChain}
 func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTask/ListRun/...）
 // Source 仅实现 gasync.Source：Fetch / Renew / Save / Close；不含 Submit（提交走 manager）
 ```
 
 ### `manager`
 
-- `New(cfg, db, opts...)`；`Submit` / `SubmitAfter`（步骤链）/ `Get` / `GetRuns` / `List` / `ListRuns` / `Cancel` / `Replay` / `Stats` / `Mode` / `Store` / `Source` / `Close`；
+- `New(cfg *Config, db *gorm.DB, opts...) (*Manager, error)`；`Submit` / `SubmitAfter`（步骤链）/ `Get` / `GetRuns` / `List` / `ListRuns` / `Cancel` / `Replay` / `Stats` / `Mode` / `Store` / `Source` / `Close`；
 - 类型级启停：`Disable(ctx, type)` / `Enable(ctx, type)` / `IsTypeEnabled` / `TypeGate(ttl)`；
 - 存活判定：`Registry() WorkerRegistry`（基于租约推导，零外部依赖）；
 - 选项：`WithoutAutoMigrate` / `WithNotifier` / `WithBackoff` / `WithPollInterval` / `WithBatchSize` / `WithLeaseTTL` / `WithRetention`。
