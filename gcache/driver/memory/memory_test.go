@@ -20,7 +20,7 @@ type user struct {
 
 func newTestCache(t *testing.T, opts ...gcache.Option) gcache.Cache {
 	t.Helper()
-	c, err := gcache.New(gcache.Config{Backend: "memory"}, opts...)
+	c, err := gcache.New(gcache.Config{Driver: "memory"}, opts...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	return c
@@ -45,7 +45,7 @@ func TestGetMiss(t *testing.T) {
 }
 
 func TestKeyPrefix(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory", KeyPrefix: "app:"})
+	c, err := gcache.New(gcache.Config{Driver: "memory", KeyPrefix: "app:"})
 	require.NoError(t, err)
 	defer c.Close()
 	ctx := context.Background()
@@ -60,7 +60,7 @@ func TestKeyPrefix(t *testing.T) {
 }
 
 func TestTTLExpiry(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory"})
+	c, err := gcache.New(gcache.Config{Driver: "memory"})
 	require.NoError(t, err)
 	defer c.Close()
 	mc := c.(*Cache)
@@ -90,7 +90,7 @@ func TestTTLExpiry(t *testing.T) {
 }
 
 func TestDefaultTTL(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory", DefaultTTL: time.Second})
+	c, err := gcache.New(gcache.Config{Driver: "memory", DefaultTTL: time.Second})
 	require.NoError(t, err)
 	defer c.Close()
 	mc := c.(*Cache)
@@ -133,7 +133,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestCloseIdempotentAndClosed(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory"})
+	c, err := gcache.New(gcache.Config{Driver: "memory"})
 	require.NoError(t, err)
 	ctx := context.Background()
 
@@ -148,7 +148,7 @@ func TestCloseIdempotentAndClosed(t *testing.T) {
 }
 
 func TestCleanupGoroutineStopsOnClose(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory", CleanupInterval: 10 * time.Millisecond})
+	c, err := gcache.New(gcache.Config{Driver: "memory", CleanupInterval: 10 * time.Millisecond})
 	require.NoError(t, err)
 	mc := c.(*Cache)
 
@@ -171,7 +171,7 @@ func TestCleanupGoroutineStopsOnClose(t *testing.T) {
 }
 
 func TestMaxEntriesLRU(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory", MaxEntries: 2})
+	c, err := gcache.New(gcache.Config{Driver: "memory", MaxEntries: 2})
 	require.NoError(t, err)
 	defer c.Close()
 	ctx := context.Background()
@@ -275,7 +275,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 // TestPerEntryTTL 验证每条记录独立 TTL（这是保留自研 TTL 判定的核心行为，
 // simplelru 本身无 TTL；expirable 也是整 cache 级，不满足 per-key 过期）。
 func TestPerEntryTTL(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory"})
+	c, err := gcache.New(gcache.Config{Driver: "memory"})
 	require.NoError(t, err)
 	defer c.Close()
 	mc := c.(*Cache)
@@ -308,7 +308,7 @@ func TestPerEntryTTL(t *testing.T) {
 // TestLRUEvictionOrderOnSimpleLRUPath 在 MaxEntries>0（simplelru 承载）路径上
 // 验证淘汰顺序严格遵循 LRU：命中会刷新热度，最久未用者先淘汰。
 func TestLRUEvictionOrderOnSimpleLRUPath(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory", MaxEntries: 3})
+	c, err := gcache.New(gcache.Config{Driver: "memory", MaxEntries: 3})
 	require.NoError(t, err)
 	defer c.Close()
 	mc := c.(*Cache)
@@ -339,7 +339,7 @@ func TestLRUEvictionOrderOnSimpleLRUPath(t *testing.T) {
 
 // TestUnlimitedNoEviction 验证 MaxEntries<=0 时不做淘汰。
 func TestUnlimitedNoEviction(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory", MaxEntries: 0})
+	c, err := gcache.New(gcache.Config{Driver: "memory", MaxEntries: 0})
 	require.NoError(t, err)
 	defer c.Close()
 	mc := c.(*Cache)
@@ -356,7 +356,7 @@ func TestUnlimitedNoEviction(t *testing.T) {
 
 // TestCleanupSweepsExpiredOnSimpleLRUPath 验证周期清理在 simplelru 路径也生效。
 func TestCleanupSweepsExpiredOnSimpleLRUPath(t *testing.T) {
-	c, err := gcache.New(gcache.Config{Backend: "memory", MaxEntries: 4})
+	c, err := gcache.New(gcache.Config{Driver: "memory", MaxEntries: 4})
 	require.NoError(t, err)
 	defer c.Close()
 	mc := c.(*Cache)

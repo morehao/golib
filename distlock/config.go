@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// RedisConfig 是 Driver="redis" 时使用的连接配置。
+// RedisConfig 是 Driver=DriverRedis 时使用的连接配置。
 //
 // 刻意保持为纯数据（可放进配置文件 / YAML），不引入 dbaccess/dbredis 类型，
 // 避免 distlock 根包对具体后端的编译期依赖；driver/redis 按字段构造底层客户端，
@@ -22,13 +22,21 @@ type RedisConfig struct {
 	WriteTimeout time.Duration // 写入超时
 }
 
+// DriverType 标识选用哪个 driver 实现。
+type DriverType string
+
+const (
+	DriverMemory DriverType = "memory"
+	DriverRedis  DriverType = "redis"
+)
+
 // Config 是构造期配置：选哪个 driver，以及该 driver 需要的连接信息。
 //
-// Driver 必填（"memory" | "redis"），**有意不默认 memory**：锁误配成内存形态在多副本下
+// Driver 必填（DriverMemory | DriverRedis），**有意不默认 memory**：锁误配成内存形态在多副本下
 // 会静默失去互斥，代价远高于缓存误配，因此要求装配层显式写清。
 type Config struct {
-	Driver string       // 必填："memory" | "redis"
-	Redis  *RedisConfig // Driver="redis" 时必填
+	Driver DriverType   // 必填：DriverMemory | DriverRedis
+	Redis  *RedisConfig // Driver=DriverRedis 时必填
 }
 
 // DriverFactory 由 driver 子包实现：把 Config 变成 Driver。
@@ -85,13 +93,13 @@ func lookup(name string) (DriverFactory, bool) {
 
 // validateConfig 校验与 driver 无关的配置项。
 //
-// "Driver=redis 但没给 RedisConfig" 属于配置错误（不是"漏 import"），因此放在核心校验，
+// "Driver=DriverRedis 但没给 RedisConfig" 属于配置错误（不是"漏 import"），因此放在核心校验，
 // 与 gcache 的 validate 同位置：核心包内不 import 任何 driver 也能覆盖这条分支。
 func validateConfig(cfg Config) error {
 	if cfg.Driver == "" {
-		return fmt.Errorf("%w: Driver is required (\"memory\" or \"redis\")", ErrInvalidConfig)
+		return fmt.Errorf("%w: Driver is required (%q or %q)", ErrInvalidConfig, DriverMemory, DriverRedis)
 	}
-	if cfg.Driver == "redis" && cfg.Redis == nil {
+	if cfg.Driver == DriverRedis && cfg.Redis == nil {
 		return fmt.Errorf("%w: Driver=redis requires RedisConfig", ErrInvalidConfig)
 	}
 	return nil

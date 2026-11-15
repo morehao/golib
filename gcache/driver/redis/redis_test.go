@@ -26,7 +26,7 @@ func newTestCache(t *testing.T, opts ...gcache.Option) gcache.Cache {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	base := []gcache.Option{gcache.WithRedis(gcache.RedisConfig{Service: "gcache-test", Addr: mr.Addr()})}
-	c, err := gcache.New(gcache.Config{Backend: "redis"}, append(base, opts...)...)
+	c, err := gcache.New(gcache.Config{Driver: "redis"}, append(base, opts...)...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	return c
@@ -53,7 +53,7 @@ func TestGetMiss(t *testing.T) {
 func TestKeyPrefix(t *testing.T) {
 	mr := miniredis.RunT(t)
 	c, err := gcache.New(gcache.Config{
-		Backend:   "redis",
+		Driver:    "redis",
 		KeyPrefix: "app:",
 		Redis:     &gcache.RedisConfig{Service: "t", Addr: mr.Addr()},
 	})
@@ -166,8 +166,8 @@ func TestGetOrLoadErrorPropagates(t *testing.T) {
 func TestGetOrLoadLockContended(t *testing.T) {
 	mr := miniredis.RunT(t)
 	c, err := gcache.New(gcache.Config{
-		Backend: "redis",
-		Redis:   &gcache.RedisConfig{Service: "t", Addr: mr.Addr()},
+		Driver: "redis",
+		Redis:  &gcache.RedisConfig{Service: "t", Addr: mr.Addr()},
 	})
 	require.NoError(t, err)
 	defer c.Close()
@@ -190,8 +190,8 @@ func TestGetOrLoadLockContended(t *testing.T) {
 func TestClose(t *testing.T) {
 	mr := miniredis.RunT(t)
 	c, err := gcache.New(gcache.Config{
-		Backend: "redis",
-		Redis:   &gcache.RedisConfig{Service: "t", Addr: mr.Addr()},
+		Driver: "redis",
+		Redis:  &gcache.RedisConfig{Service: "t", Addr: mr.Addr()},
 	})
 	require.NoError(t, err)
 	require.NoError(t, c.Close())

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/morehao/golib/gcache"
-	_ "github.com/morehao/golib/gcache/memory"
+	_ "github.com/morehao/golib/gcache/driver/memory"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,13 +82,13 @@ func (s *countingSource) reset() {
 
 func newTestCache(t *testing.T) gcache.Cache {
 	t.Helper()
-	c, err := gcache.New(gcache.Config{Backend: "memory", KeyPrefix: "test:dict:"})
+	c, err := gcache.New(gcache.Config{Driver: "memory", KeyPrefix: "test:dict:"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 
-// newCachingFixture 建表 seed 后，用 gcache/memory 包裹真实 dbSource 得到 cachingSource，
+// newCachingFixture 建表 seed 后，用 gcache/driver/memory 包裹真实 dbSource 得到 cachingSource，
 // 并把 Dict 的 source 换成该装饰器，返回计数源与装饰器句柄。
 func newCachingFixture(t *testing.T) (*fixture, *countingSource, Source) {
 	t.Helper()

@@ -23,11 +23,11 @@
 //	_ "github.com/morehao/golib/distlock/driver/redis"   // 跨进程形态（多副本部署默认）
 //	_ "github.com/morehao/golib/distlock/driver/memory"  // 进程内形态（单副本、CLI、本地开发）
 //
-//	locker, err := distlock.New(distlock.Config{Driver: "redis", Redis: &distlock.RedisConfig{Addr: "127.0.0.1:6379"}})
+//	locker, err := distlock.New(distlock.Config{Driver: distlock.DriverRedis, Redis: &distlock.RedisConfig{Addr: "127.0.0.1:6379"}})
 //	defer locker.Close()
 //
 // 一个进程只装配一种后端（同一后端的多个 Locker 是允许的）：**同 key 在两个后端上互不互斥**，
-// 混用等于没有锁。Driver 必填、不默认 memory——锁误配成内存形态在多副本下会静默失去互斥。
+// 混用等于没有锁。Driver 必填、不默认 DriverMemory——锁误配成内存形态在多副本下会静默失去互斥。
 //
 // redis 后端的连接由 driver 自己创建（经 dbaccess/dbredis），因此 Close 负责关闭它；
 // memory 后端的 Close 是空实现。关闭顺序：先 Release 所有租约，再 Close。
@@ -75,6 +75,6 @@
 //
 // # 与 gcache 短占位锁的区别
 //
-// gcache/redis 里用 SET NX PX 做的防缓存击穿占位是「短 TTL、fail-open、无持有者校验、无续期」
+// gcache/driver/redis 里用 SET NX PX 做的防缓存击穿占位是「短 TTL、fail-open、无持有者校验、无续期」
 // 的另一种语义，不要与本组件互相替换或合并。
 package distlock

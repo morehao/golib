@@ -74,7 +74,7 @@ func TestNewWithDriverNil(t *testing.T) {
 func TestNewDispatchesToFactory(t *testing.T) {
 	st := newFakeDriver()
 	Register("dispatch-driver", func(cfg Config) (Driver, error) {
-		require.Equal(t, "dispatch-driver", cfg.Driver)
+		require.Equal(t, DriverType("dispatch-driver"), cfg.Driver)
 		return st, nil
 	})
 
