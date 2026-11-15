@@ -5,7 +5,7 @@ import "slices"
 // SliceDiff 返回在 a 中但不在 b 中的元素（保留 a 中的顺序与重复）。
 //
 // 标准库 slices 没有「保留 a 的重复、排除 b 中元素」的直接等价函数
-//（slices.DeleteFunc 只能按谓词删除、且对重复元素语义不同），故保留薄实现。
+// （slices.DeleteFunc 只能按谓词删除、且对重复元素语义不同），故保留薄实现。
 func SliceDiff[T comparable](a, b []T) []T {
 	setB := make(map[T]struct{}, len(b))
 	for _, item := range b {
