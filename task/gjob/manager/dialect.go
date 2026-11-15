@@ -138,6 +138,24 @@ func (d Dialect) beforeExpr() string {
 	}
 }
 
+// beforeArg 把时长换算成 beforeExpr 的参数位应传的值（表示「往前推 dur」）。
+//
+//   - MySQL：DATE_SUB 自行做减法，传正微秒；
+//   - PostgreSQL：表达式用减号，传正微秒；
+//   - SQLite：modifier 是加法的，"往前" 需传负数秒。
+func (d Dialect) beforeArg(dur time.Duration) any {
+	switch d {
+	case DialectMySQL:
+		return dur.Microseconds()
+	case DialectPostgres:
+		return float64(dur.Microseconds())
+	case DialectSQLite:
+		return fmt.Sprintf("%0.3f seconds", -dur.Seconds())
+	default:
+		return dur.Microseconds()
+	}
+}
+
 // afterExpr 返回「now + d」的 SQL 表达式，用参数占位 ? 承载间隔值。
 //
 // 间隔一律以「微秒」为参数单位（SQLite 是 N 秒浮点，见下），避免各数据库
@@ -230,5 +248,21 @@ func (d Dialect) isolationReadCommittedSQL() string {
 		return "SET TRANSACTION ISOLATION LEVEL READ COMMITTED"
 	default:
 		return ""
+	}
+}
+
+// leastLeaseOrNowExpr 返回「LEAST(COALESCE(lease, now), now)」的 SQL 表达式与参数，
+// 用于回收器 ① 的 finished_at（取失权时刻，见 internals「回收器」）。
+//
+// leaseArg 是 select 出的 lease_until 值（可能 nil）。SQLite 需把结果落成驱动可解析的
+// 时间文本：先 julianday 化取 min，再用 strftime 还原为 'YYYY-MM-DD HH:MM:SS.SSS'。
+func (s *store) leastLeaseOrNow(leaseArg any, nowVal string) (string, []any) {
+	switch s.dialect {
+	case DialectSQLite:
+		expr := "strftime('%Y-%m-%d %H:%M:%f', min(COALESCE(julianday(?), julianday('now')), julianday('now')))"
+		return expr, []any{leaseArg}
+	default:
+		expr := fmt.Sprintf("LEAST(COALESCE(?, %s), %s)", nowVal, nowVal)
+		return expr, []any{leaseArg}
 	}
 }
