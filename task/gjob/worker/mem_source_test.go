@@ -10,24 +10,47 @@ import (
 
 // memSource 是内存队列版 Source 测试替身，供 W1 自测 Worker 而不依赖 manager。
 //
-// S0 骨架只保证「实现 gjob.Source 接口、可编译、可被 Worker 使用」；
-// W1 会在保持接口不变的前提下补全 Fetch/Renew/Save 的具体行为
-// （阻塞唤醒、重试判定、回调调用等）。
+// 行为：
+//   - Fetch：有任务则出队；无任务返回 gjob.ErrNoJob。
+//   - Save：记录本次 Result 与所选回调是否被调用；并模拟 Source 的重试决策——
+//     可重试的失败会把任务以 Attempt+1 重新入队（供「失败重试」用例观察多次尝试）。
+//   - Renew：记录调用次数（供停机放租约用例断言）。
 type memSource struct {
 	mu     sync.Mutex
 	queues map[string][]*gjob.Job
+
+	results   []recordedResult // 每次 Save 的客观结果
+	renews    []*gjob.Job      // 每次 Renew 的任务（停机放租约证据）
+	callbacks int              // 被实际调用的钩子次数
+	hooks     []string         // 被调用的钩子名（on_success / on_retry / on_failure / on_canceled）
+
+	// retryUpperBound 控制「可重试的失败」最多重新入队几次，避免无限循环。
+	retryUpperBound int
 }
 
 var _ gjob.Source = (*memSource)(nil)
 
+type recordedResult struct {
+	JobID   string
+	Outcome gjob.Outcome
+	Failure gjob.FailureKind
+	Err     error
+}
+
 func newMemSource() *memSource {
-	return &memSource{queues: make(map[string][]*gjob.Job)}
+	return &memSource{
+		queues:          make(map[string][]*gjob.Job),
+		retryUpperBound: 3,
+	}
 }
 
 // push 把任务放入指定类型的队列。
 func (m *memSource) push(taskType string, task *gjob.Job) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if task.Type == "" {
+		task.Type = taskType
+	}
 	m.queues[taskType] = append(m.queues[taskType], task)
 }
 
@@ -44,17 +67,89 @@ func (m *memSource) Fetch(ctx context.Context, taskType string) (*gjob.Job, erro
 	return task, nil
 }
 
-// Renew 空操作（内存实现无租约）。
-func (m *memSource) Renew(ctx context.Context, task *gjob.Job) error { return nil }
-
-// Save 记录结果（S0 仅返回 nil，W1 补全）。
-func (m *memSource) Save(ctx context.Context, task *gjob.Job, r gjob.Result, callback gjob.EnsureFunc) error {
-	_ = task
-	_ = r
-	_ = callback
-	_ = time.Now
+// Renew 记录放租约的调用（内存实现无实际租约）。
+func (m *memSource) Renew(ctx context.Context, task *gjob.Job) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.renews = append(m.renews, task)
 	return nil
+}
+
+// Save 记录结果与回调调用，并按「本地 Source」的语义模拟重试流转。
+func (m *memSource) Save(ctx context.Context, task *gjob.Job, r gjob.Result, callback gjob.EnsureFunc) error {
+	m.mu.Lock()
+	m.results = append(m.results, recordedResult{
+		JobID:   task.ID,
+		Outcome: r.Outcome,
+		Failure: r.Failure,
+		Err:     r.Err,
+	})
+	// 模拟 Source 的重试决策：仅当 outcome=failed 且仍可重试时把任务重新入队。
+	requeue := false
+	if r.Outcome == gjob.OutcomeFailed && m.retryUpperBound > 0 && hasAttemptsLeft(task) {
+		m.retryUpperBound--
+		task.Attempt++
+		requeue = true
+	}
+	m.mu.Unlock()
+
+	// Source 在事务内调用 worker 交来的回调（本地形态下）。
+	if callback != nil {
+		m.recordHookCallback(r.Outcome)
+		_ = callback(ctx)
+	}
+
+	if requeue {
+		m.mu.Lock()
+		m.queues[task.Type] = append(m.queues[task.Type], task)
+		m.mu.Unlock()
+	}
+	return nil
+}
+
+// hasAttemptsLeft：MaxAttempts<=0 视为不设上限。
+func hasAttemptsLeft(task *gjob.Job) bool {
+	if task.MaxAttempts <= 0 {
+		return true
+	}
+	return task.Attempt < task.MaxAttempts
+}
+
+// recordHookCallback 根据 outcome 归类被调用的钩子（worker 只传一个回调，故此处按 outcome 记录）。
+func (m *memSource) recordHookCallback(outcome gjob.Outcome) {
+	name := string(outcome)
+	switch outcome {
+	case gjob.OutcomeSucceeded:
+		name = "on_success"
+	case gjob.OutcomeCanceled:
+		name = "on_canceled"
+	case gjob.OutcomeFailed:
+		name = "on_failure_or_retry" // worker 决定的那个回调；具体由 handler 侧区分
+	}
+	m.mu.Lock()
+	m.callbacks++
+	m.hooks = append(m.hooks, name)
+	m.mu.Unlock()
+}
+
+// snapshot 返回结果的拷贝，供断言。
+func (m *memSource) snapshot() ([]recordedResult, int, []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := append([]recordedResult(nil), m.results...)
+	hooks := append([]string(nil), m.hooks...)
+	return res, m.callbacks, hooks
+}
+
+// renewCount 返回 Renew 调用次数。
+func (m *memSource) renewCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.renews)
 }
 
 // Close 空操作。
 func (m *memSource) Close(ctx context.Context) error { return nil }
+
+// ensure time is referenced even if unused in some build tags.
+var _ = time.Now
