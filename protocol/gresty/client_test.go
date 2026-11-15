@@ -3,6 +3,7 @@ package gresty
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,13 +15,15 @@ import (
 	"github.com/morehao/golib/glog"
 	_ "github.com/morehao/golib/glog/driver/slog"
 	"github.com/morehao/golib/gtrace"
+	"github.com/morehao/golib/protocol"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"resty.dev/v3"
 )
 
 func TestNewClient(t *testing.T) {
 	glog.InitLogger(glog.GetDefaultLogConfig())
-	client := NewClient()
+	client := NewClient(nil)
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.Client)
 	assert.NotNil(t, client.logger)
@@ -28,12 +31,12 @@ func TestNewClient(t *testing.T) {
 
 func TestNewClient_WithLogger(t *testing.T) {
 	logger := glog.GetDefaultLogger()
-	client := NewClient(WithLogger(logger))
+	client := NewClient(nil, WithLogger(logger))
 	assert.Equal(t, logger, client.logger)
 }
 
 func TestNewClient_WithLogConfig(t *testing.T) {
-	client := NewClient(WithLogConfig(glog.GetDefaultLogConfig()))
+	client := NewClient(nil, WithLogConfig(glog.GetDefaultLogConfig()))
 	assert.NotNil(t, client.logger)
 }
 
@@ -46,7 +49,7 @@ func TestClientGetRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient()
+	client := NewClient(nil)
 
 	resp, err := client.R().
 		SetQueryParam("name", "test").
@@ -69,7 +72,7 @@ func TestClientPostRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient()
+	client := NewClient(nil)
 
 	body := map[string]string{"name": "test"}
 	resp, err := client.R().
@@ -92,7 +95,7 @@ func TestClientWithTraceID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient()
+	client := NewClient(nil)
 
 	ctx := context.WithValue(context.Background(), gconstant.KeyTraceID, "trace-123")
 
@@ -122,10 +125,10 @@ func TestSSEStream(t *testing.T) {
 	)
 	defer sseServer.Close()
 
-	es := resty.NewEventSource().
+	es := resty.NewSSESource().
 		SetURL(sseServer.URL).
 		OnMessage(func(e any) {
-			event := e.(*resty.Event)
+			event := e.(*resty.SSE)
 			fmt.Printf("Event ID: %s, Data: %s\n", event.ID, event.Data)
 		}, nil)
 
@@ -180,7 +183,7 @@ func TestClientInjectsOTelTraceAndRequestID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient()
+	client := NewClient(nil)
 	ctx, span := gtrace.T().Start(context.Background(), "outbound", gtrace.SpanKindClient)
 	defer span.End()
 	ctx = context.WithValue(ctx, gconstant.KeyAppRequestID, requestID)
@@ -194,4 +197,79 @@ func TestClientInjectsOTelTraceAndRequestID(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode())
 	assert.NotEmpty(t, gotTraceParent)
 	assert.Equal(t, requestID, gotRequestID)
+}
+
+// TestFacadeIntegration 是门面集成测试（整合自原 facade_smoke_test.go）：
+// 覆盖 query 拼接、JSON 反序列化（GetJSON/PostJSON）、4xx → HTTPError、WithStream 流式 Buffer。
+func TestFacadeIntegration(t *testing.T) {
+	var gotQuery, gotMethod, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotQuery = r.URL.Query().Encode()
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		switch r.URL.Path {
+		case "/json":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"name":"x"}`))
+		case "/fail":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"err":"bad"}`))
+		case "/stream":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("hello-stream"))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`ok`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(&protocol.HttpClientConfig{Host: srv.URL, Timeout: 3 * time.Second})
+
+	// Get + query（GET 的 RequestBody 走 query）
+	res, err := c.Get(context.Background(), "/json", protocol.RequestOption{
+		RequestBody: map[string]string{"name": "test"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, http.MethodGet, gotMethod)
+	assert.Equal(t, "name=test", gotQuery)
+	assert.Equal(t, http.StatusOK, res.HttpCode)
+	assert.True(t, res.IsSuccess())
+	assert.Equal(t, `{"ok":true,"name":"x"}`, res.String())
+
+	// GetJSON
+	var out struct {
+		OK   bool   `json:"ok"`
+		Name string `json:"name"`
+	}
+	require.NoError(t, c.GetJSON(context.Background(), "/json", &out, protocol.RequestOption{}))
+	assert.True(t, out.OK)
+	assert.Equal(t, "x", out.Name)
+
+	// PostJSON：POST body 序列化为 JSON
+	require.NoError(t, c.PostJSON(context.Background(), "/json", &out, protocol.RequestOption{
+		RequestBody: map[string]string{"k": "v"},
+	}))
+	assert.Equal(t, http.MethodPost, gotMethod)
+	assert.Contains(t, gotBody, `"k":"v"`)
+
+	// 4xx → HTTPError，result 非 nil
+	res, err = c.Get(context.Background(), "/fail", protocol.RequestOption{})
+	require.Error(t, err)
+	var httpErr *protocol.HTTPError
+	require.True(t, errors.As(err, &httpErr))
+	assert.Equal(t, http.StatusBadRequest, httpErr.HttpCode)
+	assert.NotNil(t, res)
+	assert.True(t, res.IsError())
+	assert.Contains(t, string(httpErr.Body), "bad")
+
+	// 流式 + Buffer
+	res, err = c.Get(context.Background(), "/stream", protocol.RequestOption{}, protocol.WithStream())
+	require.NoError(t, err)
+	defer res.Close()
+	assert.True(t, res.Streaming())
+	data, err := res.Buffer()
+	require.NoError(t, err)
+	assert.Equal(t, "hello-stream", string(data))
 }

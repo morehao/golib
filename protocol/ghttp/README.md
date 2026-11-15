@@ -1,6 +1,6 @@
 # GHTTP - 增强的HTTP客户端
 
-> 本包是**生产主力** HTTP 客户端（新代码默认用它）。与 `protocol/gresty`（resty 封装，学习/参考用）的定位对比见 [protocol/README.md](../README.md)。
+> 本包是**生产主力** HTTP 客户端（新代码默认用它）。与 `protocol/gresty`（resty 封装的等价实现）的定位对比见 [protocol/README.md](../README.md)。
 
 这是一个功能丰富的HTTP客户端库，支持结构体映射、连接池、重试机制等高级功能。
 

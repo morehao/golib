@@ -46,6 +46,8 @@ const (
 	KeyUrlQuery               = "url.query"
 	KeyHttpRequestMethod      = "http.request.method"
 	KeyHttpResponseStatusCode = "http.response.status_code"
+	// Deprecated: 用 KeyHttpResponseStatusCode。全仓 Go 代码已无引用（仅此定义），
+	// 保留常量仅为避免外部/未检查到的地方编译失败，勿在新代码中使用。
 	KeyHttpResponseCode       = "http.response.code"
 	KeyHttpRequestBody        = "http.request.body"
 	KeyHttpRequestBodySize    = "http.request.body.size"

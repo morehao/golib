@@ -6,13 +6,13 @@
 // 设计边界（改动前请确认没有越过这些线）：
 //
 //   - 配置由调用方注入，不隐式读取 DB / settings / 环境变量。
-//   - 零厂商 SDK 优先：渠道实现只用标准库与本仓库 protocol/ghttp（email 用 net/smtp，
-//     wecom/钉钉/飞书/Bark/短信等用 ghttp），不引入云厂商 SDK。
+//   - 零厂商 SDK 优先：渠道实现只用标准库与本仓库 protocol 下的 HTTP 客户端（email 用 net/smtp，
+//     wecom/钉钉/飞书/Bark/短信等走 gnotify.HTTPDoer），不引入云厂商 SDK。
 //   - 不落库 / 不建表；不做内部重试循环（失败直接返回 error，重试由调用方决定）。
 //   - 不做隐式多渠道广播：一次发送只投递给显式指定的渠道（见 [Router]）；
 //     需要多平台通知时用显式语义的 [MultiSender]。
 //
-// 在实现上，HTTP 类渠道内部基于本仓库的 protocol/ghttp：
+// 在实现上，HTTP 类渠道内部基于本仓库的 protocol/gresty（与 protocol/ghttp 等价的第二实现）：
 // 默认不重试（[Config.Retry] = 0，即只发一次），成功请求日志默认 debug 级
 // （[Config.LogLevel] 零值视为 debug）。如需自定义 HTTP 传输（拦截、埋点、测试替身），
 // 可通过 [Config.HTTPClient] / [gnotify.HTTPDoer] 注入自己的实现。

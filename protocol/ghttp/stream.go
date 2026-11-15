@@ -1,10 +1,11 @@
 package ghttp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
+
+	"github.com/morehao/golib/protocol"
 )
 
 // StreamResult 是 GetStream/PostStream 的返回值。
@@ -97,32 +98,18 @@ func (c *Client) doStream(ctx context.Context, request *http.Request, requestBod
 		return &Result{Ctx: ctx}, fmt.Errorf("http stream request failed: %w", err)
 	}
 
-	result := &Result{
-		HttpCode: resp.StatusCode,
-		Header:   resp.Header,
-		Ctx:      ctx,
-		body:     resp.Body,
-		cancel:   cancel,
-		stream:   true,
-		limit:    limit,
-	}
+	result := protocol.NewStreamResult(resp.StatusCode, resp.Header, ctx, resp.Body, limit, cancel)
 
 	if resp.StatusCode >= 400 {
 		// 错误页要放进 HTTPError，属于缓冲操作：受上限约束，超限整体丢弃。
 		// 读取失败（如超限）时 body 为空，原因挂到 BodyErr/bufferErr，
 		// 避免调用方把"被上限拦下"误读成"上游返回了空错误页"。
-		body, readErr := readBodyWithLimit(resp.Body, limit)
+		body, readErr := protocol.ReadBodyWithLimit(resp.Body, limit)
 		_ = result.Close()
 
-		if readErr == nil {
-			result.Response = body
-			result.reader = bytes.NewReader(body)
-			result.stream = false
-		} else {
-			result.bufferErr = readErr
-		}
+		result.SetBuffered(body, readErr)
 
-		httpErr := newHTTPError(resp.StatusCode, body, resp.Header)
+		httpErr := protocol.NewHTTPError(resp.StatusCode, body, resp.Header)
 		httpErr.BodyErr = readErr
 		return result, httpErr
 	}
