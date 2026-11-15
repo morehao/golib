@@ -3,6 +3,8 @@ package manager
 import (
 	"math/rand"
 	"time"
+
+	"github.com/morehao/golib/task/gjob"
 )
 
 // Config 任务中心配置。字段与契约「配置与默认值」表逐行对齐。
@@ -22,7 +24,10 @@ type Config struct {
 	DefaultTimeout       time.Duration // 默认 30s（任务未显式指定时）
 	MaxPayloadBytes      int           // 默认 4096（超过报 ErrPayloadTooLarge，不截断）
 	Retention            time.Duration // 默认 30 天（终态记录保留时长；0 不清理）
-	Backoff              Backoff       // 默认指数：5s 起、上限 10m、抖动 ±20%；可替换
+	// FailFastChain 为 true 时，任务链某 step 进入失败终态后，同 chain 的后续 step 一并置 canceled，
+	// 避免后续步骤因前序永不 succeeded 而永久 pending 积压。默认 false（不级联，保持独立任务语义）。
+	FailFastChain       bool
+	Backoff              gjob.Backoff  // 默认指数：5s 起、上限 10m、抖动 ±20%；可替换
 	NotifierQueuePrefix  string        // 默认 "gjob"（<prefix>:<task_type>）
 }
 
@@ -48,12 +53,13 @@ func defaultConfig() *Config {
 //
 // attempt 从 1 开始（第 1 次失败后等待的时长）。实现需对抖动后的结果做下界保护，
 // 避免负数或过小的退避。
-type Backoff func(attempt int) time.Duration
+// Backoff 类型已下沉到根包 gjob，此别名仅为向后兼容旧引用。
+type Backoff = gjob.Backoff
 
 // DefaultBackoff 是默认退避策略：指数退避，5s 起、上限 10m、抖动 ±20%。
 //
 // 序列（无抖动时）：5s、10s、20s、40s、80s、160s、320s、600s（封顶）。
-var DefaultBackoff Backoff = func(attempt int) time.Duration {
+var DefaultBackoff gjob.Backoff = func(attempt int) time.Duration {
 	return exponentialBackoff(attempt, 5*time.Second, 10*time.Minute, 0.2)
 }
 

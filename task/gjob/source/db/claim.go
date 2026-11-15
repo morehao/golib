@@ -1,4 +1,4 @@
-package manager
+package db
 
 import (
 	"context"
@@ -77,12 +77,17 @@ func (s *store) claimSelectAndFlip(tx *gorm.DB, taskType, workerID string, want 
 	lock := s.dialect.claimLockClause()
 
 	// ① 待执行且到点：走 idx_core_job_task_type_status_next_run_at
+	// 任务链守卫：prev_step<0（首步/独立任务）直过；否则要求同 chain 的前序 step 已 succeeded。
+	// 子查询走 idx_core_job_chain_id_step(chain_id, step)。
 	sql1 := fmt.Sprintf(`SELECT id, generation, attempt, timeout_ms
-FROM %s
-WHERE task_type = ? AND status = 'pending' AND %s
-  AND attempt < max_attempts
-ORDER BY priority DESC, next_run_at, id
-LIMIT ?%s`, CoreJobTableName, s.dialect.colLE("next_run_at"), lock)
+FROM %s j
+WHERE j.task_type = ? AND j.status = 'pending' AND %s
+  AND j.attempt < j.max_attempts
+  AND (j.prev_step < 0 OR EXISTS (
+        SELECT 1 FROM %s p
+        WHERE p.chain_id = j.chain_id AND p.step = j.prev_step AND p.status = 'succeeded'))
+ORDER BY j.priority DESC, j.next_run_at, j.id
+LIMIT ?%s`, CoreJobTableName, s.dialect.colLE("next_run_at"), CoreJobTableName, lock)
 
 	// ② 执行中但租约过期（接管）：走 idx_core_job_status_lease_until
 	sql2 := fmt.Sprintf(`SELECT id, generation, attempt, timeout_ms

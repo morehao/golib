@@ -1,4 +1,4 @@
-package manager
+package db
 
 import (
 	"fmt"
@@ -264,5 +264,36 @@ func (s *store) leastLeaseOrNow(leaseArg any, nowVal string) (string, []any) {
 	default:
 		expr := fmt.Sprintf("LEAST(COALESCE(?, %s), %s)", nowVal, nowVal)
 		return expr, []any{leaseArg}
+	}
+}
+
+// ---- 导出包装：供 manager（提交侧 insert 语句）复用同一套方言片段，避免两处各写一份 ----
+
+// NowValueExpr 返回当前时间的 SQL 值表达式（导出包装，见 nowValueExpr）。
+func (d Dialect) NowValueExpr() string { return d.nowValueExpr() }
+
+// AfterExpr 返回「当前时间 + 参数」的 SQL 表达式（导出包装，见 afterExpr）。
+func (d Dialect) AfterExpr() string { return d.afterExpr() }
+
+// AfterArg 返回与 AfterExpr 搭配的参数（导出包装，见 afterArg）。
+func (d Dialect) AfterArg(dur time.Duration) any { return d.afterArg(dur) }
+
+// EmptyKeyExpr 返回把空串归一为 NULL 的表达式（导出包装，见 emptyKeyExpr）。
+func (d Dialect) EmptyKeyExpr() string { return d.emptyKeyExpr() }
+
+// InsertIgnoreClause 返回「冲突忽略」插入的前后缀（导出包装，见 insertIgnoreClause）。
+func (d Dialect) InsertIgnoreClause() (prefix, suffix string) { return d.insertIgnoreClause() }
+
+// jsonExtract 返回「按 key 精确匹配 value」的 WHERE 片段与参数（按方言）。
+// MySQL: JSON_UNQUOTE(JSON_EXTRACT(col,'$.k')) = ?；Postgres: col->>'k' = ?；
+// SQLite: json_extract(col,'$.k') = ?。key 由调用方保证为合法标识符（本包仅用于业务 label 名）。
+func (d Dialect) jsonExtract(col, key, val string) (string, []any) {
+	switch d {
+	case DialectPostgres:
+		return fmt.Sprintf("%s->>? = ?", col), []any{key, val}
+	case DialectMySQL:
+		return fmt.Sprintf("JSON_UNQUOTE(JSON_EXTRACT(%s, ?)) = ?", col), []any{"$." + key, val}
+	default: // sqlite
+		return fmt.Sprintf("json_extract(%s, ?) = ?", col), []any{"$." + key, val}
 	}
 }

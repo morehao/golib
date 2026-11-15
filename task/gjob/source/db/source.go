@@ -1,4 +1,4 @@
-package manager
+package db
 
 import (
 	"context"
@@ -12,13 +12,25 @@ import (
 // gormDB 是 *gorm.DB 的别名，便于在 source.go 内以短名引用。
 type gormDB = gorm.DB
 
-// source 是 manager 的本地 Source 适配器：把任务中心适配成 worker 的 gjob.Source。
+// Source 是 manager 的本地 Source 适配器：把 DB 任务中心适配成 worker 的 gjob.Source。
 //
 // 本地形态在事务内调用回调（gjob.TxFromContext 非 nil），并把任务终态、尝试行收尾
 // 与重试退避写在同一事务里。是否重试由 Source（这里）决定，不由 Worker 决定。
+//
+// 与旧实现的差别：不再持有 *Manager，改为持有 db / dialect / leaseTTL / backoff / workerID，
+// 从而本包对 manager 零依赖（可独立编译、无循环引用）。
 type source struct {
-	mgr *Manager
+	store    *store
+	db       *gorm.DB
+	dialect  Dialect
+	backoff  gjob.Backoff
+	workerID string
+	// failFastChain 为 true 时，某 step 失败终态后同 chain 后续 step 置 canceled。
+	failFastChain bool
 }
+
+// 编译期断言：source 满足 gjob.Source。
+var _ gjob.Source = (*source)(nil)
 
 // Fetch 认领一条任务。无候选返回 gjob.ErrNoJob。
 //
@@ -26,14 +38,14 @@ type source struct {
 // 这里为简单起见一次只返回一条（batch 认领后缓存其余于调用方不可见），因此直接
 // 用 want=1 的批量认领，避免「少 return」造成任务已翻转 running 却无人执行。
 func (s *source) Fetch(ctx context.Context, taskType string) (*gjob.Job, error) {
-	rows, err := s.mgr.store.claimBatch(ctx, taskType, s.mgr.workerID(), 1)
+	rows, err := s.store.claimBatch(ctx, taskType, s.workerID, 1)
 	if err != nil {
 		return nil, err
 	}
 	if len(rows) == 0 {
 		return nil, gjob.ErrNoJob
 	}
-	return s.mgr.store.GetJob(ctx, rows[0].ID)
+	return s.store.GetJob(ctx, rows[0].ID)
 }
 
 // Renew 续租。失权（被接管/被取消）时返回错误，调用方应取消 ctx。
@@ -41,7 +53,7 @@ func (s *source) Renew(ctx context.Context, task *gjob.Job) error {
 	if task == nil {
 		return nil
 	}
-	res, err := s.mgr.store.renew(ctx, task.ID, task.WorkerID)
+	res, err := s.store.renew(ctx, task.ID, task.WorkerID)
 	if err != nil {
 		return err
 	}
@@ -72,9 +84,9 @@ func (s *source) Save(ctx context.Context, task *gjob.Job, r gjob.Result, callba
 	if task == nil {
 		return nil
 	}
-	now := s.mgr.dialect.nowValueExpr()
+	now := s.dialect.nowValueExpr()
 
-	return s.mgr.db.WithContext(ctx).Transaction(func(tx *gormDB) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gormDB) error {
 		// 事务句柄注入 ctx，供 callback 取用。
 		cctx := gjob.WithTx(ctx, tx)
 
@@ -116,9 +128,33 @@ func (s *source) Save(ctx context.Context, task *gjob.Job, r gjob.Result, callba
 					return err
 				}
 			}
-			return s.finishJob(tx, task, string(gjob.StatusFailed), r, now)
+			// 终态状态：超时归为 StatusTimeout（独立状态），其余失败为 StatusFailed。
+			termStatus := gjob.StatusFailed
+			if r.Failure == gjob.FailureTimeout {
+				termStatus = gjob.StatusTimeout
+			}
+			if err := s.finishJob(tx, task, string(termStatus), r, now); err != nil {
+				return err
+			}
+			// 失败级联：任务链某 step 失败后，同 chain 后续 step 置 canceled，
+			// 避免其因前序永不 succeeded 而永久 pending 积压（仅 FailFastChain 开启时）。
+			return s.cancelDownstream(tx, task, now)
 		}
 	})
+}
+
+// cancelDownstream 把同 chain 中 step 大于当前 step 的 pending 步骤置 canceled。
+// 仅在 FailFastChain 开启时生效。chain_id 以 DB 为准（内存 task 对象的 ChainID 可能过期，
+// 例如首步在 SubmitAfter 时其 chain_id 才被补成自身 ID），故按 task.ID 从库取 chain_id。
+func (s *source) cancelDownstream(tx *gormDB, task *gjob.Job, nowExpr string) error {
+	if !s.failFastChain {
+		return nil
+	}
+	sql := fmt.Sprintf(`UPDATE %s
+SET status = 'canceled', finished_at = %s
+WHERE chain_id = (SELECT chain_id FROM %s WHERE id = ?) AND step > ? AND status = 'pending'`,
+		CoreJobTableName, nowExpr, CoreJobTableName)
+	return tx.Exec(sql, task.ID, task.Step).Error
 }
 
 // finishJob 写任务终态（succeeded/failed/canceled/skipped），清 lease/worker。
@@ -145,7 +181,7 @@ WHERE id = ? AND worker_id = ? AND status = 'running'`,
 
 // retryJob 可重试失败：回 pending，next_run_at=now+backoff（DB 表达式）。
 func (s *source) retryJob(tx *gormDB, task *gjob.Job, r gjob.Result) error {
-	backoff := s.mgr.cfg.Backoff(task.Attempt)
+	backoff := s.backoff(task.Attempt)
 	errMsg := ""
 	if r.Err != nil {
 		errMsg = truncate(r.Err.Error(), 1024)
@@ -154,8 +190,8 @@ func (s *source) retryJob(tx *gormDB, task *gjob.Job, r gjob.Result) error {
 SET status = 'pending', lease_until = NULL, worker_id = '',
     next_run_at = %s, duration_ms = duration_ms + ?, last_error = ?
 WHERE id = ? AND worker_id = ? AND status = 'running'`,
-		CoreJobTableName, s.mgr.dialect.afterExpr())
-	res := tx.Exec(sql, s.mgr.dialect.afterArg(backoff), r.Duration.Milliseconds(), errMsg, task.ID, task.WorkerID)
+		CoreJobTableName, s.dialect.afterExpr())
+	res := tx.Exec(sql, s.dialect.afterArg(backoff), r.Duration.Milliseconds(), errMsg, task.ID, task.WorkerID)
 	if res.Error != nil {
 		return res.Error
 	}

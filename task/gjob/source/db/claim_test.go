@@ -1,4 +1,4 @@
-package manager
+package db
 
 import (
 	"context"
@@ -19,7 +19,7 @@ func newTestStore(t *testing.T) *store {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := AutoMigrate(db); err != nil {
+	if err := db.AutoMigrate(&CoreJob{}, &CoreJobRun{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	return newStore(db, DialectSQLite, 60*time.Second)

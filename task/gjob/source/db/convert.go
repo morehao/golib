@@ -1,10 +1,23 @@
-package manager
+package db
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/morehao/golib/task/gjob"
 )
+
+// LabelsToJSON 把 Labels map 序列化为落库 JSON 文本（空 map → ""，即 NULL/空）。
+func LabelsToJSON(labels map[string]string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(labels)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
 
 // jobRowToDomain 把数据库行 CoreJob 转为契约实体 gjob.Job。
 func jobRowToDomain(r *CoreJob) *gjob.Job {
@@ -23,6 +36,9 @@ func jobRowToDomain(r *CoreJob) *gjob.Job {
 		UniqKey:     uniq,
 		BizType:     r.BizType,
 		BizID:       r.BizID,
+		ChainID:     r.ChainID,
+		Step:        int(r.Step),
+		PrevStep:    int(r.PrevStep),
 		Generation:  int(r.Generation),
 		Attempt:     int(r.Attempt),
 		MaxAttempts: int(r.MaxAttempts),
@@ -44,6 +60,9 @@ func jobRowToDomain(r *CoreJob) *gjob.Job {
 	}
 	if r.Result != "" {
 		j.Result = []byte(r.Result)
+	}
+	if r.Labels != "" {
+		_ = json.Unmarshal([]byte(r.Labels), &j.Labels)
 	}
 	return j
 }
@@ -100,3 +119,9 @@ func uniqKeyPtr(k string) *string {
 	}
 	return &k
 }
+
+// UniqKeyPtr 把幂等键转为可空指针（空串 → nil），供 manager 提交侧复用。导出包装。
+func UniqKeyPtr(k string) *string { return uniqKeyPtr(k) }
+
+// JobRowToDomain 把数据库行 CoreJob 转为契约实体 gjob.Job。导出包装，供 manager 回查复用。
+func JobRowToDomain(r *CoreJob) *gjob.Job { return jobRowToDomain(r) }

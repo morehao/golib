@@ -9,6 +9,7 @@ import (
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/task/gjob"
+	"github.com/morehao/golib/task/gjob/source/db"
 	"gorm.io/gorm"
 )
 
@@ -133,7 +134,7 @@ func TestA3SameKeyConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 	var cnt int64
-	if err := m.db.Model(&CoreJob{}).Where("uniq_key = ?", "same-key").Count(&cnt).Error; err != nil {
+	if err := m.db.Model(&db.CoreJob{}).Where("uniq_key = ?", "same-key").Count(&cnt).Error; err != nil {
 		t.Fatal(err)
 	}
 	if cnt != 1 {
@@ -157,7 +158,7 @@ func TestA3NoKeyTwoRows(t *testing.T) {
 		t.Fatalf("submitted = %v %v, want both true", s1, s2)
 	}
 	var cnt int64
-	m.db.Model(&CoreJob{}).Count(&cnt)
+	m.db.Model(&db.CoreJob{}).Count(&cnt)
 	if cnt != 2 {
 		t.Fatalf("rows = %d, want 2 (empty uniq_key → NULL, not deduped)", cnt)
 	}
@@ -212,7 +213,7 @@ func TestReplayTerminal(t *testing.T) {
 	ctx := context.Background()
 	job, _, _ := m.Submit(ctx, &gjob.JobSpec{Type: "invoice"})
 	// 做成功终态。
-	m.db.Model(&CoreJob{}).Where("id = ?", job.ID).Updates(map[string]any{
+	m.db.Model(&db.CoreJob{}).Where("id = ?", job.ID).Updates(map[string]any{
 		"status": "succeeded", "attempt": 1, "finished_at": time.Now(),
 	})
 	rp, err := m.Replay(ctx, job.ID)

@@ -1,4 +1,4 @@
-package manager
+package db
 
 import (
 	"context"
@@ -67,7 +67,7 @@ func resetRealDB(t *testing.T, db *gorm.DB) {
 	if err := db.Migrator().DropTable(&CoreJob{}, &CoreJobRun{}); err != nil {
 		t.Fatalf("drop: %v", err)
 	}
-	if err := AutoMigrate(db); err != nil {
+	if err := db.AutoMigrate(&CoreJob{}, &CoreJobRun{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 }

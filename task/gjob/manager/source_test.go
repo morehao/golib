@@ -10,6 +10,7 @@ import (
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/task/gjob"
+	"github.com/morehao/golib/task/gjob/source/db"
 	"github.com/morehao/golib/task/gjob/worker"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -19,7 +20,7 @@ import (
 // gorm 日志置 Silent，避免测试输出被 SQL 刷屏。
 func newSourceTestManager(t *testing.T) (*Manager, *gorm.DB) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{
+	gdb, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -27,11 +28,11 @@ func newSourceTestManager(t *testing.T) (*Manager, *gorm.DB) {
 	}
 	cfg := defaultConfig()
 	cfg.PollInterval = 500 * time.Millisecond
-	m, err := New(cfg, db)
+	m, err := New(cfg, gdb)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return m, db
+	return m, gdb
 }
 
 // submitAndClaim 提交一条任务并经本地 Source 认领（Fetch），返回 running 态的 *gjob.Job
@@ -47,7 +48,7 @@ func submitAndClaim(t *testing.T, m *Manager, taskType string) *gjob.Job {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var err error
-		task, err = m.source.Fetch(ctx, taskType)
+		task, err = m.dbSrc.Fetch(ctx, taskType)
 		if err == nil {
 			break
 		}
@@ -66,20 +67,20 @@ func submitAndClaim(t *testing.T, m *Manager, taskType string) *gjob.Job {
 }
 
 // dbJobStatus 直接读库里的 core_job 行，返回 (status, worker_id)。
-func dbJobStatus(t *testing.T, db *gorm.DB, id string) (string, string) {
+func dbJobStatus(t *testing.T, gdb *gorm.DB, id string) (string, string) {
 	t.Helper()
-	var row CoreJob
-	if err := db.Where("id = ?", id).Take(&row).Error; err != nil {
+	var row db.CoreJob
+	if err := gdb.Where("id = ?", id).Take(&row).Error; err != nil {
 		t.Fatalf("load job %s: %v", id, err)
 	}
 	return row.Status, row.WorkerID
 }
 
 // terminalRunCount 统计某任务下处于终态（非 running/pending）的尝试行数。
-func terminalRunCount(t *testing.T, db *gorm.DB, jobID string) int64 {
+func terminalRunCount(t *testing.T, gdb *gorm.DB, jobID string) int64 {
 	t.Helper()
 	var n int64
-	err := db.Model(&CoreJobRun{}).
+	err := gdb.Model(&db.CoreJobRun{}).
 		Where("job_id = ? AND status IN ?", jobID,
 			[]string{"succeeded", "failed", "canceled", "skipped"}).
 		Count(&n).Error
@@ -94,14 +95,14 @@ func terminalRunCount(t *testing.T, db *gorm.DB, jobID string) int64 {
 // 用「返回 err 的 EnsureFunc」模拟 OnSuccess 报错：Save 返回该 err、不提交；
 // 任务仍 running、没有写任何终态尝试行（同事务里 upsertRun 的 running 也一并回滚）。
 func TestSource_HookTxError_RollsBack(t *testing.T) {
-	m, db := newSourceTestManager(t)
+	m, gdb := newSourceTestManager(t)
 	ctx := context.Background()
 	task := submitAndClaim(t, m, "hooktx")
 
 	hookErr := errors.New("on_success boom")
 	cb := func(ctx context.Context) error { return hookErr }
 
-	err := m.source.Save(ctx, task, gjob.Result{
+	err := m.dbSrc.Save(ctx, task, gjob.Result{
 		Outcome:  gjob.OutcomeSucceeded,
 		Duration: time.Millisecond,
 	}, cb)
@@ -110,15 +111,15 @@ func TestSource_HookTxError_RollsBack(t *testing.T) {
 	}
 
 	// 任务仍 running（未被强写成 succeeded）。
-	if status, _ := dbJobStatus(t, db, task.ID); status != string(gjob.StatusRunning) {
+	if status, _ := dbJobStatus(t, gdb, task.ID); status != string(gjob.StatusRunning) {
 		t.Fatalf("db status = %q, want running (rolled back)", status)
 	}
 	// 没有终态尝试行落库（整笔回滚，连 running 尝试行也不存在）。
-	if n := terminalRunCount(t, db, task.ID); n != 0 {
+	if n := terminalRunCount(t, gdb, task.ID); n != 0 {
 		t.Fatalf("terminal run rows = %d, want 0 (rolled back)", n)
 	}
 	var total int64
-	db.Model(&CoreJobRun{}).Where("job_id = ?", task.ID).Count(&total)
+	gdb.Model(&db.CoreJobRun{}).Where("job_id = ?", task.ID).Count(&total)
 	if total != 0 {
 		t.Fatalf("run rows = %d, want 0 (upsertRun rolled back too)", total)
 	}
@@ -130,18 +131,18 @@ func TestSource_HookTxError_RollsBack(t *testing.T) {
 // finishJob 的 UPDATE 带 `WHERE id=? AND worker_id=? AND status='running'` 守卫，
 // 不匹配则 RowsAffected=0，库中该行不被改写（终态不被覆盖、worker_id 不被清）。
 func TestSource_LostLease_NoOverwrite(t *testing.T) {
-	m, db := newSourceTestManager(t)
+	m, gdb := newSourceTestManager(t)
 	ctx := context.Background()
 	task := submitAndClaim(t, m, "lostlease")
 
 	// 模拟被别的 worker 接管：库中 worker_id 改成 other-worker，状态保持 running。
 	const otherWorker = "other-worker"
-	if err := db.Exec(`UPDATE core_job SET worker_id = ? WHERE id = ?`, otherWorker, task.ID).Error; err != nil {
+	if err := gdb.Exec(`UPDATE core_job SET worker_id = ? WHERE id = ?`, otherWorker, task.ID).Error; err != nil {
 		t.Fatalf("simulate takeover: %v", err)
 	}
 
 	// 慢返回、尝试把结果写成 succeeded（task.WorkerID 仍是旧值，与库不符）。
-	err := m.source.Save(ctx, task, gjob.Result{
+	err := m.dbSrc.Save(ctx, task, gjob.Result{
 		Outcome:  gjob.OutcomeSucceeded,
 		Duration: time.Millisecond,
 	}, nil)
@@ -149,7 +150,7 @@ func TestSource_LostLease_NoOverwrite(t *testing.T) {
 		t.Fatalf("Save err = %v, want nil (guard is not an error)", err)
 	}
 
-	status, worker := dbJobStatus(t, db, task.ID)
+	status, worker := dbJobStatus(t, gdb, task.ID)
 	if status != string(gjob.StatusRunning) {
 		t.Fatalf("db status = %q, want running (terminal must not be overwritten)", status)
 	}
@@ -163,40 +164,16 @@ func TestSource_LostLease_NoOverwrite(t *testing.T) {
 	}
 }
 
-// TestSource_LostLease_DirectFinishJobRowsAffected 直接对 finishJob 断言 RowsAffected 守卫：
-// worker_id 不匹配时 UPDATE 匹配 0 行、不改写，也不回填 task.Status。
-func TestSource_LostLease_DirectFinishJobRowsAffected(t *testing.T) {
-	m, db := newSourceTestManager(t)
-	task := submitAndClaim(t, m, "directguard")
-
-	// 库里换 worker。
-	if err := db.Exec(`UPDATE core_job SET worker_id = 'someone-else' WHERE id = ?`, task.ID).Error; err != nil {
-		t.Fatalf("simulate takeover: %v", err)
-	}
-
-	stale := *task // 持有旧 worker_id 的任务视图
-	stale.WorkerID = task.WorkerID
-	before := stale.Status
-
-	err := m.source.finishJob(db, &stale, string(gjob.StatusSucceeded), gjob.Result{}, m.dialect.nowValueExpr())
-	if err != nil {
-		t.Fatalf("finishJob err = %v", err)
-	}
-	if stale.Status != before {
-		t.Fatalf("task.Status mutated to %q, want unchanged %q (RowsAffected=0)", stale.Status, before)
-	}
-	if status, worker := dbJobStatus(t, db, task.ID); status != string(gjob.StatusRunning) || worker != "someone-else" {
-		t.Fatalf("db (status,worker) = (%q,%q), want (running, someone-else)", status, worker)
-	}
-}
+// 注：原 TestSource_LostLease_DirectFinishJobRowsAffected 直接调用未导出的 finishJob + dialect.nowValueExpr()，
+// 属于 DB 内部实现细节，已迁至 source/db 内部测试（source_internal_test.go）。
 
 // TestSource_ErrSkip_Skipped 判据 3：Save(Result{Outcome:Skipped}) → 任务 status=skipped。
 func TestSource_ErrSkip_Skipped(t *testing.T) {
-	m, db := newSourceTestManager(t)
+	m, gdb := newSourceTestManager(t)
 	ctx := context.Background()
 	task := submitAndClaim(t, m, "skiptask")
 
-	err := m.source.Save(ctx, task, gjob.Result{
+	err := m.dbSrc.Save(ctx, task, gjob.Result{
 		Outcome:  gjob.OutcomeSkipped,
 		Failure:  gjob.FailureSkipped,
 		Duration: time.Millisecond,
@@ -207,7 +184,7 @@ func TestSource_ErrSkip_Skipped(t *testing.T) {
 	if task.Status != gjob.StatusSkipped {
 		t.Fatalf("task.Status = %q, want skipped", task.Status)
 	}
-	status, worker := dbJobStatus(t, db, task.ID)
+	status, worker := dbJobStatus(t, gdb, task.ID)
 	if status != string(gjob.StatusSkipped) {
 		t.Fatalf("db status = %q, want skipped", status)
 	}
@@ -220,7 +197,7 @@ func TestSource_ErrSkip_Skipped(t *testing.T) {
 // manager.New(sqlite) + manager.Source() + worker.New(...) + Register Handler，
 // 跑通 Submit → worker.Run → succeeded。
 func TestSource_EndToEnd_Succeeded(t *testing.T) {
-	m, db := newSourceTestManager(t)
+	m, gdb := newSourceTestManager(t)
 	ctx := context.Background()
 
 	executed := make(chan struct{}, 1)
@@ -256,7 +233,7 @@ func TestSource_EndToEnd_Succeeded(t *testing.T) {
 	// 轮询等任务落到 succeeded。
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		status, _ := dbJobStatus(t, db, job.ID)
+		status, _ := dbJobStatus(t, gdb, job.ID)
 		if status == string(gjob.StatusSucceeded) {
 			break
 		}
@@ -283,11 +260,11 @@ func TestSource_EndToEnd_Succeeded(t *testing.T) {
 // OnSuccess 内 gjob.TxFromContext(ctx) 非 nil（本地形态），且在该 tx 上写业务表
 // 与任务终态同事务提交——成功后业务行与 job=succeeded 都在。
 func TestSource_OnSuccessTxFromContext(t *testing.T) {
-	m, db := newSourceTestManager(t)
+	m, gdb := newSourceTestManager(t)
 	ctx := context.Background()
 
 	const bizTable = "t_m6_biz"
-	if err := db.Exec(fmt.Sprintf(
+	if err := gdb.Exec(fmt.Sprintf(
 		`CREATE TABLE %s (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL)`, bizTable,
 	)).Error; err != nil {
 		t.Fatalf("create biz table: %v", err)
@@ -329,7 +306,7 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		status, _ := dbJobStatus(t, db, job.ID)
+		status, _ := dbJobStatus(t, gdb, job.ID)
 		if status == string(gjob.StatusSucceeded) {
 			break
 		}
@@ -349,7 +326,7 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 		t.Fatal("OnSuccess did not see a non-nil *gorm.DB from gjob.TxFromContext")
 	}
 	var n int64
-	if err := db.Table(bizTable).Where("job_id = ?", job.ID).Count(&n).Error; err != nil {
+	if err := gdb.Table(bizTable).Where("job_id = ?", job.ID).Count(&n).Error; err != nil {
 		t.Fatalf("count biz rows: %v", err)
 	}
 	if n != 1 {

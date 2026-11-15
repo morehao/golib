@@ -7,29 +7,32 @@ import (
 	"time"
 
 	"github.com/morehao/golib/task/gjob"
+	"github.com/morehao/golib/task/gjob/source/db"
 	"gorm.io/gorm"
 )
 
-// Manager 是任务中心门面：持有 Store / Notifier / Config 与后台循环。
+// Manager 是任务中心门面：持有 DB Source / Notifier / Config。
 //
-// 本卡（T-M5）只实现门面方法：New / Submit / 查询 / Cancel / Replay / Stats /
-// Mode / Store / Close。构造函数不启动任何后台循环、不消费消息。
+// DB 认领/续租/保存/回收/清理与全部 core_job SQL 已下沉到 source/db 包；
+// Manager 只保留管理面（Submit/Get/List/Cancel/Replay/Stats）并把读查询转发给
+// source/db 的 Store。Manager 对 source/db 是单向依赖，不成环。
 type Manager struct {
 	cfg      *Config
 	db       *gorm.DB
-	dialect  Dialect
-	store    *store
+	dialect  db.Dialect
+	dbSrc    *db.Source
 	notifier Notifier
 	mode     Mode
-	source   *source
-	// workerIDVal 是本中心认领任务时写入 worker_id 列的标识（续租据此匹配）。
+	// workerIDVal 是本中心在 source/db 认领任务时写入 worker_id 列的标识（续租据此匹配）。
 	workerIDVal string
+	// gate 是本进程的类型级启停缓存适配器（TypeGate() 创建；Disable/Enable 后同步刷新）。
+	gate *TypeGateAdapter
 }
 
-// New 构造任务中心。db 必须是写主库；默认执行 AutoMigrate（WithoutAutoMigrate 关闭）。
+// New 构造任务中心。gormDB 必须是写主库；默认执行 AutoMigrate（WithoutAutoMigrate 关闭）。
 // 副作用：不启动后台循环、不消费消息。
-func New(cfg *Config, db *gorm.DB, opts ...Option) (*Manager, error) {
-	if db == nil {
+func New(cfg *Config, gormDB *gorm.DB, opts ...Option) (*Manager, error) {
+	if gormDB == nil {
 		return nil, gjob.ErrNilDB
 	}
 	// 默认配置 + 覆盖。
@@ -49,28 +52,39 @@ func New(cfg *Config, db *gorm.DB, opts ...Option) (*Manager, error) {
 		return nil, err
 	}
 
-	dialect := DetectDialect(db.Dialector.Name())
+	dialect := db.DetectDialect(gormDB.Dialector.Name())
+	workerID := "manager-" + genUUID()
+
+	dbSrc, err := db.New(db.Config{
+		DB:       gormDB,
+		LeaseTTL: o.Config.LeaseTTL,
+		Backoff:  o.Config.Backoff,
+		WorkerID: workerID,
+		FailFastChain: o.Config.FailFastChain,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	m := &Manager{
 		cfg:         o.Config,
-		db:          db,
+		db:          gormDB,
 		dialect:     dialect,
-		store:       newStore(db, dialect, o.Config.LeaseTTL),
+		dbSrc:       dbSrc,
 		notifier:    o.notifier,
 		mode:        ModePoll,
-		workerIDVal: "manager-" + genUUID(),
+		workerIDVal: workerID,
 	}
 	if o.notifier != nil {
 		m.mode = ModePollNotify
 	}
 
 	if o.autoMigrate {
-		if err := AutoMigrate(db); err != nil {
+		if err := AutoMigrate(gormDB); err != nil {
 			return nil, err
 		}
 	}
 
-	m.source = &source{mgr: m}
 	return m, nil
 }
 
@@ -161,7 +175,7 @@ func (c *Manager) Submit(ctx context.Context, spec *gjob.JobSpec) (*gjob.Job, bo
 
 	var job *gjob.Job
 	if submitted {
-		job, err = c.store.GetJob(ctx, row.ID)
+		job, err = c.dbSrc.Store().GetJob(ctx, row.ID)
 		if err != nil {
 			return nil, false, err
 		}
@@ -183,7 +197,7 @@ func (c *Manager) Submit(ctx context.Context, spec *gjob.JobSpec) (*gjob.Job, bo
 					return nil, false, err
 				}
 			} else {
-				job, err = c.store.GetJob(ctx, row.ID)
+				job, err = c.dbSrc.Store().GetJob(ctx, row.ID)
 				if err != nil {
 					return nil, false, err
 				}
@@ -203,9 +217,9 @@ func (c *Manager) Submit(ctx context.Context, spec *gjob.JobSpec) (*gjob.Job, bo
 }
 
 // buildSubmitRow 把 JobSpec 转成待插入的 CoreJob 行（只写显式值，其余走列默认）。
-func (c *Manager) buildSubmitRow(spec *gjob.JobSpec) (*CoreJob, int64 /*delayMs*/, error) {
+func (c *Manager) buildSubmitRow(spec *gjob.JobSpec) (*db.CoreJob, int64 /*delayMs*/, error) {
 	now := timeNow()
-	row := &CoreJob{
+	row := &db.CoreJob{
 		ID:          genUUID(),
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -214,16 +228,20 @@ func (c *Manager) buildSubmitRow(spec *gjob.JobSpec) (*CoreJob, int64 /*delayMs*
 		Priority:    int32(spec.Priority),
 		BizType:     spec.BizType,
 		BizID:       spec.BizID,
+		ChainID:     spec.ChainID,
+		Step:        int32(spec.Step),
+		PrevStep:    -1, // 独立任务默认 -1；SubmitAfter 会覆盖
 		Generation:  1,
 		Attempt:     0,
 		MaxAttempts: int32(c.resolveMaxAttempts(spec)),
 		TimeoutMs:   int64(c.resolveTimeout(spec) / timeMillisecond),
-		UniqKey:     uniqKeyPtr(spec.UniqKey),
+		UniqKey:     db.UniqKeyPtr(spec.UniqKey),
 		RequestID:   spec.RequestID,
 	}
 	if len(spec.Payload) > 0 {
 		row.Payload = string(spec.Payload)
 	}
+	row.Labels = db.LabelsToJSON(spec.Labels)
 	// next_run_at：RunAt（调用方时钟）优先，其次 Delay，再次立即。
 	var delayMs int64
 	switch {
@@ -234,39 +252,41 @@ func (c *Manager) buildSubmitRow(spec *gjob.JobSpec) (*CoreJob, int64 /*delayMs*
 		row.NextRunAt = now // 文本列占位；insertJob 会用 DB 表达式覆盖下一列值
 		delayMs = spec.Delay.Milliseconds()
 	default:
-		row.NextRunAt = now
+		// 立即执行：next_run_at 截断到整秒。避免 Go 的亚秒部分（如 .907）使 next_run_at
+		// 比秒级精度的 DB 当前时间（如 sqlite datetime('now')=.000）「晚」而在同一秒内不可认领。
+		row.NextRunAt = now.Truncate(time.Second)
 	}
 	return row, delayMs, nil
 }
 
 // insertJob 执行一次「冲突忽略」插入。返回 submitted=true 表示新建；
 // false 表示命中唯一键冲突（未插入）。
-func (c *Manager) insertJob(ctx context.Context, row *CoreJob, delayMs int64) (bool, error) {
-	prefix, suffix := c.dialect.insertIgnoreClause()
+func (c *Manager) insertJob(ctx context.Context, row *db.CoreJob, delayMs int64) (bool, error) {
+	prefix, suffix := c.dialect.InsertIgnoreClause()
 
 	nextRunExpr := "?"
 	var nextRunArg any = row.NextRunAt
 	if delayMs > 0 {
-		nextRunExpr = c.dialect.afterExpr()
-		nextRunArg = c.dialect.afterArg(time.Duration(delayMs) * time.Millisecond)
+		nextRunExpr = c.dialect.AfterExpr()
+		nextRunArg = c.dialect.AfterArg(time.Duration(delayMs) * time.Millisecond)
 	}
 
 	sql := fmt.Sprintf(`INSERT %sINTO %s
 (id, created_at, updated_at, task_type, status, priority, payload, uniq_key,
- biz_type, biz_id, generation, attempt, max_attempts, timeout_ms, next_run_at,
- worker_id, duration_ms, request_id, trace_id)
+ biz_type, biz_id, chain_id, step, prev_step, generation, attempt, max_attempts, timeout_ms, next_run_at,
+ worker_id, duration_ms, request_id, trace_id, labels)
 VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
- ?, ?, ?, ?, ?, ?,
- %s, '', 0, ?, '')%s`,
-		prefix, CoreJobTableName, c.dialect.emptyKeyExpr(), nextRunExpr, suffix)
+ ?, ?, ?, ?, ?, ?, ?, ?, ?,
+ %s, '', 0, ?, '', NULLIF(?, ''))%s`,
+		prefix, db.CoreJobTableName, c.dialect.EmptyKeyExpr(), nextRunExpr, suffix)
 
 	res := c.db.WithContext(ctx).Exec(sql,
 		row.ID, row.CreatedAt, row.UpdatedAt, row.TaskType, row.Status, row.Priority,
 		payloadOrEmpty(row), // NULLIF(?, '')
 		row.UniqKey,
-		row.BizType, row.BizID, row.Generation, row.Attempt, row.MaxAttempts, row.TimeoutMs,
+		row.BizType, row.BizID, row.ChainID, row.Step, row.PrevStep, row.Generation, row.Attempt, row.MaxAttempts, row.TimeoutMs,
 		nextRunArg,
-		row.RequestID,
+		row.RequestID, row.Labels,
 	)
 	if res.Error != nil {
 		return false, res.Error
@@ -276,7 +296,7 @@ VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
 
 // findByUniqKey 按幂等键回查任务，不存在返回 ErrJobNotFound。
 func (c *Manager) findByUniqKey(ctx context.Context, key string) (*gjob.Job, error) {
-	var row CoreJob
+	var row db.CoreJob
 	err := c.db.WithContext(ctx).Where("uniq_key = ?", key).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, gjob.ErrJobNotFound
@@ -284,17 +304,61 @@ func (c *Manager) findByUniqKey(ctx context.Context, key string) (*gjob.Job, err
 	if err != nil {
 		return nil, err
 	}
-	return jobRowToDomain(&row), nil
+	return db.JobRowToDomain(&row), nil
+}
+
+// SubmitAfter 提交「上游任务成功后才执行」的下一步（步骤化任务链）。
+//
+// 行为：读取上游任务；若上游 chain_id 为空则以其 ID 作为 chain_id（首步即上游）；
+// 本步 Step=上游.Step+1、PrevStep=上游.Step、ChainID=上游.ChainID(或上游ID)；
+// 认领侧守卫保证「前序 step 已 succeeded」前本步不会被认领。
+// 上游不存在返回 ErrJobNotFound。
+func (c *Manager) SubmitAfter(ctx context.Context, upstreamID string, spec *gjob.JobSpec) (*gjob.Job, bool, error) {
+	if spec == nil || spec.Type == "" {
+		return nil, false, gjob.ErrEmptyType
+	}
+	up, err := c.dbSrc.Store().GetJob(ctx, upstreamID)
+	if err != nil {
+		return nil, false, err
+	}
+	chainID := up.ChainID
+	if chainID == "" {
+		// 上游本身是首步/独立任务：以它的 ID 作为链标识，并把上游自身的 chain_id 补成该值，
+		// 保证链内「根」与「后续步骤」的 chain_id 口径一致（否则守卫子查询找不到根）。
+		chainID = up.ID
+		if uerr := c.db.WithContext(ctx).Model(&db.CoreJob{}).
+			Where("id = ? AND (chain_id = '' OR chain_id IS NULL)", up.ID).
+			Update("chain_id", chainID).Error; uerr != nil {
+			return nil, false, uerr
+		}
+	}
+	merged := *spec // 复制，避免改调用方结构
+	merged.ChainID = chainID
+	merged.Step = up.Step + 1
+
+	job, submitted, err := c.Submit(ctx, &merged)
+	if err != nil {
+		return job, submitted, err
+	}
+	// Submit 已按独立任务写 prev_step=-1；这里回填本步的 prev_step=上游 step。
+	if submitted && job != nil {
+		if uerr := c.db.WithContext(ctx).Model(&db.CoreJob{}).
+			Where("id = ?", job.ID).Update("prev_step", up.Step).Error; uerr != nil {
+			return job, submitted, uerr
+		}
+		job.PrevStep = up.Step
+	}
+	return job, submitted, nil
 }
 
 // Get 按 ID 取任务。
 func (c *Manager) Get(ctx context.Context, id string) (*gjob.Job, error) {
-	return c.store.GetJob(ctx, id)
+	return c.dbSrc.Store().GetJob(ctx, id)
 }
 
 // GetRuns 取任务及其跨重放的全部尝试记录。
 func (c *Manager) GetRuns(ctx context.Context, id string) (*gjob.Job, []*gjob.JobRun, error) {
-	return c.store.GetJobWithRuns(ctx, id)
+	return c.dbSrc.Store().GetJobWithRuns(ctx, id)
 }
 
 // List 分页查询任务。
@@ -302,7 +366,7 @@ func (c *Manager) List(ctx context.Context, cond *gjob.JobCond) ([]*gjob.Job, in
 	if cond == nil {
 		cond = &gjob.JobCond{}
 	}
-	return c.store.ListJob(ctx, cond)
+	return c.dbSrc.Store().ListJob(ctx, cond)
 }
 
 // ListRuns 分页查询尝试记录。
@@ -310,13 +374,13 @@ func (c *Manager) ListRuns(ctx context.Context, cond *gjob.RunCond) ([]*gjob.Job
 	if cond == nil {
 		cond = &gjob.RunCond{}
 	}
-	return c.store.ListRun(ctx, cond)
+	return c.dbSrc.Store().ListRun(ctx, cond)
 }
 
 // Cancel 取消一条任务：pending 立即、running 靠续租发现（≤1 个续租周期）。
 // 返回是否发生了状态翻转。已终态幂等返回 (false, nil)。
 func (c *Manager) Cancel(ctx context.Context, id string) (canceled bool, err error) {
-	job, err := c.store.GetJob(ctx, id)
+	job, err := c.dbSrc.Store().GetJob(ctx, id)
 	if err != nil {
 		return false, err
 	}
@@ -325,9 +389,9 @@ func (c *Manager) Cancel(ctx context.Context, id string) (canceled bool, err err
 		return false, nil
 	}
 	// pending → 立即翻转 canceled；running → 同样置 canceled，执行侧靠续租发现失权。
-	now := c.dialect.nowValueExpr()
+	now := c.dialect.NowValueExpr()
 	sql := fmt.Sprintf(`UPDATE %s SET status = 'canceled', finished_at = %s
-WHERE id = ? AND status IN ('pending','running')`, CoreJobTableName, now)
+WHERE id = ? AND status IN ('pending','running')`, db.CoreJobTableName, now)
 	res := c.db.WithContext(ctx).Exec(sql, id)
 	if res.Error != nil {
 		return false, res.Error
@@ -337,21 +401,21 @@ WHERE id = ? AND status IN ('pending','running')`, CoreJobTableName, now)
 
 // Replay 重放一条终态任务（generation+1，回到 pending）。非终态返回 ErrNotReplayable。
 func (c *Manager) Replay(ctx context.Context, id string) (*gjob.Job, error) {
-	job, err := c.store.GetJob(ctx, id)
+	job, err := c.dbSrc.Store().GetJob(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if !isTerminal(job.Status) {
 		return nil, gjob.ErrNotReplayable
 	}
-	now := c.dialect.nowValueExpr()
+	now := c.dialect.NowValueExpr()
 	// generation+1，attempt 归零，清 lease/worker/started/finished，回到 pending。
 	sql := fmt.Sprintf(`UPDATE %s
 SET status = 'pending', generation = generation + 1, attempt = 0,
     next_run_at = %s, lease_until = NULL, worker_id = '', started_at = NULL,
     finished_at = NULL, duration_ms = 0
 WHERE id = ? AND status IN ('succeeded','failed','canceled','skipped')`,
-		CoreJobTableName, now)
+		db.CoreJobTableName, now)
 	res := c.db.WithContext(ctx).Exec(sql, id)
 	if res.Error != nil {
 		return nil, res.Error
@@ -360,7 +424,7 @@ WHERE id = ? AND status IN ('succeeded','failed','canceled','skipped')`,
 		// 竞争：读回时已非终态。
 		return nil, gjob.ErrNotReplayable
 	}
-	return c.store.GetJob(ctx, id)
+	return c.dbSrc.Store().GetJob(ctx, id)
 }
 
 // Stats 返回各状态的任务计数等统计。
@@ -369,7 +433,7 @@ func (c *Manager) Stats(ctx context.Context) (*Stats, error) {
 		Status string
 		Cnt    int64
 	}
-	if err := c.db.WithContext(ctx).Model(&CoreJob{}).
+	if err := c.db.WithContext(ctx).Model(&db.CoreJob{}).
 		Select("status, count(*) AS cnt").Group("status").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -388,6 +452,8 @@ func (c *Manager) Stats(ctx context.Context) (*Stats, error) {
 			st.Canceled = r.Cnt
 		case gjob.StatusSkipped:
 			st.Skipped = r.Cnt
+		case gjob.StatusTimeout:
+			st.Timeout = r.Cnt
 		}
 		st.Total += r.Cnt
 	}
@@ -395,10 +461,10 @@ func (c *Manager) Stats(ctx context.Context) (*Stats, error) {
 }
 
 // Source 把中心适配成 gjob.Source，交给 worker.New。
-func (c *Manager) Source() gjob.Source { return c.source }
+func (c *Manager) Source() gjob.Source { return c.dbSrc }
 
 // Store 返回管理面只读 + Cleanup 的 Store。
-func (c *Manager) Store() Store { return c.store }
+func (c *Manager) Store() Store { return c.dbSrc.Store() }
 
 // Mode 返回唤醒形态（poll / poll+notify），启动自检用。
 func (c *Manager) Mode() Mode { return c.mode }
@@ -413,7 +479,7 @@ func (c *Manager) workerID() string { return c.workerIDVal }
 // isTerminal 判断状态是否为终态。
 func isTerminal(s gjob.Status) bool {
 	switch s {
-	case gjob.StatusSucceeded, gjob.StatusFailed, gjob.StatusCanceled, gjob.StatusSkipped:
+	case gjob.StatusSucceeded, gjob.StatusFailed, gjob.StatusCanceled, gjob.StatusSkipped, gjob.StatusTimeout:
 		return true
 	default:
 		return false
@@ -437,7 +503,7 @@ func (c *Manager) resolveTimeout(spec *gjob.JobSpec) timeDuration {
 }
 
 // payloadOrEmpty 返回 payload 文本（空即空串，交给 NULLIF 归一为 NULL）。
-func payloadOrEmpty(row *CoreJob) string { return row.Payload }
+func payloadOrEmpty(row *db.CoreJob) string { return row.Payload }
 
 // Mode 唤醒形态。
 type Mode string
@@ -457,6 +523,7 @@ type Stats struct {
 	Failed    int64
 	Canceled  int64
 	Skipped   int64
+	Timeout   int64
 	// Total 全部任务数。
 	Total int64
 }

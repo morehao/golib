@@ -20,6 +20,7 @@ const (
 	StatusFailed    Status = "failed"
 	StatusCanceled  Status = "canceled"
 	StatusSkipped   Status = "skipped" // BeforeExecute 返回 ErrSkip
+	StatusTimeout   Status = "timeout" // 执行超时（独立状态；兼容旧的 failed+failure_kind=timeout）
 )
 
 // FailureKind 与 Status 正交：状态说「结束成什么样」，分类说「为什么」。
@@ -45,6 +46,12 @@ type Job struct {
 	UniqKey     string // 空串表示无幂等键
 	BizType     string
 	BizID       string
+	// ChainID 任务链 ID（空串=独立任务）。同一条业务链的多个 step 共享同一 ChainID。
+	ChainID string
+	// Step 步骤序号，从 0 开始；独立任务恒为 0。
+	Step int
+	// PrevStep 前序步骤序号；-1 表示无前序（首步/独立任务）。认领要求前序 step 已 succeeded。
+	PrevStep    int
 	Generation  int // 重放轮次，从 1 开始
 	Attempt     int // 本轮已尝试次数
 	MaxAttempts int
@@ -57,8 +64,10 @@ type Job struct {
 	Duration    time.Duration
 	LastError   string
 	Result      []byte
-	RequestID   string
-	TraceID     string
+	// Labels 通用业务维度（如 app_group/company_id/uin），序列化为 JSON 落 labels 列。
+	Labels    map[string]string
+	RequestID string
+	TraceID   string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -115,7 +124,13 @@ type JobSpec struct {
 	UniqKey     string        // 可选，唯一性范围 = 该行存在期间（受 Retention 影响）
 	BizType     string
 	BizID       string
-	RequestID   string // 可选，覆盖从 ctx 取的 request id
+	// ChainID 可选：指定任务链；为空时独立任务（SubmitAfter 会自动继承上游 ChainID）。
+	ChainID string
+	// Step 可选：步骤序号，默认 0。
+	Step int
+	// Labels 可选：通用业务维度键值（如 app_group/company_id/uin），落 labels 列，可被 JobCond 精确过滤。
+	Labels    map[string]string
+	RequestID string // 可选，覆盖从 ctx 取的 request id
 }
 
 // JobCond 任务列表查询条件（manager 使用；根包只定义结构）。
@@ -125,6 +140,15 @@ type JobCond struct {
 	Status         Status
 	BizType        string
 	BizID          string
+	// ChainID 按任务链过滤（空=不过滤）。
+	ChainID string
+	// Labels 按 label 精确匹配（AND 语义；空=不过滤）。
+	Labels map[string]string
+	// CreatedAfter / CreatedBefore 创建时间区间（nil=不限）。
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	// OrderBy 排序；白名单 created_at/updated_at/priority/status，asc/desc；默认 "created_at desc"。
+	OrderBy string
 }
 
 // RunCond 尝试列表查询条件（manager 使用；根包只定义结构）。

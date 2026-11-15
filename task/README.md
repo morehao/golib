@@ -353,16 +353,27 @@ server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务�
 - 管理面：`manager` 提供 Submit/Get/List/Cancel/Replay/Stats，可接 `ginjob` 暴露 HTTP 端点
 - 自动建表（幂等 `AutoMigrate`）、自动注入 TraceID / RequestID，打通 glog 日志与 gtrace 链路追踪
 
+### 增强能力（P1–P4）
+
+- **每类型独立并发**：`worker.WithHandlerConcurrency(n)` 为单个任务类型设置执行槽数，未设回落全局 `WorkerConfig.Concurrency`。
+- **步骤化任务链**：`Job`/`JobSpec` 带 `ChainID / Step / PrevStep`；`manager.SubmitAfter(ctx, 上游ID, spec)` 提交「上游成功后」的下一步，认领时要求前序 step 已 `succeeded`。`manager.Config.FailFastChain=true` 时某步失败会级联取消同链后续步（默认关闭）。
+- **超时独立状态**：执行超时落 `StatusTimeout`（独立于 `failed`，`Stats.Timeout` 计数；旧 `failed+failure_kind=timeout` 数据查询层兼容）。
+- **业务维度 labels**：`JobSpec.Labels map[string]string` 落 `labels` JSON 列，`JobCond.Labels` 按 label 精确过滤（AND）。
+- **富查询**：`JobCond` 支持 `ChainID`、`CreatedAfter/Before` 时间区间、`OrderBy`（白名单 `created_at/updated_at/priority/status`，非法值回退默认）。
+- **worker 存活判定/上报**：`manager.Registry()` 返回默认「租约推导」判活器（`lease_until>now` 视为在线，零外部依赖）；worker 可配 `HealthReporter` + `HealthReportInterval` 周期上报；需要主动心跳时用可选子包 `manager/health/redis`（仅该子包 import redis）。
+- **类型级启停（Disable/Enable）**：`manager.Disable(ctx, type)` / `Enable(ctx, type)` 运行时下线/恢复某任务类型（写 `core_job_type`，跨实例，无行=启用 fail-open）。disabled 期间该类型任务**不被认领、停在 pending 不丢**，Enable 后自动恢复。worker 侧经 `WorkerConfig.TypeGate`（由 `manager.TypeGate(ttl)` 提供，带缓存）感知开关；`nil` 时行为不变。
+
 ### 数据表
 
-`manager.New` 默认就会调用 `manager.AutoMigrate` 创建以下两张表（关闭方式见[建表与迁移](#建表与迁移)）：
+`manager.New` 默认就会调用 `manager.AutoMigrate` 创建以下三张表（关闭方式见[建表与迁移](#建表与迁移)）：
 
 | 表名 | 说明 |
 |---|---|
-| `core_job` | 任务实体（id=任务 ID、task_type=任务类型、status=状态、priority=优先级、payload=入参、uniq_key=幂等键、biz_id/biz_type=业务维度、generation/attempt/max_attempts=重放与尝试计数、next_run_at/lease_until=调度与租约、各时间与 request id 等） |
+| `core_job` | 任务实体（id=任务 ID、task_type=任务类型、status=状态、priority=优先级、payload=入参、uniq_key=幂等键、biz_id/biz_type=业务维度、chain_id/step/prev_step=任务链、labels=业务标签、generation/attempt/max_attempts=重放与尝试计数、next_run_at/lease_until=调度与租约、各时间与 request id 等） |
 | `core_job_run` | 单次尝试记录（id=尝试 ID、job_id=所属任务、generation/attempt=轮次与第几次尝试、状态、失败分类、起止时间、耗时、错误、request id 等） |
+| `core_job_type` | 任务类型开关（id、task_type 唯一、enabled；**无行 = 启用**，仅记录被 Disable 的类型，fail-open） |
 
-两表无物理外键（`job_id` 为逻辑关联），也无软删除。两张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
+三表无物理外键（`job_id` 为逻辑关联），也无软删除。三张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
 
 ### 使用示例
 
@@ -410,12 +421,15 @@ func main() {
 	}
 	defer center.Close()
 
-	// 执行侧：按任务类型注册 handler，然后 Run。
+	// 执行侧：按任务类型注册 handler，然后 Start（同步非阻塞，内部自起 goroutine；启动错误经返回值上报）。
 	w := worker.New(center.Source(), &worker.WorkerConfig{Concurrency: 10})
 	if err := w.Register("invoice:issue", &InvoiceHandler{db: db}); err != nil {
 		panic(err)
 	}
-	go func() { _ = w.Run(context.Background()) }()
+	if err := w.Start(context.Background()); err != nil {
+		panic(err) // 未注册类型 ErrNoType、重复启动 ErrWorkerAlreadyRunning 等在此暴露
+	}
+	// 退出时停机：w.Shutdown(ctx)（等待在途 → 释放租约）。
 
 	// 提交一条任务（UniqKey 相同则命中幂等，不重复建）。
 	task, submitted, err := center.Submit(context.Background(), &gjob.JobSpec{
@@ -430,6 +444,24 @@ func main() {
 ```
 
 换成远程形态只需把取任务源从 `center.Source()` 换成 `remote.New(remoteCfg)`：`worker.New(remote.New(remoteCfg), &worker.WorkerConfig{Concurrency: 10})`。远程形态下 Worker 不直连数据库。
+
+#### 简单用法：只要「投递 + 执行」，不拖管理面
+
+若不需要 Submit/List/Cancel/Replay 等管理面，可跳过 `manager`，直接把 `source/db`（DB Source）交给 `worker`，两者组合即为一套轻量异步任务：
+
+```go
+src, _ := sourcedb.New(sourcedb.Config{DB: db})              // 基于 DB 的 Source
+w := worker.New(src, &worker.WorkerConfig{Concurrency: 10})  // 只认 Source
+w.Register("email:send", handler)
+if err := w.Start(ctx); err != nil {                         // 同步非阻塞，不写 go
+	return err
+}
+defer w.Shutdown(shutdownCtx)
+
+_, _, _ = src.Submit(ctx, &gjob.JobSpec{Type: "email:send", Payload: payload}) // 投递
+```
+
+`source/db` 与 `source/remote` 是 `gjob.Source` 的两种平级实现（DB / HTTP），`worker` 只依赖接口。`manager` 内部同样复用 `source/db`，二者单向依赖、无循环引用（`bash scripts/check-gjob-deps.sh` 可断言）。
 
 #### 注意事项
 
@@ -686,6 +718,9 @@ CREATE TABLE `core_job` (
   `uniq_key` varchar(128) COMMENT '幂等键',
   `biz_type` varchar(64) NOT NULL DEFAULT '' COMMENT '业务类型',
   `biz_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务 ID',
+  `chain_id` varchar(36) NOT NULL DEFAULT '' COMMENT '任务链 ID（空=独立任务）',
+  `step` int NOT NULL DEFAULT 0 COMMENT '步骤序号',
+  `prev_step` int NOT NULL DEFAULT -1 COMMENT '前序步骤序号（-1=首步）',
   `generation` int NOT NULL DEFAULT 1 COMMENT '重放轮次',
   `attempt` int NOT NULL DEFAULT 0 COMMENT '本轮已尝试次数',
   `max_attempts` int NOT NULL DEFAULT 3 COMMENT '本轮最大尝试次数',
@@ -700,13 +735,15 @@ CREATE TABLE `core_job` (
   `result` text COMMENT '结果快照',
   `request_id` varchar(64) NOT NULL DEFAULT '' COMMENT '请求 ID',
   `trace_id` varchar(64) NOT NULL DEFAULT '' COMMENT 'TraceID',
+  `labels` text COMMENT '业务维度标签（JSON）',
   PRIMARY KEY (`id`),
   INDEX `idx_core_job_task_type_status_created_at` (`task_type`,`status`,`created_at`),
   INDEX `idx_core_job_task_type_status_next_run_at` (`task_type`,`status`,`next_run_at`),
   INDEX `idx_core_job_status_lease_until` (`status`,`lease_until`),
   INDEX `idx_core_job_status_finished_at` (`status`,`finished_at`),
   UNIQUE INDEX `uk_core_job_uniq_key` (`uniq_key`),
-  INDEX `idx_core_job_biz_type_biz_id` (`biz_type`,`biz_id`)
+  INDEX `idx_core_job_biz_type_biz_id` (`biz_type`,`biz_id`),
+  INDEX `idx_core_job_chain_id_step` (`chain_id`,`step`)
 );
 
 CREATE TABLE `core_job_run` (
@@ -731,6 +768,15 @@ CREATE TABLE `core_job_run` (
   INDEX `idx_core_job_run_status_started_at` (`status`,`started_at`),
   INDEX `idx_core_job_run_request_id` (`request_id`)
 );
+
+CREATE TABLE `core_job_type` (
+  `id` varchar(36) NOT NULL COMMENT '主键',
+  `task_type` varchar(128) NOT NULL COMMENT '任务类型',
+  `enabled` boolean NOT NULL DEFAULT true COMMENT '是否启用',
+  `updated_at` datetime(3) NULL COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE INDEX `uk_core_job_type_task_type` (`task_type`)
+);
 ```
 
 ### gjob - PostgreSQL
@@ -747,6 +793,9 @@ CREATE TABLE "core_job" (
   "uniq_key" varchar(128),
   "biz_type" varchar(64) NOT NULL DEFAULT '',
   "biz_id" varchar(64) NOT NULL DEFAULT '',
+  "chain_id" varchar(36) NOT NULL DEFAULT '',
+  "step" integer NOT NULL DEFAULT 0,
+  "prev_step" integer NOT NULL DEFAULT -1,
   "generation" integer NOT NULL DEFAULT 1,
   "attempt" integer NOT NULL DEFAULT 0,
   "max_attempts" integer NOT NULL DEFAULT 3,
@@ -761,10 +810,13 @@ CREATE TABLE "core_job" (
   "result" text,
   "request_id" varchar(64) NOT NULL DEFAULT '',
   "trace_id" varchar(64) NOT NULL DEFAULT '',
+  "labels" text,
   PRIMARY KEY ("id")
 );
 
 CREATE INDEX IF NOT EXISTS "idx_core_job_biz_type_biz_id" ON "core_job" ("biz_type","biz_id");
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_chain_id_step" ON "core_job" ("chain_id","step");
 
 CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_job_uniq_key" ON "core_job" ("uniq_key");
 
@@ -876,4 +928,17 @@ COMMENT ON COLUMN "core_job_run"."error_msg" IS '本次错误';
 COMMENT ON COLUMN "core_job_run"."request_id" IS '请求 ID';
 
 COMMENT ON COLUMN "core_job_run"."trace_id" IS '本次执行的 TraceID';
+
+CREATE TABLE "core_job_type" (
+  "id" varchar(36) NOT NULL,
+  "task_type" varchar(128) NOT NULL,
+  "enabled" boolean NOT NULL DEFAULT true,
+  "updated_at" timestamptz,
+  PRIMARY KEY ("id")
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_job_type_task_type" ON "core_job_type" ("task_type");
+COMMENT ON COLUMN "core_job_type"."id" IS '主键';
+COMMENT ON COLUMN "core_job_type"."task_type" IS '任务类型';
+COMMENT ON COLUMN "core_job_type"."enabled" IS '是否启用';
+COMMENT ON COLUMN "core_job_type"."updated_at" IS '更新时间';
 ```

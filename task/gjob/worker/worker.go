@@ -41,6 +41,10 @@ type Worker struct {
 	inflight     sync.WaitGroup
 	inflightJobs map[*gjob.Job]struct{} // 在途任务，用于 Shutdown 放租约
 	exited       chan struct{}          // Run 的槽全部退出后关闭
+
+	// 类型级启停开关的本地缓存（TypeGateTTL 内有效）。
+	gateMu    sync.Mutex
+	gateCache map[string]gateCacheEntry
 }
 
 // WorkerConfig 执行运行时配置。
@@ -70,6 +74,32 @@ type WorkerConfig struct {
 	// 依赖边界（A10）：worker 包不 import manager/asynq。接入方（如 manager 的
 	// notifier 消费端）把 wake(taskType) 回调转成向 Wake 通道投递类型即可。
 	WakeSource WakeSource
+
+	// HealthReporter 是可选存活上报器：非 nil 且 HealthReportInterval>0 时，Worker 在 Start 后
+	// 起一个 ticker，周期回调 ReportAlive(workerID, 当前在跑任务数)，供中心判活/统计在线 worker。
+	// 默认 nil（不上报，行为与未引入该能力时一致）。
+	HealthReporter HealthReporter
+	// HealthReportInterval 存活上报周期；<=0 关闭（默认 0）。
+	HealthReportInterval time.Duration
+
+	// TypeGate 类型级启停开关（可选）。非 nil 时 worker 在认领前检查该类型是否启用：
+	// 禁用则跳过不 Fetch（任务留 pending，不丢），启用才认领。nil 时视为全启用（行为不变）。
+	TypeGate TypeGate
+	// TypeGateTTL worker 侧缓存开关状态的 TTL，默认 5s；<=0 每次查询（不缓存）。
+	TypeGateTTL time.Duration
+}
+
+// TypeGate 是类型级启停开关接口（可选）。
+// 实现返回 (false, nil) 表示该类型被禁用、不应认领；返回错误时 worker 按 fail-open 视为启用。
+// 依赖边界：worker 只依赖本接口，具体实现（查库+缓存）由接入方提供，不进 worker 包。
+type TypeGate interface {
+	TypeEnabled(ctx context.Context, taskType string) (bool, error)
+}
+
+// HealthReporter 是 worker 主动存活上报接口（可选）。
+// 依赖边界：worker 只依赖本接口，具体实现（DB/Redis/HTTP）由接入方提供，不进 worker 包。
+type HealthReporter interface {
+	ReportAlive(ctx context.Context, workerID string, running int) error
 }
 
 // WakeSource 抽象「某任务类型有新任务」的唤醒信号来源。
@@ -130,6 +160,15 @@ func applyDefaults(c *WorkerConfig) {
 	if strings.TrimSpace(c.WorkerID) == "" {
 		c.WorkerID = defaultWorkerID()
 	}
+	if c.TypeGate != nil && c.TypeGateTTL == 0 {
+		c.TypeGateTTL = 5 * time.Second
+	}
+}
+
+// gateCacheEntry 是类型开关的缓存项。
+type gateCacheEntry struct {
+	enabled   bool
+	expiresAt time.Time
 }
 
 func defaultWorkerID() string {
@@ -185,8 +224,13 @@ func (w *Worker) Register(taskType string, h Handler, opts ...HandlerOption) err
 	return nil
 }
 
-// Run 阻塞运行，直到 ctx 取消或 Shutdown。未注册类型返回 ErrNoType，重复 Run 返回 ErrWorkerAlreadyRunning。
-func (w *Worker) Run(ctx context.Context) error {
+// Start 异步启动运行：完成校验、建立运行期上下文并起执行槽后立即返回，不阻塞。
+//
+// 启动期错误经返回值上报：未注册类型的 ErrNoType、已停止的 ErrWorkerStopped、
+// 已在运行的 ErrWorkerAlreadyRunning、src 为 nil 的 ErrInvalidConfig。
+//
+// 槽位全部退出后会关闭 w.exited（供 Run 等待）。需要阻塞至结束的调用方请用 Run。
+func (w *Worker) Start(ctx context.Context) error {
 	if w.src == nil {
 		return gjob.ErrInvalidConfig
 	}
@@ -219,13 +263,16 @@ func (w *Worker) Run(ctx context.Context) error {
 	w.fetchCtx = fetchCtx
 	w.fetchCancel = fetchCancel
 	w.exited = make(chan struct{})
+	exited := w.exited
 	types := append([]string(nil), w.order...)
 	w.mu.Unlock()
 
 	// 每个类型起 Concurrency 个执行槽。
 	var slots sync.WaitGroup
 	for _, taskType := range types {
-		for i := 0; i < w.cfg.Concurrency; i++ {
+		// 每类型并发：优先取 WithHandlerConcurrency，未设置回落 WorkerConfig.Concurrency。
+		n := w.concurrencyFor(taskType)
+		for i := 0; i < n; i++ {
 			slots.Add(1)
 			go func(taskType string) {
 				defer slots.Done()
@@ -234,10 +281,61 @@ func (w *Worker) Run(ctx context.Context) error {
 		}
 	}
 
-	slots.Wait()
-	close(w.exited)
-	if err := baseCtx.Err(); err != nil {
+	// 内部 goroutine 负责「等槽全部退出 → 关 exited」，Start 本身立即返回。
+	go func() {
+		slots.Wait()
+		close(exited)
+	}()
+
+	// 可选存活上报：起 ticker 周期回调 HealthReporter（仅当 reporter 非 nil 且 interval>0）。
+	if w.cfg.HealthReporter != nil && w.cfg.HealthReportInterval > 0 {
+		go w.healthReportLoop(fetchCtx)
+	}
+
+	return nil
+}
+
+// healthReportLoop 周期上报存活：间隔 HealthReportInterval，running=当前在跑任务数。
+// ctx 取消（Shutdown 停 Fetch / Run 结束）即退出。
+func (w *Worker) healthReportLoop(ctx context.Context) {
+	ticker := time.NewTicker(w.cfg.HealthReportInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.mu.Lock()
+			running := len(w.inflightJobs)
+			w.mu.Unlock()
+			if err := w.cfg.HealthReporter.ReportAlive(context.WithoutCancel(ctx), w.cfg.WorkerID, running); err != nil {
+				w.logger.Warnw(ctx, "gjob health report failed", "worker_id", w.cfg.WorkerID, "error", err)
+			}
+		}
+	}
+}
+
+// Run 阻塞运行，直到 ctx 取消或 Shutdown。未注册类型返回 ErrNoType，重复 Run 返回 ErrWorkerAlreadyRunning。
+//
+// 行为与 Start 兼容层：先 Start，再等待槽位全部退出（w.exited 关闭），
+// 最后按 baseCtx 的取消原因返回（ctx 取消则返回其 Err，否则 nil）。
+func (w *Worker) Run(ctx context.Context) error {
+	if err := w.Start(ctx); err != nil {
 		return err
+	}
+
+	w.mu.Lock()
+	exited := w.exited
+	baseCtx := w.baseCtx
+	w.mu.Unlock()
+
+	if exited != nil {
+		<-exited
+	}
+	if baseCtx != nil {
+		if err := baseCtx.Err(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -322,11 +420,27 @@ func (w *Worker) releaseStuck() {
 	}
 }
 
+// concurrencyFor 返回某任务类型的执行槽数：取 WithHandlerConcurrency，未设置回落全局 Concurrency。
+func (w *Worker) concurrencyFor(taskType string) int {
+	if e := w.handlers[taskType]; e != nil && e.opts.concurrency > 0 {
+		return e.opts.concurrency
+	}
+	return w.cfg.Concurrency
+}
+
 // slotLoop 是一个执行槽：先占槽（进入循环）再 Fetch。
 func (w *Worker) slotLoop(taskType string) {
 	for {
 		if w.fetchStop.Load() || w.fetchCtx.Err() != nil {
 			return
+		}
+
+		// 类型级启停：禁用则跳过认领（任务留 pending、不丢），等待后重查。
+		if !w.typeEnabled(taskType) {
+			if !w.wait(taskType) {
+				return
+			}
+			continue
 		}
 
 		job, err := w.fetch(taskType)
@@ -365,6 +479,35 @@ func (w *Worker) slotLoop(taskType string) {
 // fetch 调用 src.Fetch，并防御性处理「err==nil 但 job==nil」的情形。
 func (w *Worker) fetch(taskType string) (*gjob.Job, error) {
 	return w.src.Fetch(w.fetchCtx, taskType)
+}
+
+// typeEnabled 判断某类型是否启用：无 TypeGate 视为启用；否则查 gate（语义为 fail-open：
+// gate 返回错误时视为启用，避免故障误停）。worker 侧按 TypeGateTTL 缓存结果。
+func (w *Worker) typeEnabled(taskType string) bool {
+	if w.cfg.TypeGate == nil {
+		return true
+	}
+	if w.cfg.TypeGateTTL > 0 {
+		w.gateMu.Lock()
+		if e, ok := w.gateCache[taskType]; ok && time.Now().Before(e.expiresAt) {
+			w.gateMu.Unlock()
+			return e.enabled
+		}
+		w.gateMu.Unlock()
+	}
+	enabled, err := w.cfg.TypeGate.TypeEnabled(w.fetchCtx, taskType)
+	if err != nil {
+		return true // fail-open
+	}
+	if w.cfg.TypeGateTTL > 0 {
+		w.gateMu.Lock()
+		if w.gateCache == nil {
+			w.gateCache = make(map[string]gateCacheEntry)
+		}
+		w.gateCache[taskType] = gateCacheEntry{enabled: enabled, expiresAt: time.Now().Add(w.cfg.TypeGateTTL)}
+		w.gateMu.Unlock()
+	}
+	return enabled
 }
 
 // wait 等待「定时器 或 唤醒信号」，谁先到就返回 true（可继续，去 Fetch 一次）；
@@ -418,6 +561,8 @@ type handlerOptions struct {
 	timeout     time.Duration
 	maxAttempts int
 	backoff     BackoffFunc
+	// concurrency 该任务类型的执行槽数；0 表示未设置，回落到 WorkerConfig.Concurrency。
+	concurrency int
 }
 
 type handlerOptionFunc func(*handlerOptions)
@@ -432,6 +577,16 @@ func WithHandlerTimeout(d time.Duration) HandlerOption {
 // WithHandlerMaxAttempts 设置该类型最大尝试次数（对尚未被认领的存量任务立即生效）。
 func WithHandlerMaxAttempts(n int) HandlerOption {
 	return handlerOptionFunc(func(o *handlerOptions) { o.maxAttempts = n })
+}
+
+// WithHandlerConcurrency 设置该任务类型的执行槽数（独立并发，覆盖 WorkerConfig.Concurrency）。
+// n<=0 视为未设置，回落到 WorkerConfig.Concurrency。
+func WithHandlerConcurrency(n int) HandlerOption {
+	return handlerOptionFunc(func(o *handlerOptions) {
+		if n > 0 {
+			o.concurrency = n
+		}
+	})
 }
 
 // WithHandlerBackoff 设置该类型重试退避函数。

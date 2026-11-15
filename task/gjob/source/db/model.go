@@ -1,4 +1,4 @@
-package manager
+package db
 
 import "time"
 
@@ -33,6 +33,11 @@ type CoreJob struct {
 	BizType  string  `gorm:"column:biz_type;type:varchar(64);not null;default:'';index:idx_core_job_biz_type_biz_id,priority:1;comment:业务类型"`
 	BizID    string  `gorm:"column:biz_id;type:varchar(64);not null;default:'';index:idx_core_job_biz_type_biz_id,priority:2;comment:业务 ID"`
 
+	// 任务链（步骤化）。独立任务：chain_id=''、step=0、prev_step=-1。
+	ChainID  string `gorm:"column:chain_id;type:varchar(36);not null;default:'';index:idx_core_job_chain_id_step,priority:1;comment:任务链 ID（空=独立任务）"`
+	Step     int32  `gorm:"column:step;not null;default:0;index:idx_core_job_chain_id_step,priority:2;comment:步骤序号"`
+	PrevStep int32  `gorm:"column:prev_step;not null;default:-1;comment:前序步骤序号（-1=首步）"`
+
 	Generation  int32 `gorm:"column:generation;not null;default:1;comment:重放轮次"`
 	Attempt     int32 `gorm:"column:attempt;not null;default:0;comment:本轮已尝试次数"`
 	MaxAttempts int32 `gorm:"column:max_attempts;not null;default:3;comment:本轮最大尝试次数"`
@@ -49,6 +54,8 @@ type CoreJob struct {
 	Result     string `gorm:"column:result;type:text;comment:结果快照"`
 	RequestID  string `gorm:"column:request_id;type:varchar(64);not null;default:'';comment:请求 ID"`
 	TraceID    string `gorm:"column:trace_id;type:varchar(64);not null;default:'';comment:TraceID"`
+	// Labels 通用业务维度（JSON 对象，如 {"app_group":"x","company_id":"1"}）；可空。
+	Labels string `gorm:"column:labels;type:text;comment:业务维度标签（JSON）"`
 }
 
 // TableName 固定表名。
@@ -83,3 +90,20 @@ type CoreJobRun struct {
 
 // TableName 固定表名。
 func (CoreJobRun) TableName() string { return CoreJobRunTableName }
+
+// CoreJobTypeTableName 任务类型开关表名。
+const CoreJobTypeTableName = "core_job_type"
+
+// CoreJobType 是任务类型开关（仅记录被显式 Disable 的类型；无行 = 启用，fail-open）。
+//
+// 与 core_job（任务实例）解耦：本表只承载「某类型当前是否允许被认领执行」这一运营开关。
+type CoreJobType struct {
+	// ID 代理主键（与其他 gjob 表一致，均为 string id）；业务唯一键是 task_type（唯一索引）。
+	ID        string    `gorm:"column:id;primaryKey;type:varchar(36);comment:主键"`
+	TaskType  string    `gorm:"column:task_type;type:varchar(128);not null;uniqueIndex:uk_core_job_type_task_type;comment:任务类型"`
+	Enabled   bool      `gorm:"column:enabled;not null;default:true;comment:是否启用"`
+	UpdatedAt time.Time `gorm:"column:updated_at;comment:更新时间"`
+}
+
+// TableName 固定表名。
+func (CoreJobType) TableName() string { return CoreJobTypeTableName }
