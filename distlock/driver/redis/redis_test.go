@@ -1,4 +1,4 @@
-package distlock
+package redis
 
 import (
 	"context"
@@ -10,36 +10,39 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+
+	"github.com/morehao/golib/distlock"
 )
 
-func newRedisLocker(t *testing.T) (*Locker, *miniredis.Miniredis) {
+// newRedisLocker 用 miniredis 构造真实 Redis 后端门面（不经过注册表，便于本包做 wire 级测试）。
+func newRedisLocker(t *testing.T) (distlock.Locker, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	l, err := NewRedis(client)
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	l, err := distlock.NewWithDriver(newDriverFromClient(client))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
 	return l, mr
 }
 
-// 后端原语的归一化语义：竞争/已过期 => ErrLocked，其余才是存储故障。
+// 后端原语的归一化语义：竞争/已过期 => distlock.ErrLocked，其余才是存储故障。
 func TestRedisStoreSemantics(t *testing.T) {
 	l, mr := newRedisLocker(t)
 	ctx := context.Background()
 
-	a, err := l.TryAcquire(ctx, "k:norm", MinTTL)
+	a, err := l.TryAcquire(ctx, "k:norm", distlock.MinTTL)
 	require.NoError(t, err)
 	require.True(t, mr.Exists("k:norm"))
 
-	_, err = l.TryAcquire(ctx, "k:norm", MinTTL)
-	require.ErrorIs(t, err, ErrLocked, "contention must be ErrLocked")
+	_, err = l.TryAcquire(ctx, "k:norm", distlock.MinTTL)
+	require.ErrorIs(t, err, distlock.ErrLocked, "contention must be distlock.ErrLocked")
 
 	require.NoError(t, a.Release(ctx))
 	require.False(t, mr.Exists("k:norm"))
 
-	b, err := l.TryAcquire(ctx, "k:norm", MinTTL)
+	b, err := l.TryAcquire(ctx, "k:norm", distlock.MinTTL)
 	require.NoError(t, err)
 	require.NoError(t, b.Release(ctx))
 }
@@ -49,10 +52,10 @@ func TestRedisReleaseAfterExpiryIsNotAnError(t *testing.T) {
 	l, mr := newRedisLocker(t)
 	ctx := context.Background()
 
-	lease, err := l.TryAcquire(ctx, "k:expired", MinTTL)
+	lease, err := l.TryAcquire(ctx, "k:expired", distlock.MinTTL)
 	require.NoError(t, err)
 
-	mr.FastForward(MinTTL + time.Second) // 直接让 key 过期
+	mr.FastForward(distlock.MinTTL + time.Second) // 直接让 key 过期
 	require.NoError(t, lease.Release(ctx), "已不持有的释放视为成功")
 	require.False(t, mr.Exists("k:expired"))
 }
@@ -63,12 +66,12 @@ func TestRedisLeaseAutoRenewal(t *testing.T) {
 	ctx := context.Background()
 	const key = "k:renew"
 
-	lease, err := l.TryAcquire(ctx, key, MinTTL)
+	lease, err := l.TryAcquire(ctx, key, distlock.MinTTL)
 	require.NoError(t, err)
 	require.True(t, mr.Exists(key))
 
 	// 超过一个 TTL，若无续期 key 会消失。
-	time.Sleep(MinTTL + 300*time.Millisecond)
+	time.Sleep(distlock.MinTTL + 300*time.Millisecond)
 	require.True(t, mr.Exists(key), "auto renewal must keep the key alive")
 	select {
 	case <-lease.Lost():
@@ -80,13 +83,13 @@ func TestRedisLeaseAutoRenewal(t *testing.T) {
 	require.False(t, mr.Exists(key))
 }
 
-// key 被外部删除（模拟被抢占/过期）→ 续期发现不持有 → ErrLockLost。
+// key 被外部删除（模拟被抢占/过期）→ 续期发现不持有 → distlock.ErrLockLost。
 func TestRedisKeyStolenLosesLease(t *testing.T) {
 	l, mr := newRedisLocker(t)
 	ctx := context.Background()
 	const key = "k:stolen"
 
-	lease, err := l.TryAcquire(ctx, key, MinTTL)
+	lease, err := l.TryAcquire(ctx, key, distlock.MinTTL)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lease.Release(context.Background()) })
 
@@ -97,7 +100,7 @@ func TestRedisKeyStolenLosesLease(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("lease did not report loss after the key was removed")
 	}
-	require.ErrorIs(t, lease.Cause(), ErrLockLost)
+	require.ErrorIs(t, lease.Cause(), distlock.ErrLockLost)
 }
 
 // evalFailHook 对 EVAL（续期/释放脚本）注入一次瞬时错误。
@@ -106,10 +109,10 @@ type evalFailHook struct {
 	failed   atomic.Int32
 }
 
-func (h *evalFailHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (h *evalFailHook) DialHook(next goredis.DialHook) goredis.DialHook { return next }
 
-func (h *evalFailHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
-	return func(ctx context.Context, cmd redis.Cmder) error {
+func (h *evalFailHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
 		if cmd.Name() == "eval" && h.failOnce.CompareAndSwap(true, false) {
 			h.failed.Add(1)
 			return errors.New("injected: eval i/o timeout")
@@ -118,24 +121,24 @@ func (h *evalFailHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	}
 }
 
-func (h *evalFailHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+func (h *evalFailHook) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
 	return next
 }
 
 // 单次瞬时续期错误不得宣告丢锁。
 func TestRedisTransientEvalErrorDoesNotLoseLease(t *testing.T) {
 	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	hook := &evalFailHook{}
 	client.AddHook(hook)
 
-	l, err := NewRedis(client)
+	l, err := distlock.NewWithDriver(newDriverFromClient(client))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
 	ctx := context.Background()
 	const key = "k:blip"
 
-	lease, err := l.TryAcquire(ctx, key, MinTTL)
+	lease, err := l.TryAcquire(ctx, key, distlock.MinTTL)
 	require.NoError(t, err)
 
 	hook.failOnce.Store(true)
@@ -160,8 +163,7 @@ func TestRedisIntegrationRealServer(t *testing.T) {
 	if addr == "" {
 		addr = "127.0.0.1:6379"
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
-	t.Cleanup(func() { _ = client.Close() })
+	client := goredis.NewClient(&goredis.Options{Addr: addr})
 
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer pingCancel()
@@ -169,17 +171,18 @@ func TestRedisIntegrationRealServer(t *testing.T) {
 		t.Skipf("redis not available at %s: %v", addr, err)
 	}
 
-	l, err := NewRedis(client)
+	l, err := distlock.NewWithDriver(newDriverFromClient(client))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
 	ctx := context.Background()
 	key := fmt.Sprintf("distlock:test:%d", time.Now().UnixNano())
 	t.Cleanup(func() { _ = client.Del(context.Background(), key).Err() })
 
-	lease, err := l.TryAcquire(ctx, key, MinTTL)
+	lease, err := l.TryAcquire(ctx, key, distlock.MinTTL)
 	require.NoError(t, err)
 
 	// 超过一个 TTL；续期失效则 key 会消失。
-	time.Sleep(MinTTL + 500*time.Millisecond)
+	time.Sleep(distlock.MinTTL + 500*time.Millisecond)
 	ttl, err := client.TTL(ctx, key).Result()
 	require.NoError(t, err)
 	require.Greater(t, ttl, time.Duration(0), "auto renewal should keep the key alive")

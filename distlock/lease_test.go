@@ -14,7 +14,7 @@ import (
 // ---- 获取侧语义 ----
 
 func TestTryAcquireValidation(t *testing.T) {
-	l := newTestLocker(newFakeStore())
+	l := newTestLocker(newFakeDriver())
 
 	_, err := l.TryAcquire(context.Background(), "", MinTTL)
 	require.ErrorIs(t, err, ErrInvalidConfig)
@@ -34,7 +34,7 @@ func TestTryAcquireThreeStates(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("acquired", func(t *testing.T) {
-		st := newFakeStore()
+		st := newFakeDriver()
 		l := newTestLocker(st)
 		lease, err := l.TryAcquire(ctx, "k", MinTTL)
 		require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestTryAcquireThreeStates(t *testing.T) {
 	})
 
 	t.Run("busy", func(t *testing.T) {
-		l := newTestLocker(newFakeStore())
+		l := newTestLocker(newFakeDriver())
 		first, err := l.TryAcquire(ctx, "k", MinTTL)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = first.Release(context.Background()) })
@@ -58,7 +58,7 @@ func TestTryAcquireThreeStates(t *testing.T) {
 
 	t.Run("store failure", func(t *testing.T) {
 		boom := errors.New("redis down")
-		st := newFakeStore()
+		st := newFakeDriver()
 		st.acquireErr = boom
 		lease, err := newTestLocker(st).TryAcquire(ctx, "k", MinTTL)
 		require.ErrorIs(t, err, boom)
@@ -71,7 +71,7 @@ func TestTryAcquireThreeStates(t *testing.T) {
 
 // 单次「卡满 timeout」的续期不得当场判死：窗口内还要有第二次机会。
 func TestSlowRenewDoesNotLoseLeaseBeforeDeadline(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	st.renewFn = func(call int, ctx context.Context) error {
 		if call == 1 {
 			<-ctx.Done() // 模拟一次卡到 attempt 上限的续期
@@ -101,7 +101,7 @@ func TestSlowRenewDoesNotLoseLeaseBeforeDeadline(t *testing.T) {
 
 // 续期持续失败直到窗口耗尽才判丢，且时间点落在 [deadline, deadline+renewTimeout]。
 func TestRenewDeadlineExhaustedLosesLease(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	st.renewFn = func(int, context.Context) error { return errors.New("persistent: redis unavailable") }
 	l := newTestLocker(st)
 	start := time.Now()
@@ -132,7 +132,7 @@ func TestRenewDeadlineExhaustedLosesLease(t *testing.T) {
 
 // 底层明确报告「不持有」时立即判定 ErrLockLost，不等待窗口耗尽。
 func TestNotHeldRenewLosesLeaseImmediately(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st)
 	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
 	require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestNotHeldRenewLosesLeaseImmediately(t *testing.T) {
 // ---- Release 语义 ----
 
 func TestReleaseIsIdempotentAndStopsRenewal(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st)
 	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
 	require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestConcurrentReleaseSharesResult(t *testing.T) {
 	unblock := make(chan struct{})
 	boom := errors.New("redis down during release")
 
-	st := newFakeStore()
+	st := newFakeDriver()
 	st.releaseFn = func(ctx context.Context) error {
 		close(unlockStarted)
 		<-unblock
@@ -234,7 +234,7 @@ func TestConcurrentReleaseSharesResult(t *testing.T) {
 // 续期 RPC 卡住（不理会 ctx）时 Release 也必须有界返回。
 func TestReleaseBoundedWhenRenewalStuck(t *testing.T) {
 	unblock := make(chan struct{})
-	st := newFakeStore()
+	st := newFakeDriver()
 	st.renewFn = func(int, context.Context) error {
 		<-unblock // 模拟不理会 ctx 的慢调用
 		return nil
@@ -258,7 +258,7 @@ func TestReleaseBoundedWhenRenewalStuck(t *testing.T) {
 
 func TestReleaseErrorPropagated(t *testing.T) {
 	boom := errors.New("redis down")
-	st := newFakeStore()
+	st := newFakeDriver()
 	st.releaseFn = func(context.Context) error { return boom }
 	l := newTestLocker(st)
 	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
@@ -267,7 +267,7 @@ func TestReleaseErrorPropagated(t *testing.T) {
 }
 
 func TestReleaseAfterLossStillReleases(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st)
 	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
 	require.NoError(t, err)
@@ -325,7 +325,7 @@ func TestHooks(t *testing.T) {
 		},
 	}
 
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st, WithHooks(h))
 	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
 	require.NoError(t, err)
@@ -349,7 +349,7 @@ func TestHooks(t *testing.T) {
 
 // 钩子 panic 不能拖垮续期循环。
 func TestHooksPanicIsRecovered(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st, WithHooks(Hooks{
 		OnRenew: func(context.Context, string, error) { panic("boom") },
 	}))
@@ -367,7 +367,7 @@ func TestHooksPanicIsRecovered(t *testing.T) {
 // ---- goroutine 生命周期 ----
 
 func TestNoGoroutineLeak(t *testing.T) {
-	l := newTestLocker(newFakeStore())
+	l := newTestLocker(newFakeDriver())
 
 	for i := 0; i < 5; i++ {
 		lease, err := l.TryAcquire(context.Background(), "warmup", MinTTL)

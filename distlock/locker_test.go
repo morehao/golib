@@ -12,7 +12,7 @@ import (
 
 // Acquire 应一直等到锁被释放。
 func TestAcquireWaitsForRelease(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st, WithRetryInterval(20*time.Millisecond))
 
 	first, err := l.TryAcquire(context.Background(), "k", MinTTL)
@@ -48,7 +48,7 @@ func TestAcquireWaitsForRelease(t *testing.T) {
 
 // 等待超时返回独立哨兵：不是「被占用」，也不带 ErrLocked。
 func TestAcquireTimeoutIsDistinct(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st, WithRetryInterval(20*time.Millisecond))
 
 	held, err := l.TryAcquire(context.Background(), "k", MinTTL)
@@ -69,7 +69,7 @@ func TestAcquireTimeoutIsDistinct(t *testing.T) {
 // Acquire 遇到存储故障立即返回，不在内部吞掉重试。
 func TestAcquireStopsOnStoreFailure(t *testing.T) {
 	boom := errors.New("redis down")
-	st := newFakeStore()
+	st := newFakeDriver()
 	st.acquireErr = boom
 	l := newTestLocker(st, WithRetryInterval(20*time.Millisecond))
 
@@ -86,7 +86,7 @@ func TestAcquireCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	lease, err := newTestLocker(newFakeStore()).Acquire(ctx, "k", MinTTL)
+	lease, err := newTestLocker(newFakeDriver()).Acquire(ctx, "k", MinTTL)
 	require.Nil(t, lease)
 	require.ErrorIs(t, err, context.Canceled)
 	require.NotErrorIs(t, err, ErrAcquireTimeout)
@@ -94,7 +94,7 @@ func TestAcquireCanceledContext(t *testing.T) {
 
 // 并发获取同一 key 只有一个赢家（赢家在其他尝试结束前不释放）。
 func TestTryAcquireOnlyOneWinner(t *testing.T) {
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st)
 
 	const n = 16
@@ -132,9 +132,4 @@ func TestTryAcquireOnlyOneWinner(t *testing.T) {
 	for _, lease := range unspent {
 		require.NoError(t, lease.Release(context.Background()))
 	}
-}
-
-func TestNewRedisValidation(t *testing.T) {
-	_, err := NewRedis(nil)
-	require.ErrorIs(t, err, ErrInvalidConfig)
 }

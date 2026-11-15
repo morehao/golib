@@ -109,6 +109,7 @@ import (
 	"context"
 
 	"github.com/morehao/golib/distlock"
+	_ "github.com/morehao/golib/distlock/driver/redis" // 注册 "redis" 后端
 	"github.com/morehao/golib/task/gcron"
 	"gorm.io/gorm"
 )
@@ -123,14 +124,18 @@ func main() {
 
 	// 创建调度器（锁为可选，仅当任务开启互斥时需要）。
 	// 锁门面是运行期依赖，只通过 WithLocker 传入（New 没有锁的位置参数）：
-	//   - 多副本部署：distlock.NewRedis(rdbClient)，跨进程互斥；
-	//   - 单进程/本地开发：distlock.NewMemory()，仅进程内互斥（多副本下不提供跨进程互斥）。
-	// 装配层构造一次即可全进程复用；不开启互斥（Task.EnableLock=false 且 Config.EnableLock=false）
-	// 时可以不传 WithLocker。
-	locker, err := distlock.NewRedis(rdbClient) // rdbClient 为 go-redis 的 redis.UniversalClient
+	//   - 多副本部署：Driver="redis" + blank import distlock/driver/redis，跨进程互斥；
+	//   - 单进程/本地开发：Driver="memory" + blank import distlock/driver/memory，仅进程内互斥。
+	// 装配层构造一次即可全进程复用，并在进程退出时 Close；不开启互斥
+	// （Task.EnableLock=false 且 Config.EnableLock=false）时可以不传 WithLocker。
+	locker, err := distlock.New(distlock.Config{
+		Driver: "redis",
+		Redis:   &distlock.RedisConfig{Service: "order-svc", Addr: "10.0.0.8:6379", Password: "***"},
+	})
 	if err != nil {
 		panic(err)
 	}
+	defer func() { _ = locker.Close() }()
 	s, err := gcron.New(db, &gcron.Config{WithSeconds: true}, gcron.WithLocker(locker))
 	if err != nil {
 		panic(err)

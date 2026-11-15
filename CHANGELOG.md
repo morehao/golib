@@ -4,9 +4,19 @@
 
 ### 破坏性重构：distlock（v1.37）
 
-- **公开 API 收敛**：删除 `Factory` / `Mutex` / `RedisFactory` / `New` / `AcquireOption`，锁门面只剩
-  `NewRedis(rdb)` 与新增的 `NewMemory()`；`TryAcquire` / `Acquire` 去掉 per-call options；
-  `Hooks` 与重试间隔改为构造期 `Option`。
+- **后端改为注册表 + driver 子包**：核心包不再 import 任何后端实现，后端在
+  `distlock/driver/redis`、`distlock/driver/memory` 里通过 `init()` 注册，用
+  `New(Config{Driver: "redis"|"memory"})` 选择。核心包的非标准库传递依赖从 22 个降到 1 个
+  （`google/uuid`），Redis 栈只在 `driver/redis` 内。
+- **接缝导出为 `Driver`**：`Acquire` / `Renew` / `Release` 三个单次尝试原语（原包内非导出 `store`）。
+  自定义后端实现它 + `Register` 即可接入；测试与自有后端也可用 `NewWithDriver` 注入。
+- **门面改为接口**：`distlock.Locker` 从结构体改为接口（`TryAcquire` / `Acquire` / `Close`），
+  实现非导出；`NewLeaderElector` 与 `gcron.WithLocker` 的入参同步改为接口。
+- **新增 `Close`**：redis driver 自建连接池（经 `dbaccess/dbredis`，`RedisConfig.Service` 为空时取
+  `"distlock"`），`Locker.Close()` 负责关闭它（memory 为空实现、幂等）。`Close` 之后
+  `TryAcquire` / `Acquire` 返回新增的 `ErrClosed`；已持有的租约不受影响，仍需 `Release`。
+- **不做 client 注入**：`Config` 只用纯数据 `RedisConfig` 描述连接（与 `gcache/redis` 同构），
+  避免"两个正确构造方式"；因此锁与业务的 redis 地址必须指向同一实例（发布说明新增一条运维约束）。
 - **续期时间预算重做**：`RenewTimeout = min(1s, TTL/10)`、单次尝试上限夹到剩余窗口、
   `remaining < 20ms` 判丢（地板）。旧实现在默认参数下「一次卡到超时的续期」就会判死健康租约
   （单次上限与续期节奏同为 TTL/3），新实现保证窗口内至少两次尝试，且判定落在
@@ -14,16 +24,37 @@
 - **Release 幂等语义修正**：并发调用时第一个调用者执行释放，其余调用者等待并拿到同一结果。
   旧实现让后续调用者立即返回 nil，既可能早于解锁完成，也会吞掉第一个人的错误。
 - **错误面简化**：`ErrInvalidKey` / `ErrInvalidTTL` / `ErrInvalidOption` / `ErrNilFactory` 合并为
-  `ErrInvalidConfig`；阻塞获取的等待超时改为独立 `ErrAcquireTimeout`（不再 `errors.Join(ErrLocked, ctx.Err())`）。
+  `ErrInvalidConfig`；阻塞获取的等待超时改为独立 `ErrAcquireTimeout`（不再 `errors.Join(ErrLocked, ctx.Err())`）；
+  新增 `ErrDriverNotRegistered`（漏 blank import / 后端名拼错）与 `ErrClosed`。
 - **`MinTTL` 200ms → 1s**：`[200ms, 1s)` 的既有配置会在获取时被拒绝（`gcron` 在注册期报错）。
-- **删除多节点 quorum**：`NewRedis` 只接受单个 client，多节点用例一并移除。
-- **redsync 保留为单节点实现**：`redisStore` 适配 redsync（`WithTries(1)` 关掉库内重试、
-  `WithGenValueFunc`/`WithValue` 沿用本组件生成的 token），单节点仍走 `SET NX PX` 与 Lua CAS，但锁协议
-  由库维护，不再自持脚本。多节点 quorum 能力不对外暴露（`NewRedis` 只接受单个 client）。
-- **新增进程内形态 `NewMemory()`**：同一进程内所有门面共享占用表，供单副本部署/CLI/本地开发使用；
-  TTL 与续期在该形态下只是 API 一致性占位（`Lost()` 永不关闭）。多副本部署使用会静默失去互斥。
+- **删除多节点 quorum**：`RedisConfig` 只描述一个实例，多节点用例一并移除；cluster / sentinel /
+  自定义 TLS 当前不支持（`dbredis.New` 只返回单节点 client），需要时扩 `RedisConfig`。
+- **redsync 保留为单节点实现**：`driver/redis` 适配 redsync（`WithTries(1)` 关掉库内重试、
+  `WithGenValueFunc`/`WithValue` 沿用本组件生成的 token），单节点仍走 `SET NX PX` 与 Lua CAS。
+- **新增进程内形态**：`Driver: "memory"` + blank import `distlock/driver/memory`。同一进程内所有
+  门面共享占用表，供单副本部署/CLI/本地开发使用；TTL 与续期在该形态下只是 API 一致性占位
+  （`Lost()` 永不关闭）。多副本部署使用会静默失去互斥。
 - **`task/gcron` 同步迁移**：`New` 去掉位置参数 `locker`、`Config.Locker` 字段删除，锁门面只经
-  `WithLocker` 配置；锁相关测试从 fake 后端迁移到 miniredis。
+  `WithLocker` 配置；锁相关测试的"抢锁次数"断言从 go-redis 命令计数改为 fake `Driver` 计数
+  （`distlock.NewWithDriver`），不再需要给客户端挂 hook。
+
+**迁移表（v1.36.2 → v1.37）**
+
+| v1.36.2 | v1.37 |
+|---|---|
+| `New(f Factory)` + 自定义 `Factory`（`NewMutex`） | 实现 `distlock.Driver`（`Acquire/Renew/Release`）+ `Register("name", 工厂)`，装配用 `New(Config{Driver:"name"})`（重写） |
+| `NewRedisFactory(clients...)` + `New(f)` | `New(Config{Driver:"redis", Redis:&RedisConfig{Service,Addr,Password,DB,...}})` + blank import `driver/redis` |
+| `NewRedis(clients...)`（多节点 quorum） | 不支持多节点；`RedisConfig` 只描述一个实例 |
+| `Lock`/`Mutex` 接口（`TryLock/Refresh/Unlock/Token`）、`LockFactory` | 删除；存储原语收敛为导出的 `Driver` |
+| `DistLock.Renewal()` / `Config.AutoRenewal` / `ReNewal` | 删除（续期恒开） |
+| `Hooks` / `WithRenew*` 作为 per-acquire 选项 | `WithHooks` / `WithRetryInterval` 改为构造期 `Option`；时间参数由 TTL 推导 |
+| `TryAcquire(ctx, key, ttl, opts...)` / `Acquire(...)` | 去掉 per-call options |
+| `*distlock.Locker`（结构体） | `distlock.Locker`（接口）；`NewLeaderElector` / `gcron.WithLocker` 收接口 |
+| `MinTTL = 200ms` | `MinTTL = 1s` |
+| `Acquire` 超时返回 `errors.Join(ErrLocked, ctx.Err())` | `ErrAcquireTimeout`（不命中 `ErrLocked`） |
+| `Lease.Release` 并发调用后续调用立即返回 `nil` | 所有调用者等待并拿到同一结果 |
+| `LeaderElector.Run` + `Epoch()`/`LeaderID()` | `Run(ctx, Callbacks)` + `Term()`；`LeaderID()` 删除 |
+| 依赖 `go-redsync/redsync`（核心包） | 保留，但只在 `distlock/driver/redis` 内；核心包零后端依赖 |
 
 ### 重构（换用主流依赖，减少自维护面）
 

@@ -262,9 +262,10 @@ For usage examples, refer to [dict usage](dict/README.md)
 `distlock` is a Redis-based distributed lock with always-on auto-renewal, lease-level loss notification, and a best-effort leader election built on the same lease core. It also ships an in-process form for single-replica deployments. It is an **efficiency lock**, not a correctness lock (no fencing token) — see [distlock README](distlock/README.md) for the exact safety boundaries.
 
 ### Features
-- Two explicit forms: `NewRedis(rdb)` for cross-process mutual exclusion, `NewMemory()` for process-local use (single replica, CLI, local dev — **not** multi-replica)
+- Driver is chosen by `Config.Driver` and registered by driver subpackages (`distlock/driver/redis`, `distlock/driver/memory`); one backend per process — `redis` for cross-process mutual exclusion, `memory` for process-local use (single replica, CLI, local dev — **not** multi-replica)
+- Core package has zero backend dependencies (only `google/uuid`); `RedisConfig` is pure data and the redis driver owns its connection pool (`Close` releases it)
 - `Lease` handle with always-on auto-renewal; `Lost()` / `Context()` / `Cause()` for loss notification
-- Distinguishable outcomes via sentinel errors: busy (`ErrLocked`), lease lost (`ErrLockLost` / `ErrRenewFailed`), acquire timeout (`ErrAcquireTimeout`), invalid config (`ErrInvalidConfig`), storage failure
+- Distinguishable outcomes via sentinel errors: busy (`ErrLocked`), lease lost (`ErrLockLost` / `ErrRenewFailed`), acquire timeout (`ErrAcquireTimeout`), invalid config (`ErrInvalidConfig`), backend not registered (`ErrDriverNotRegistered`), closed (`ErrClosed`), storage failure
 - Slow-failing renewals keep retrying inside the renew window (at least two attempts fit) instead of killing a healthy lease; a loss is declared no earlier than the deadline and never indefinitely postponed
 - Blocking `Acquire` (capped exponential backoff with full jitter) and non-blocking `TryAcquire`; `Release` is idempotent and every concurrent caller gets the same result
 - Observability via construction-time `Hooks` (`OnAcquire` / `OnRenew` / `OnLost` / `OnRelease`, all carrying `ctx`)
@@ -272,9 +273,14 @@ For usage examples, refer to [dict usage](dict/README.md)
 
 ### Usage
 ```go
-locker, err := distlock.NewRedis(redisClient) // one per process
-// or, for single-replica deployments:
-// locker := distlock.NewMemory()
+// import _ "github.com/morehao/golib/distlock/driver/redis"
+locker, err := distlock.New(distlock.Config{
+	Driver: "redis",
+	Redis:   &distlock.RedisConfig{Addr: "10.0.0.8:6379", Password: "***"},
+}) // one per process
+if err != nil { /* ErrInvalidConfig / ErrDriverNotRegistered / connect failure */ }
+defer locker.Close()
+// or, for single-replica deployments: Driver "memory" + blank import distlock/driver/memory
 
 lease, err := locker.TryAcquire(ctx, "order:pay:10086", 30*time.Second)
 switch {

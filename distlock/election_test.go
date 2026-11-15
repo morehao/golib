@@ -23,7 +23,7 @@ func countLeaders(es ...*LeaderElector) int {
 	return n
 }
 
-func newTestElector(t *testing.T, l *Locker, key string, ttl time.Duration) *LeaderElector {
+func newTestElector(t *testing.T, l Locker, key string, ttl time.Duration) *LeaderElector {
 	t.Helper()
 	e, err := NewLeaderElector(l, LeaderConfig{Key: key, TTL: ttl, RetryInterval: 100 * time.Millisecond})
 	require.NoError(t, err)
@@ -61,7 +61,7 @@ func (r *recorder) stoppedCause() error {
 }
 
 func TestLeaderElectorValidation(t *testing.T) {
-	l := newTestLocker(newFakeStore())
+	l := newTestLocker(newFakeDriver())
 
 	_, err := NewLeaderElector(nil, LeaderConfig{Key: "k", TTL: MinTTL})
 	require.ErrorIs(t, err, ErrInvalidConfig)
@@ -87,7 +87,7 @@ func TestLeaderElectorValidation(t *testing.T) {
 
 func TestLeaderElectorOnlyOneLeader(t *testing.T) {
 	const key = "svc:leader"
-	st := newFakeStore()
+	st := newFakeDriver()
 	l := newTestLocker(st)
 	a := newTestElector(t, l, key, MinTTL)
 	b := newTestElector(t, l, key, MinTTL)
@@ -118,7 +118,7 @@ func TestLeaderElectorOnlyOneLeader(t *testing.T) {
 
 func TestLeaderElectorFailover(t *testing.T) {
 	const key = "svc:leader"
-	l := newTestLocker(newFakeStore())
+	l := newTestLocker(newFakeDriver())
 	first := newTestElector(t, l, key, MinTTL)
 	second := newTestElector(t, l, key, MinTTL)
 
@@ -151,7 +151,7 @@ func TestLeaderElectorFailover(t *testing.T) {
 // 瞬时续期错误不得导致让位。
 func TestLeaderElectorNoChurnOnTransientRenewalError(t *testing.T) {
 	const key = "svc:leader"
-	st := newFakeStore()
+	st := newFakeDriver()
 	st.renewFn = func(call int, _ context.Context) error {
 		if call == 1 {
 			return errors.New("transient refresh failure")
@@ -190,7 +190,7 @@ func TestLeaderElectorNoChurnOnTransientRenewalError(t *testing.T) {
 // 回调必须成对且有序：每个任期 started 一次、stopped 一次。
 func TestLeaderElectorCallbackOrder(t *testing.T) {
 	const key = "svc:leader"
-	l := newTestLocker(newFakeStore())
+	l := newTestLocker(newFakeDriver())
 	e := newTestElector(t, l, key, MinTTL)
 
 	r := &recorder{}

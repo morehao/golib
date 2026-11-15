@@ -51,7 +51,7 @@ type Lease struct {
 	key    string
 	token  string
 	ttl    time.Duration
-	st     store
+	st     Driver
 	hooks  Hooks
 	timing timing
 
@@ -75,7 +75,7 @@ type Lease struct {
 //
 // acquireCtx 只用于继承 trace/日志等 value，取消语义被剥离（context.WithoutCancel）：
 // 调用方 ctx 到期不应停止续期，否则会出现「静默停续期」这一最难排查的失效模式。
-func newLease(acquireCtx context.Context, key, token string, ttl time.Duration, st store, hooks Hooks) *Lease {
+func newLease(acquireCtx context.Context, key, token string, ttl time.Duration, st Driver, hooks Hooks) *Lease {
 	l := &Lease{
 		key:         key,
 		token:       token,
@@ -152,7 +152,7 @@ func (l *Lease) Release(ctx context.Context) error {
 		}
 		timer.Stop()
 
-		err := l.st.release(ctx, l.key, l.token)
+		err := l.st.Release(ctx, l.key, l.token)
 		if errors.Is(err, ErrLocked) {
 			// 锁已过期或本就不持有：释放动作本身没有失败。
 			err = nil
@@ -220,7 +220,7 @@ func (l *Lease) renewLoop() {
 
 		attemptTimeout := min(l.timing.renewTimeout, remaining)
 		rctx, cancel := context.WithTimeout(l.ctx, attemptTimeout)
-		err := l.st.renew(rctx, l.key, l.token, l.ttl)
+		err := l.st.Renew(rctx, l.key, l.token, l.ttl)
 		cancel()
 
 		if l.ctx.Err() != nil {

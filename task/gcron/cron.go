@@ -54,7 +54,7 @@ type Scheduler struct {
 	cron   *cron.Cron
 	logger glog.Logger
 	store  *store
-	locker *distlock.Locker
+	locker distlock.Locker
 	cfg    *Config
 
 	mu    sync.Mutex

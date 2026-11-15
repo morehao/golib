@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// fakeStore 是可编程的内存存储，用于覆盖 Lease 状态机与 Locker 的三态语义。
-// 它刻意不导出：store 是包内接缝，外部只需要 NewRedis / NewMemory。
-type fakeStore struct {
+// fakeDriver 是可编程的内存存储，用于覆盖 Lease 状态机与 Locker 的三态语义。
+// 它刻意不导出：Driver 是公开接缝，但测试 fake 不需要导出给外部。
+type fakeDriver struct {
 	mu   sync.Mutex
 	held map[string]string
 
@@ -21,11 +21,11 @@ type fakeStore struct {
 	releaseFn  func(ctx context.Context) error
 }
 
-func newFakeStore() *fakeStore {
-	return &fakeStore{held: make(map[string]string)}
+func newFakeDriver() *fakeDriver {
+	return &fakeDriver{held: make(map[string]string)}
 }
 
-func (f *fakeStore) acquire(ctx context.Context, key, token string, _ time.Duration) error {
+func (f *fakeDriver) Acquire(ctx context.Context, key, token string, _ time.Duration) error {
 	f.mu.Lock()
 	f.acquireCalls++
 	err := f.acquireErr
@@ -43,7 +43,7 @@ func (f *fakeStore) acquire(ctx context.Context, key, token string, _ time.Durat
 	return nil
 }
 
-func (f *fakeStore) renew(ctx context.Context, key, token string, _ time.Duration) error {
+func (f *fakeDriver) Renew(ctx context.Context, key, token string, _ time.Duration) error {
 	f.mu.Lock()
 	f.renewCalls++
 	call := f.renewCalls
@@ -62,7 +62,7 @@ func (f *fakeStore) renew(ctx context.Context, key, token string, _ time.Duratio
 	return nil
 }
 
-func (f *fakeStore) release(ctx context.Context, key, token string) error {
+func (f *fakeDriver) Release(ctx context.Context, key, token string) error {
 	f.mu.Lock()
 	f.releaseCalls++
 	fn := f.releaseFn
@@ -83,23 +83,23 @@ func (f *fakeStore) release(ctx context.Context, key, token string) error {
 	return nil
 }
 
-func (f *fakeStore) counts() (acquire, renew, release int) {
+func (f *fakeDriver) counts() (acquire, renew, release int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.acquireCalls, f.renewCalls, f.releaseCalls
 }
 
-func (f *fakeStore) holds(key string) bool {
+func (f *fakeDriver) holds(key string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	_, ok := f.held[key]
 	return ok
 }
 
-func (f *fakeStore) steal(key string) {
+func (f *fakeDriver) steal(key string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.held, key)
 }
 
-func newTestLocker(st store, opts ...Option) *Locker { return newLocker(st, opts) }
+func newTestLocker(st Driver, opts ...Option) Locker { return newLocker(st, opts) }

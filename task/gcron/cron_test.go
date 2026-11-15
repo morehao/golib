@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/morehao/golib/distlock"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+
+	"github.com/morehao/golib/distlock"
+	_ "github.com/morehao/golib/distlock/driver/redis" // 注册 "redis" 后端
+	_ "github.com/morehao/golib/glog/driver/zap"       // dbredis.New 需要 glog driver
 )
 
 // cronWaitTimeout 是"等 1 秒粒度的 cron 触发一次"的上限。
@@ -25,78 +27,106 @@ import (
 // 放宽上限不削弱检测力：调度器若真的不触发，这些用例仍会失败。
 const cronWaitTimeout = 15 * time.Second
 
-// lockCmdCounter 是装在 go-redis 客户端上的命令计数器，用于替代旧 fakeLock 内部的
-// lockCount / unlockCount —— 迁移后锁走真实 Redis 后端，没有 fake 可数。
+// countingDriver 是测试用的内存 Driver：只实现存储原语，用于断言「到底发生了几次抢锁」。
 //
-// 与 distlock Redis 后端的对应关系：
-//   - 抢锁 = SET NX PX，统计 "set" 即可精确判断“这一轮有没有再抢锁”；
-//   - 释放与续期都是 Lua CAS（首次 EVAL，脚本缓存后为 EVALSHA），两者混在一起计数，
-//     只能作为辅助信号；主断言仍看 miniredis 里 key 是否还在。
-type lockCmdCounter struct {
-	mu     sync.Mutex
-	counts map[string]int64
+// 之所以不再挂在 go-redis 客户端上数命令：注入 client 的构造入口已随 v1.37 移除
+// （distlock 改为 driver 自建连接），而这几条用例真正要断言的是调度语义（重叠加持时
+// 不再抢锁、被占用时每个 tick 都尝试一次），与 Redis wire 行为无关。
+type countingDriver struct {
+	mu       sync.Mutex
+	held     map[string]string
+	acquires int
+	releases int
 }
 
-func newLockCmdCounter() *lockCmdCounter {
-	return &lockCmdCounter{counts: make(map[string]int64)}
+func newCountingDriver() *countingDriver {
+	return &countingDriver{held: make(map[string]string)}
 }
 
-func (c *lockCmdCounter) DialHook(next redis.DialHook) redis.DialHook { return next }
-
-func (c *lockCmdCounter) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
-	return func(ctx context.Context, cmd redis.Cmder) error {
-		c.mu.Lock()
-		c.counts[cmd.Name()]++
-		c.mu.Unlock()
-		return next(ctx, cmd)
+func (s *countingDriver) Acquire(_ context.Context, key, token string, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acquires++
+	if _, ok := s.held[key]; ok {
+		return distlock.ErrLocked
 	}
+	s.held[key] = token
+	return nil
 }
 
-func (c *lockCmdCounter) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
-	return next
+func (s *countingDriver) Renew(_ context.Context, key, token string, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.held[key] != token {
+		return distlock.ErrLocked
+	}
+	return nil
 }
 
-// count 返回指定命令（go-redis 的小写命令名，如 "set"）被执行的次数。
-func (c *lockCmdCounter) count(cmdName string) int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.counts[cmdName]
+func (s *countingDriver) Release(_ context.Context, key, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releases++
+	if s.held[key] != token {
+		return distlock.ErrLocked
+	}
+	delete(s.held, key)
+	return nil
 }
 
-// newTestLocker 用 miniredis + go-redis 构造真实 Redis Locker，与生产装配（NewRedis）一致；
-// 返回的 miniredis 实例用于 key 存在性断言与故障注入（Close 模拟存储故障）。
-func newTestLocker(t *testing.T) (*distlock.Locker, *miniredis.Miniredis) {
+// acquireCount 返回累计抢锁尝试次数。
+func (s *countingDriver) acquireCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acquires
+}
+
+// resetCounts 清空计数（用于先占住 key、再只统计调度器自己的尝试）。
+func (s *countingDriver) resetCounts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acquires = 0
+	s.releases = 0
+}
+
+// holds 报告 key 当前是否被持有。
+func (s *countingDriver) holds(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.held[key]
+	return ok
+}
+
+// newCountingLocker 用给定 store 构造门面：同一张占用表上再建一个门面即可模拟
+// "另一个实例持有同一把锁"，且能精确数出抢锁尝试。
+func newCountingLocker(t *testing.T, store *countingDriver) distlock.Locker {
+	t.Helper()
+	l, err := distlock.NewWithDriver(store)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
+	return l
+}
+
+// newTestLocker 用 miniredis 构造真实 Redis 后端门面（经注册表 + driver 自建连接），
+// 与生产装配（distlock.New + driver/redis）一致；返回的 miniredis 用于 key 存在性断言
+// 与故障注入（Close 模拟存储故障）。
+func newTestLocker(t *testing.T) (distlock.Locker, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	return newTestLockerOn(t, mr), mr
 }
 
 // newTestLockerOn 在给定 miniredis 上再构造一个 Locker：同一实例上起两个 Locker
-// 即可模拟“另一个实例已持有同一把锁”，不需要 fake 后端。
-func newTestLockerOn(t *testing.T, mr *miniredis.Miniredis) *distlock.Locker {
+// 即可模拟"另一个实例已持有同一把锁"，不需要 fake 后端。
+func newTestLockerOn(t *testing.T, mr *miniredis.Miniredis) distlock.Locker {
 	t.Helper()
-	locker, _ := newTestLockerWithCounterOn(t, mr)
-	return locker
-}
-
-// newTestLockerWithCounter 在独立 miniredis 上构造 Locker，并附带命令计数器
-// （用于“没有重复抢锁”“确实发生过 N 次抢锁尝试”这类断言）。
-func newTestLockerWithCounter(t *testing.T) (*distlock.Locker, *miniredis.Miniredis, *lockCmdCounter) {
-	t.Helper()
-	mr := miniredis.RunT(t)
-	locker, counter := newTestLockerWithCounterOn(t, mr)
-	return locker, mr, counter
-}
-
-func newTestLockerWithCounterOn(t *testing.T, mr *miniredis.Miniredis) (*distlock.Locker, *lockCmdCounter) {
-	t.Helper()
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	counter := newLockCmdCounter()
-	client.AddHook(counter)
-	locker, err := distlock.NewRedis(client)
+	locker, err := distlock.New(distlock.Config{
+		Driver: "redis",
+		Redis:  &distlock.RedisConfig{Addr: mr.Addr(), Service: "gcron-test"},
+	})
 	require.NoError(t, err)
-	return locker, counter
+	t.Cleanup(func() { _ = locker.Close() })
+	return locker
 }
 
 // holdKey 用另一个 Locker 在同一 miniredis 上占住 key，并保持租约到测试结束，
@@ -663,7 +693,8 @@ func TestOverlapCheckedBeforeLock(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	locker, mr, counter := newTestLockerWithCounter(t)
+	store := newCountingDriver()
+	locker := newCountingLocker(t, store)
 	const lockKey = "cron:lock:overlap-lock"
 	release := make(chan struct{})
 	started := make(chan struct{})
@@ -694,15 +725,13 @@ func TestOverlapCheckedBeforeLock(t *testing.T) {
 		return hasRunLike(listTaskRuns(t, s, "overlap-lock"), TaskRunSkipped, "previous run still in progress")
 	}, cronWaitTimeout, 20*time.Millisecond)
 
-	// 旧断言 lockCount==1 → 抢锁命令 SET 只发生过 1 次；
-	// 旧断言 unlockCount==0 → 首轮仍在执行，租约还在、key 还在 miniredis 里。
-	require.EqualValues(t, 1, counter.count("set"), "重叠加持的那一轮不应再抢锁")
-	require.True(t, mr.Exists(lockKey), "首轮仍在执行，锁不应被释放")
+	// 抢锁尝试只发生 1 次；首轮仍在执行，租约还在、store 里仍持有该 key。
+	require.EqualValues(t, 1, store.acquireCount(), "重叠加持的那一轮不应再抢锁")
+	require.True(t, store.holds(lockKey), "首轮仍在执行，锁不应被释放")
 
 	close(release)
-	// 旧断言 unlockCount==1 → 释放后 key 从 miniredis 消失。续期与释放都是 Lua 脚本，
-	// 计数无法区分，故以 key 存在性为准；下一轮 tick 会再次抢锁，所以用 Eventually 轮询空窗。
-	require.Eventually(t, func() bool { return !mr.Exists(lockKey) }, cronWaitTimeout, 20*time.Millisecond)
+	// 释放后 key 不再被持有；下一轮 tick 会再次抢锁，所以用 Eventually 轮询空窗。
+	require.Eventually(t, func() bool { return !store.holds(lockKey) }, cronWaitTimeout, 20*time.Millisecond)
 }
 
 // TestLockNotAcquiredRecordsSkipped 验证"竞争未获取"记录 skipped 且不执行 handler。
@@ -850,8 +879,13 @@ func TestSkipNotRecordedWhenDisabled(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	locker, mr, counter := newTestLockerWithCounter(t)
-	holdKey(t, mr, "cron:lock:no-skip-record")
+	store := newCountingDriver()
+	holder := newCountingLocker(t, store)
+	held, err := holder.TryAcquire(context.Background(), "cron:lock:no-skip-record", distlock.MinTTL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = held.Release(context.Background()) })
+	store.resetCounts() // 只统计调度器自己的抢锁尝试
+	locker := newCountingLocker(t, store)
 	var count atomic.Int32
 	s, err := New(db, nil, WithSeconds(true),
 		WithRecordSkippedRuns(false), WithLocker(locker))
@@ -867,8 +901,7 @@ func TestSkipNotRecordedWhenDisabled(t *testing.T) {
 	t.Cleanup(func() { _ = s.Stop(context.Background()) })
 
 	// 至少发生过两次抢锁尝试（每次都被占用的锁拒绝）= 两次跳过。
-	// 旧断言 lock.lockCount >= 2 → 计数抢锁命令 SET 的次数。
-	require.Eventually(t, func() bool { return counter.count("set") >= 2 }, cronWaitTimeout, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return store.acquireCount() >= 2 }, cronWaitTimeout, 20*time.Millisecond)
 	require.Zero(t, count.Load())
 	require.Empty(t, listTaskRuns(t, s, "no-skip-record"), "关闭记录后不应写入 skipped 行")
 }

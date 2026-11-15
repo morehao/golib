@@ -24,6 +24,15 @@ var (
 	// 它不会同时命中 ErrLocked：超时与「仍被别人持有」是两种不同结果。
 	ErrAcquireTimeout = errors.New("distlock: acquire timed out")
 
-	// ErrInvalidConfig 构造参数或获取参数非法（nil 客户端、空 key、TTL 小于 MinTTL 等）。
+	// ErrInvalidConfig 构造参数或获取参数非法（Driver 为空、缺 RedisConfig、空 key、
+	// TTL 小于 MinTTL 等）。
 	ErrInvalidConfig = errors.New("distlock: invalid config")
+
+	// ErrDriverNotRegistered 指定的 driver 没有注册，通常是漏了对应 driver 子包的 blank import。
+	// 错误文案会列出当前已注册的 driver（Drivers），便于区分"漏 import"与"名字拼错"。
+	ErrDriverNotRegistered = errors.New("distlock: driver not registered")
+
+	// ErrClosed 门面已关闭：Close 之后的 TryAcquire / Acquire 返回它。
+	// 已持有的 Lease 不受 Close 影响，仍需调用方 Release。
+	ErrClosed = errors.New("distlock: locker is closed")
 )

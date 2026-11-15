@@ -26,7 +26,7 @@ import (
 //
 // 用 NewMemory 构造的门面下，选举恒为本进程当选（等价于没有选举），只适合单副本部署。
 type LeaderElector struct {
-	locker *Locker
+	locker Locker
 	cfg    LeaderConfig
 
 	isLeader atomic.Bool
@@ -57,7 +57,7 @@ type Callbacks struct {
 }
 
 // NewLeaderElector 创建选举器；创建后尚未参与选举，需调用 Run。
-func NewLeaderElector(locker *Locker, cfg LeaderConfig) (*LeaderElector, error) {
+func NewLeaderElector(locker Locker, cfg LeaderConfig) (*LeaderElector, error) {
 	if locker == nil {
 		return nil, fmt.Errorf("%w: nil locker", ErrInvalidConfig)
 	}
