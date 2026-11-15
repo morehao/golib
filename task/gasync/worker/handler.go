@@ -13,25 +13,25 @@ import (
 
 // Handler 是唯一必须实现的方法。
 type Handler interface {
-	Execute(ctx context.Context, task *gasync.Job) error
+	Execute(ctx context.Context, task *gasync.AsyncTask) error
 }
 
 // HandlerFunc 便于「只写一个函数」的场景。
-func HandlerFunc(fn func(ctx context.Context, t *gasync.Job) error) Handler {
+func HandlerFunc(fn func(ctx context.Context, t *gasync.AsyncTask) error) Handler {
 	return handlerFunc(fn)
 }
 
-type handlerFunc func(ctx context.Context, t *gasync.Job) error
+type handlerFunc func(ctx context.Context, t *gasync.AsyncTask) error
 
-func (f handlerFunc) Execute(ctx context.Context, t *gasync.Job) error { return f(ctx, t) }
+func (f handlerFunc) Execute(ctx context.Context, t *gasync.AsyncTask) error { return f(ctx, t) }
 
 // Lifecycle 是可选钩子，实现几个算几个。
 type Lifecycle interface {
-	BeforeExecute(ctx context.Context, task *gasync.Job) error
-	OnRetry(ctx context.Context, task *gasync.Job, cause error) error
-	OnSuccess(ctx context.Context, task *gasync.Job) error
-	OnFailure(ctx context.Context, task *gasync.Job, cause error) error
-	OnCanceled(ctx context.Context, task *gasync.Job) error
+	BeforeExecute(ctx context.Context, task *gasync.AsyncTask) error
+	OnRetry(ctx context.Context, task *gasync.AsyncTask, cause error) error
+	OnSuccess(ctx context.Context, task *gasync.AsyncTask) error
+	OnFailure(ctx context.Context, task *gasync.AsyncTask, cause error) error
+	OnCanceled(ctx context.Context, task *gasync.AsyncTask) error
 }
 
 // 控制流哨兵。
@@ -47,7 +47,7 @@ var (
 // 说明：「失败是否可重试」最终由 Source 判定（次数是否用尽、ErrNoRetry 等）。worker 只能
 // 基于错误语义给出初判：ErrNoRetry / panic 视为不可重试（选 OnFailure），timeout /
 // handler_error 视为可重试（选 OnRetry）。Source 在事务内调用该回调完成状态与钩子的同步落库。
-func (w *Worker) buildCallback(task *gasync.Job, outcome gasync.Outcome, kind gasync.FailureKind, cause error) gasync.EnsureFunc {
+func (w *Worker) buildCallback(task *gasync.AsyncTask, outcome gasync.Outcome, kind gasync.FailureKind, cause error) gasync.EnsureFunc {
 	if outcome == gasync.OutcomeSkipped {
 		return nil
 	}
@@ -77,7 +77,7 @@ func (w *Worker) buildCallback(task *gasync.Job, outcome gasync.Outcome, kind ga
 }
 
 // hasRemainingAttempts 判断任务是否还有剩余重试次数（MaxAttempts<=0 视为不设上限）。
-func hasRemainingAttempts(task *gasync.Job) bool {
+func hasRemainingAttempts(task *gasync.AsyncTask) bool {
 	if task.MaxAttempts <= 0 {
 		return true
 	}
@@ -93,7 +93,7 @@ func asLifecycle(h Handler) Lifecycle {
 }
 
 // process 处理单条任务：BeforeExecute → Execute（带超时/recover）→ 分类 → Save。
-func (w *Worker) process(taskType string, task *gasync.Job) {
+func (w *Worker) process(taskType string, task *gasync.AsyncTask) {
 	start := time.Now()
 	if task.Type == "" {
 		task.Type = taskType
@@ -182,7 +182,7 @@ func execCtxErrDeadline(execCtx context.Context, err error) bool {
 }
 
 // execTimeout 解析本次执行超时：任务显式 Timeout > HandlerOption > 默认 30s。
-func (w *Worker) execTimeout(task *gasync.Job) time.Duration {
+func (w *Worker) execTimeout(task *gasync.AsyncTask) time.Duration {
 	if task.Timeout > 0 {
 		return task.Timeout
 	}
@@ -193,7 +193,7 @@ func (w *Worker) execTimeout(task *gasync.Job) time.Duration {
 }
 
 // safeExecute 调 Execute，用 recover 捕获 panic；返回 (payload, err, panicked)。
-func safeExecute(ctx context.Context, h Handler, task *gasync.Job) (payload []byte, err error, panicked bool) {
+func safeExecute(ctx context.Context, h Handler, task *gasync.AsyncTask) (payload []byte, err error, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
@@ -227,20 +227,20 @@ func topStackFrame(stack []byte) string {
 }
 
 // save 调 src.Save；错误仅记日志（Source 负责重建/兜底，worker 不重试 Save）。
-func (w *Worker) save(task *gasync.Job, res gasync.Result, cb gasync.EnsureFunc) {
+func (w *Worker) save(task *gasync.AsyncTask, res gasync.Result, cb gasync.EnsureFunc) {
 	if err := w.src.Save(w.baseCtx, task, res, cb); err != nil {
 		w.logger.Errorw(w.baseCtx, "gasync worker save error",
 			"task_type", task.Type, "job_id", task.ID, "outcome", res.Outcome, "error", err)
 	}
 }
 
-func (w *Worker) emit(typ string, task *gasync.Job, attempt int, d time.Duration, err error) {
+func (w *Worker) emit(typ string, task *gasync.AsyncTask, attempt int, d time.Duration, err error) {
 	if w.cfg.EventHandler == nil {
 		return
 	}
 	w.cfg.EventHandler(Event{
 		Type:     typ,
-		JobID:    task.ID,
+		AsyncTaskID:    task.ID,
 		TaskType: task.Type,
 		WorkerID: w.cfg.WorkerID,
 		Attempt:  attempt,

@@ -19,14 +19,14 @@ func newTestStore(t *testing.T) *store {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&CoreJob{}, &CoreJobRun{}); err != nil {
+	if err := db.AutoMigrate(&CoreAsyncTask{}, &CoreAsyncTaskRun{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 	return newStore(db, DialectSQLite, 60*time.Second)
 }
 
-// insertJob 直接插入一行 core_async_task，字段按用例覆盖。
-func insertJob(t *testing.T, s *store, j *CoreJob) string {
+// insertAsyncTask 直接插入一行 core_async_task，字段按用例覆盖。
+func insertAsyncTask(t *testing.T, s *store, j *CoreAsyncTask) string {
 	t.Helper()
 	if j.ID == "" {
 		j.ID = newID()
@@ -47,7 +47,7 @@ func insertJob(t *testing.T, s *store, j *CoreJob) string {
 		j.UpdatedAt = time.Now()
 	}
 	if err := s.db.Create(j).Error; err != nil {
-		t.Fatalf("insert job: %v", err)
+		t.Fatalf("insert asyncTask: %v", err)
 	}
 	return j.ID
 }
@@ -56,7 +56,7 @@ func insertJob(t *testing.T, s *store, j *CoreJob) string {
 func TestClaimSuccess(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	id := insertJob(t, s, &CoreJob{
+	id := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType:  "invoice",
 		Status:    "pending",
 		NextRunAt: time.Now().Add(-time.Minute),
@@ -73,7 +73,7 @@ func TestClaimSuccess(t *testing.T) {
 		t.Fatalf("claimed attempt = %d, want 1", rows[0].Attempt)
 	}
 
-	var got CoreJob
+	var got CoreAsyncTask
 	if err := s.db.Where("id = ?", id).Take(&got).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestClaimEmpty(t *testing.T) {
 func TestClaimAttemptsExhausted(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	insertJob(t, s, &CoreJob{
+	insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType:    "invoice",
 		Status:      "pending",
 		NextRunAt:   time.Now().Add(-time.Minute),
@@ -129,7 +129,7 @@ func TestClaimAttemptsExhausted(t *testing.T) {
 // TestClaimFutureNotEligible next_run_at 未到点不认领。
 func TestClaimFutureNotEligible(t *testing.T) {
 	s := newTestStore(t)
-	insertJob(t, s, &CoreJob{
+	insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType:  "invoice",
 		Status:    "pending",
 		NextRunAt: time.Now().Add(time.Hour),
@@ -147,7 +147,7 @@ func TestClaimFutureNotEligible(t *testing.T) {
 func TestClaimLeaseNotExpired(t *testing.T) {
 	s := newTestStore(t)
 	lease := time.Now().Add(time.Minute)
-	insertJob(t, s, &CoreJob{
+	insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType:   "invoice",
 		Status:     "running",
 		NextRunAt:  time.Now().Add(-time.Minute),
@@ -169,7 +169,7 @@ func TestClaimTakeOverExpiredLease(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	past := time.Now().Add(-time.Minute)
-	id := insertJob(t, s, &CoreJob{
+	id := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType:   "invoice",
 		Status:     "running",
 		NextRunAt:  time.Now().Add(-time.Minute),
@@ -184,7 +184,7 @@ func TestClaimTakeOverExpiredLease(t *testing.T) {
 	if len(rows) != 1 || rows[0].ID != id {
 		t.Fatalf("claimed = %+v, want takeover of %s", rows, id)
 	}
-	var got CoreJob
+	var got CoreAsyncTask
 	if err := s.db.Where("id = ?", id).Take(&got).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -200,8 +200,8 @@ func TestClaimTakeOverExpiredLease(t *testing.T) {
 func TestClaimPriorityOrder(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Now().Add(-time.Minute)
-	low := insertJob(t, s, &CoreJob{TaskType: "invoice", Status: "pending", NextRunAt: base, Priority: 0})
-	high := insertJob(t, s, &CoreJob{TaskType: "invoice", Status: "pending", NextRunAt: base, Priority: 10})
+	low := insertAsyncTask(t, s, &CoreAsyncTask{TaskType: "invoice", Status: "pending", NextRunAt: base, Priority: 0})
+	high := insertAsyncTask(t, s, &CoreAsyncTask{TaskType: "invoice", Status: "pending", NextRunAt: base, Priority: 10})
 	rows, err := s.claimBatch(context.Background(), "invoice", "w1", 1)
 	if err != nil {
 		t.Fatalf("claim: %v", err)

@@ -28,12 +28,12 @@ func newChainTestManager(t *testing.T, cfg *Config) *Manager {
 	return m
 }
 
-// forceStatus 直接把某 job 置为指定终态（模拟前置步骤执行成功/失败）。
-func forceStatus(t *testing.T, m *Manager, jobID string, st gasync.Status) {
+// forceStatus 直接把某 asyncTask 置为指定终态（模拟前置步骤执行成功/失败）。
+func forceStatus(t *testing.T, m *Manager, asyncTaskID string, st gasync.Status) {
 	t.Helper()
 	now := time.Now()
 	err := m.db.Exec("UPDATE core_async_task SET status = ?, finished_at = ? WHERE id = ?",
-		string(st), now, jobID).Error
+		string(st), now, asyncTaskID).Error
 	if err != nil {
 		t.Fatalf("forceStatus: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestChain_SubmitAfter(t *testing.T) {
 	ctx := context.Background()
 
 	// 首步
-	s0, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "chain", Payload: []byte("s0")})
+	s0, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "chain", Payload: []byte("s0")})
 	if err != nil {
 		t.Fatalf("submit s0: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestChain_SubmitAfter(t *testing.T) {
 	}
 
 	// 第二步：继承链
-	s1, _, err := m.SubmitAfter(ctx, s0.ID, &gasync.JobSpec{Type: "chain", Payload: []byte("s1")})
+	s1, _, err := m.SubmitAfter(ctx, s0.ID, &gasync.AsyncTaskSpec{Type: "chain", Payload: []byte("s1")})
 	if err != nil {
 		t.Fatalf("submitAfter s1: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestChain_SubmitAfter(t *testing.T) {
 		t.Fatalf("s1 字段错: chain=%q(期望%s) step=%d prev=%d", s1.ChainID, s0.ID, s1.Step, s1.PrevStep)
 	}
 	// 第三步
-	s2, _, err := m.SubmitAfter(ctx, s1.ID, &gasync.JobSpec{Type: "chain", Payload: []byte("s2")})
+	s2, _, err := m.SubmitAfter(ctx, s1.ID, &gasync.AsyncTaskSpec{Type: "chain", Payload: []byte("s2")})
 	if err != nil {
 		t.Fatalf("submitAfter s2: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestChain_SubmitAfter(t *testing.T) {
 		t.Fatalf("首次认领应为 s0(%s)，实际 %s", s0.ID, claimed.ID)
 	}
 	// s0 认领后还在 running；s1 仍不可认领（前序未 succeeded）。
-	if _, err := m.dbSrc.Fetch(ctx, "chain"); err != gasync.ErrNoJob {
+	if _, err := m.dbSrc.Fetch(ctx, "chain"); err != gasync.ErrNoAsyncTask {
 		t.Fatalf("s0 未成功时 s1 不应可认领，err=%v", err)
 	}
 
@@ -101,9 +101,9 @@ func TestChain_FailFastCascade(t *testing.T) {
 	m := newChainTestManager(t, cfg)
 	ctx := context.Background()
 
-	s0, _, _ := m.Submit(ctx, &gasync.JobSpec{Type: "chain"})
-	s1, _, _ := m.SubmitAfter(ctx, s0.ID, &gasync.JobSpec{Type: "chain"})
-	s2, _, _ := m.SubmitAfter(ctx, s1.ID, &gasync.JobSpec{Type: "chain"})
+	s0, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "chain"})
+	s1, _, _ := m.SubmitAfter(ctx, s0.ID, &gasync.AsyncTaskSpec{Type: "chain"})
+	s2, _, _ := m.SubmitAfter(ctx, s1.ID, &gasync.AsyncTaskSpec{Type: "chain"})
 
 	// 走真实流程：先认领 s0（pending→running），再 Save 失败终态。
 	claimed, err := m.dbSrc.Fetch(ctx, "chain")
@@ -126,7 +126,7 @@ func TestChain_FailFastCascade(t *testing.T) {
 			t.Fatalf("get %s: %v", id, err)
 		}
 		if j.Status != gasync.StatusCanceled {
-			t.Fatalf("级联失败: job %s status=%s, 期望 canceled", id, j.Status)
+			t.Fatalf("级联失败: asyncTask %s status=%s, 期望 canceled", id, j.Status)
 		}
 	}
 }
@@ -135,8 +135,8 @@ func TestChain_FailFastCascade(t *testing.T) {
 func TestChain_FailFastOff(t *testing.T) {
 	m := newChainTestManager(t, nil) // FailFastChain 默认 false
 	ctx := context.Background()
-	s0, _, _ := m.Submit(ctx, &gasync.JobSpec{Type: "chain"})
-	s1, _, _ := m.SubmitAfter(ctx, s0.ID, &gasync.JobSpec{Type: "chain"})
+	s0, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "chain"})
+	s1, _, _ := m.SubmitAfter(ctx, s0.ID, &gasync.AsyncTaskSpec{Type: "chain"})
 
 	_ = m.dbSrc.Save(ctx, s0, gasync.Result{Outcome: gasync.OutcomeFailed, Failure: gasync.FailureHandler}, nil)
 

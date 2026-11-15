@@ -33,7 +33,7 @@ func TestWorker_PerTypeConcurrency(t *testing.T) {
 	// 执行体：进入时 cur+1 记峰值，短暂 sleep 后退出（制造重叠窗口便于观察并发）。
 	blockingHandler := func(taskType string) worker.Handler {
 		p := peaks[taskType]
-		return worker.HandlerFunc(func(ctx context.Context, _ *gasync.Job) error {
+		return worker.HandlerFunc(func(ctx context.Context, _ *gasync.AsyncTask) error {
 			c := atomic.AddInt32(&p.cur, 1)
 			for {
 				m := atomic.LoadInt32(&p.max)
@@ -63,7 +63,7 @@ func TestWorker_PerTypeConcurrency(t *testing.T) {
 	// 各推入 8 个任务（多于任何类型并发，确保能打满）。
 	for _, tt := range []string{"typeA", "typeB", "typeC"} {
 		for i := 0; i < 8; i++ {
-			src.push(tt, &gasync.Job{ID: tt + "-" + string(rune('0'+i))})
+			src.push(tt, &gasync.AsyncTask{ID: tt + "-" + string(rune('0'+i))})
 		}
 	}
 
@@ -103,7 +103,7 @@ func TestWithHandlerConcurrency_NonPositiveFallsBack(t *testing.T) {
 	src := newMemSource()
 	w := worker.New(src, &worker.WorkerConfig{Concurrency: 3})
 	var ran int32
-	h := worker.HandlerFunc(func(ctx context.Context, _ *gasync.Job) error {
+	h := worker.HandlerFunc(func(ctx context.Context, _ *gasync.AsyncTask) error {
 		atomic.AddInt32(&ran, 1)
 		return nil
 	})

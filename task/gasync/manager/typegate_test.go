@@ -13,7 +13,7 @@ func TestTypeGate_DisableStopsClaim(t *testing.T) {
 	m := newChainTestManager(t, nil)
 	ctx := context.Background()
 
-	if _, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "t"}); err != nil {
+	if _, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	// 默认启用：可认领。
@@ -21,7 +21,7 @@ func TestTypeGate_DisableStopsClaim(t *testing.T) {
 		t.Fatalf("默认应可认领: %v", err)
 	}
 	// 换一条新任务再测禁用。
-	if _, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "t"}); err != nil {
+	if _, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t"}); err != nil {
 		t.Fatalf("submit2: %v", err)
 	}
 

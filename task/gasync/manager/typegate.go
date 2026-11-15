@@ -38,7 +38,7 @@ func (c *Manager) Enable(ctx context.Context, taskType string) error {
 
 // IsTypeEnabled 查询某类型是否启用（无行/查询失败=启用）。
 func (c *Manager) IsTypeEnabled(ctx context.Context, taskType string) (bool, error) {
-	var row db.CoreJobType
+	var row db.CoreAsyncTaskType
 	err := c.db.WithContext(ctx).Where("task_type = ?", taskType).Take(&row).Error
 	if err == gorm.ErrRecordNotFound {
 		return true, nil
@@ -53,7 +53,7 @@ func (c *Manager) IsTypeEnabled(ctx context.Context, taskType string) (bool, err
 func (c *Manager) setTypeEnabled(ctx context.Context, taskType string, enabled bool) error {
 	// 用 map 显式写入，避免 GORM 对 bool 零值(false)套用列默认 true。
 	row := map[string]any{"id": genUUID(), "task_type": taskType, "enabled": enabled, "updated_at": time.Now()}
-	return c.db.WithContext(ctx).Table(db.CoreJobTypeTableName).
+	return c.db.WithContext(ctx).Table(db.CoreAsyncTaskTypeTableName).
 		Clauses(onConflictUpdateType()).
 		Create(row).Error
 }
@@ -118,7 +118,7 @@ func (a *TypeGateAdapter) TypeEnabled(ctx context.Context, taskType string) (boo
 	a.mu.Unlock()
 
 	enabled := true // fail-open
-	var row db.CoreJobType
+	var row db.CoreAsyncTaskType
 	err := a.db.WithContext(ctx).Where("task_type = ?", taskType).Take(&row).Error
 	if err == nil {
 		enabled = row.Enabled

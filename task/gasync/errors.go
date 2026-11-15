@@ -15,12 +15,12 @@ var (
 	ErrNilHandler = errors.New("gasync: handler is nil")
 	// ErrDuplicateType 同一 Worker 内重复注册同一任务类型。
 	ErrDuplicateType = errors.New("gasync: duplicate task type")
-	// ErrJobNotFound 任务不存在。
-	ErrJobNotFound = errors.New("gasync: job not found")
+	// ErrAsyncTaskNotFound 任务不存在。
+	ErrAsyncTaskNotFound = errors.New("gasync: asyncTask not found")
 	// ErrRunNotFound 尝试记录不存在。
 	ErrRunNotFound = errors.New("gasync: run not found")
 	// ErrNotReplayable 任务未处于可重放的终态。
-	ErrNotReplayable = errors.New("gasync: job not replayable")
+	ErrNotReplayable = errors.New("gasync: asyncTask not replayable")
 	// ErrPayloadTooLarge payload 超过 MaxPayloadBytes（不截断，直接报错）。
 	ErrPayloadTooLarge = errors.New("gasync: payload too large")
 	// ErrInvalidConfig 配置非法。
@@ -35,6 +35,6 @@ var (
 	ErrUniqKeyRace = errors.New("gasync: uniq key race")
 	// ErrNotify 任务已落库但通知没发出去（不参与正确性，兜底轮询会接手）。
 	ErrNotify = errors.New("gasync: notify failed")
-	// ErrNoJob 当前无待执行任务。
-	ErrNoJob = errors.New("gasync: no task available")
+	// ErrNoAsyncTask 当前无待执行任务。
+	ErrNoAsyncTask = errors.New("gasync: no task available")
 )

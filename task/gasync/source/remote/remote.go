@@ -32,10 +32,10 @@ const (
 	DefaultTimeout            = 10 * time.Second
 	DefaultCallbackMaxRetry   = 3
 	DefaultCallbackRetryDelay = 200 * time.Millisecond
-	// FetchNoJobBackoffInitial / FetchNoJobBackoffMax 是「Fetch 返回 ErrNoJob 时
-	// Worker 侧退避」的默认区间（500ms 起，指数到 5s）。见 NoJobBackoff 与 Fetch 的 godoc。
-	FetchNoJobBackoffInitial = 500 * time.Millisecond
-	FetchNoJobBackoffMax     = 5 * time.Second
+	// FetchNoAsyncTaskBackoffInitial / FetchNoAsyncTaskBackoffMax 是「Fetch 返回 ErrNoAsyncTask 时
+	// Worker 侧退避」的默认区间（500ms 起，指数到 5s）。见 NoAsyncTaskBackoff 与 Fetch 的 godoc。
+	FetchNoAsyncTaskBackoffInitial = 500 * time.Millisecond
+	FetchNoAsyncTaskBackoffMax     = 5 * time.Second
 )
 
 // 回调重试间隔（3 次重试之间的等待）：200ms / 1s / 3s。
@@ -123,22 +123,22 @@ func New(cfg Config) (*Source, error) {
 	return s, nil
 }
 
-// getPendingJobReq 是 GetPendingJob 的请求体。
-type getPendingJobReq struct {
+// getPendingAsyncTaskReq 是 GetPendingJob 的请求体。
+type getPendingAsyncTaskReq struct {
 	TaskType string `json:"task_type"`
 	WorkerID string `json:"worker_id"`
 }
 
-// pendingJobResp 是 GetPendingJob 的响应体。中心「无任务」时 Available=false 或 204。
-type pendingJobResp struct {
+// pendingAsyncTaskResp 是 GetPendingJob 的响应体。中心「无任务」时 Available=false 或 204。
+type pendingAsyncTaskResp struct {
 	// Available 为 false 表示当前无待执行任务，等价于「无任务」。
 	Available bool `json:"available"`
-	// Job 是中心派发的任务；attempt 由中心给出，直接落到 gasync.Job.Attempt。
-	Job *jobWire `json:"job"`
+	// AsyncTask 是中心派发的任务；attempt 由中心给出，直接落到 gasync.AsyncTask.Attempt。
+	AsyncTask *asyncTaskWire `json:"asyncTask"`
 }
 
-// jobWire 是跨网络的 Job 子集。只传 Worker 执行所需的字段，避免根包实体全量序列化的耦合。
-type jobWire struct {
+// asyncTaskWire 是跨网络的 AsyncTask 子集。只传 Worker 执行所需的字段，避免根包实体全量序列化的耦合。
+type asyncTaskWire struct {
 	ID          string `json:"id"`
 	Type        string `json:"type"`
 	Priority    int    `json:"priority"`
@@ -150,8 +150,8 @@ type jobWire struct {
 	TraceID     string `json:"trace_id"`
 }
 
-func (w *jobWire) toJob() *gasync.Job {
-	return &gasync.Job{
+func (w *asyncTaskWire) toAsyncTask() *gasync.AsyncTask {
+	return &gasync.AsyncTask{
 		ID:          w.ID,
 		Type:        w.Type,
 		Status:      gasync.StatusRunning,
@@ -168,17 +168,17 @@ func (w *jobWire) toJob() *gasync.Job {
 
 // Fetch 取一条待执行任务：POST {base}/GetPendingJob。
 //
-//   - 中心返回「无任务」（available=false 或 HTTP 204）时返回 gasync.ErrNoJob（不是错误，
+//   - 中心返回「无任务」（available=false 或 HTTP 204）时返回 gasync.ErrNoAsyncTask（不是错误，
 //     也不是失权）。注意：本方法不 sleep、不内部重试，退避是 Worker 的责任——
-//     拿 ErrNoJob 后由 Worker 按 NoJobBackoff 计算等待时长（500ms 起、指数到 5s）。
-//   - HTTP 5xx（或 429）视为「中心暂时不可用/过载」，返回一个非 ErrNoJob 的普通错误，
+//     拿 ErrNoAsyncTask 后由 Worker 按 NoAsyncTaskBackoff 计算等待时长（500ms 起、指数到 5s）。
+//   - HTTP 5xx（或 429）视为「中心暂时不可用/过载」，返回一个非 ErrNoAsyncTask 的普通错误，
 //     这样 Worker 会按错误链路退避而不是把 5xx 当「无任务」高频空转。
-//   - 成功则解析出 *gasync.Job，Attempt 由中心给出。
-func (s *Source) Fetch(ctx context.Context, taskType string) (*gasync.Job, error) {
+//   - 成功则解析出 *gasync.AsyncTask，Attempt 由中心给出。
+func (s *Source) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTask, error) {
 	if taskType == "" {
 		return nil, gasync.ErrEmptyType
 	}
-	body, _ := json.Marshal(getPendingJobReq{TaskType: taskType, WorkerID: s.cfg.WorkerID})
+	body, _ := json.Marshal(getPendingAsyncTaskReq{TaskType: taskType, WorkerID: s.cfg.WorkerID})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/GetPendingJob", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -193,9 +193,9 @@ func (s *Source) Fetch(ctx context.Context, taskType string) (*gasync.Job, error
 
 	// 无任务：204 或显式 available=false。
 	if resp.StatusCode == http.StatusNoContent {
-		return nil, gasync.ErrNoJob
+		return nil, gasync.ErrNoAsyncTask
 	}
-	// 5xx / 429：不可用。绝不能返回 ErrNoJob（否则 Worker 会把它当正常空转并高频重试）。
+	// 5xx / 429：不可用。绝不能返回 ErrNoAsyncTask（否则 Worker 会把它当正常空转并高频重试）。
 	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 		slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("gasync: remote GetPendingJob unavailable: status=%d body=%s", resp.StatusCode, bytes.TrimSpace(slurp))
@@ -205,14 +205,14 @@ func (s *Source) Fetch(ctx context.Context, taskType string) (*gasync.Job, error
 		return nil, fmt.Errorf("%w: GetPendingJob status=%d body=%s", ErrBadResponse, resp.StatusCode, bytes.TrimSpace(slurp))
 	}
 
-	var out pendingJobResp
+	var out pendingAsyncTaskResp
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("%w: decode GetPendingJob: %v", ErrBadResponse, err)
 	}
-	if !out.Available || out.Job == nil {
-		return nil, gasync.ErrNoJob
+	if !out.Available || out.AsyncTask == nil {
+		return nil, gasync.ErrNoAsyncTask
 	}
-	return out.Job.toJob(), nil
+	return out.AsyncTask.toAsyncTask(), nil
 }
 
 // heartbeatReq 是 Heartbeat 的请求体。
@@ -227,9 +227,9 @@ type heartbeatReq struct {
 // RenewMaxFailures（默认 2）时，返回包装了 ErrRenewLost 的错误（errors.Is 可判定）。
 // 由于 Source 不持有 Worker 的执行 ctx，无法在此直接 cancel——Worker 侧应识别
 // ErrRenewLost 并取消本次执行 ctx，与本地形态「续租失败即失权」对齐。
-func (s *Source) Renew(ctx context.Context, task *gasync.Job) error {
+func (s *Source) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 	if task == nil || task.ID == "" {
-		return gasync.ErrJobNotFound
+		return gasync.ErrAsyncTaskNotFound
 	}
 	body, _ := json.Marshal(heartbeatReq{TaskID: task.ID, WorkerID: s.cfg.WorkerID})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/Heartbeat", bytes.NewReader(body))
@@ -284,7 +284,7 @@ type callbackReq struct {
 //
 // 返回：Callback 最终成功时返回 nil（钩子错误被吞掉，仅记录在回传的 error 字段里）；
 // Callback 最终失败时返回 ErrCallbackLost 包装错误。
-func (s *Source) Save(ctx context.Context, task *gasync.Job, r gasync.Result, callback gasync.EnsureFunc) error {
+func (s *Source) Save(ctx context.Context, task *gasync.AsyncTask, r gasync.Result, callback gasync.EnsureFunc) error {
 	// 远程形态：先调本地钩子（TxFromContext 为 nil）。钩子错误不阻断回传。
 	var hookErr string
 	if callback != nil {
@@ -384,20 +384,20 @@ func (s *Source) Close(_ context.Context) error {
 	return nil
 }
 
-// NoJobBackoff 计算「Fetch 返回 ErrNoJob 后 Worker 应等待多久」的可复用退避：
-// 从 FetchNoJobBackoffInitial（500ms）起，按失败次数指数增长，封顶 FetchNoJobBackoffMax（5s）。
+// NoAsyncTaskBackoff 计算「Fetch 返回 ErrNoAsyncTask 后 Worker 应等待多久」的可复用退避：
+// 从 FetchNoAsyncTaskBackoffInitial（500ms）起，按失败次数指数增长，封顶 FetchNoAsyncTaskBackoffMax（5s）。
 //
-// 这是给 Worker 侧复用的纯函数——本包的 Fetch 不 sleep，只返回 ErrNoJob，
+// 这是给 Worker 侧复用的纯函数——本包的 Fetch 不 sleep，只返回 ErrNoAsyncTask，
 // 由 Worker 按本函数退避，避免把阻塞逻辑埋进 Source。
 //
 // n 为连续无任务的次数（从 0 开始）：n=0→500ms，n=1→1s，n=2→2s，n=3→4s，n>=4→5s。
-func NoJobBackoff(n int) time.Duration {
+func NoAsyncTaskBackoff(n int) time.Duration {
 	if n < 0 {
 		n = 0
 	}
-	d := time.Duration(float64(FetchNoJobBackoffInitial) * math.Pow(2, float64(n)))
-	if d <= 0 || d > FetchNoJobBackoffMax {
-		return FetchNoJobBackoffMax
+	d := time.Duration(float64(FetchNoAsyncTaskBackoffInitial) * math.Pow(2, float64(n)))
+	if d <= 0 || d > FetchNoAsyncTaskBackoffMax {
+		return FetchNoAsyncTaskBackoffMax
 	}
 	return d
 }

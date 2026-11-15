@@ -155,7 +155,7 @@ func validateConfig(c *Config) error {
 //	                      不要重试 Submit（会多建一条任务），兜底轮询会接手
 //	submitted == true  => 新建了一条任务
 //	submitted == false => 命中既有 UniqKey，task 为既有任务（可能已是终态）
-func (c *Manager) Submit(ctx context.Context, spec *gasync.JobSpec) (*gasync.Job, bool, error) {
+func (c *Manager) Submit(ctx context.Context, spec *gasync.AsyncTaskSpec) (*gasync.AsyncTask, bool, error) {
 	if spec == nil || spec.Type == "" {
 		return nil, false, gasync.ErrEmptyType
 	}
@@ -168,36 +168,36 @@ func (c *Manager) Submit(ctx context.Context, spec *gasync.JobSpec) (*gasync.Job
 		return nil, false, err
 	}
 
-	submitted, err := c.insertJob(ctx, row, delayMs)
+	submitted, err := c.insertAsyncTask(ctx, row, delayMs)
 	if err != nil {
 		return nil, false, err
 	}
 
-	var job *gasync.Job
+	var asyncTask *gasync.AsyncTask
 	if submitted {
-		job, err = c.dbSrc.Store().GetJob(ctx, row.ID)
+		asyncTask, err = c.dbSrc.Store().GetAsyncTask(ctx, row.ID)
 		if err != nil {
 			return nil, false, err
 		}
 	} else {
 		// 冲突：回查既有行；回查为空（并发提交者回滚/副本延迟）重试插入一次。
-		job, err = c.findByUniqKey(ctx, *row.UniqKey)
-		if errors.Is(err, gasync.ErrJobNotFound) {
-			retried, rerr := c.insertJob(ctx, row, delayMs)
+		asyncTask, err = c.findByUniqKey(ctx, *row.UniqKey)
+		if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
+			retried, rerr := c.insertAsyncTask(ctx, row, delayMs)
 			if rerr != nil {
 				return nil, false, rerr
 			}
 			if !retried {
 				// 仍冲突但回查不到 → 幂等键竞争。
-				job, err = c.findByUniqKey(ctx, *row.UniqKey)
-				if errors.Is(err, gasync.ErrJobNotFound) {
+				asyncTask, err = c.findByUniqKey(ctx, *row.UniqKey)
+				if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
 					return nil, false, gasync.ErrUniqKeyRace
 				}
 				if err != nil {
 					return nil, false, err
 				}
 			} else {
-				job, err = c.dbSrc.Store().GetJob(ctx, row.ID)
+				asyncTask, err = c.dbSrc.Store().GetAsyncTask(ctx, row.ID)
 				if err != nil {
 					return nil, false, err
 				}
@@ -210,16 +210,16 @@ func (c *Manager) Submit(ctx context.Context, spec *gasync.JobSpec) (*gasync.Job
 	// 通知器形态：Notify 失败返回 ErrNotify（任务已落库，勿重试 Submit）。
 	if c.notifier != nil && submitted {
 		if nerr := c.notifier.Notify(ctx, spec.Type); nerr != nil {
-			return job, true, gasync.ErrNotify
+			return asyncTask, true, gasync.ErrNotify
 		}
 	}
-	return job, submitted, nil
+	return asyncTask, submitted, nil
 }
 
-// buildSubmitRow 把 JobSpec 转成待插入的 CoreJob 行（只写显式值，其余走列默认）。
-func (c *Manager) buildSubmitRow(spec *gasync.JobSpec) (*db.CoreJob, int64 /*delayMs*/, error) {
+// buildSubmitRow 把 AsyncTaskSpec 转成待插入的 CoreAsyncTask 行（只写显式值，其余走列默认）。
+func (c *Manager) buildSubmitRow(spec *gasync.AsyncTaskSpec) (*db.CoreAsyncTask, int64 /*delayMs*/, error) {
 	now := timeNow()
-	row := &db.CoreJob{
+	row := &db.CoreAsyncTask{
 		ID:          genUUID(),
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -248,8 +248,8 @@ func (c *Manager) buildSubmitRow(spec *gasync.JobSpec) (*db.CoreJob, int64 /*del
 	case !spec.RunAt.IsZero():
 		row.NextRunAt = spec.RunAt
 	case spec.Delay > 0:
-		// Delay 走 DB 时钟：next_run_at 用 SQL 表达式 now+delay，见 insertJob。
-		row.NextRunAt = now // 文本列占位；insertJob 会用 DB 表达式覆盖下一列值
+		// Delay 走 DB 时钟：next_run_at 用 SQL 表达式 now+delay，见 insertAsyncTask。
+		row.NextRunAt = now // 文本列占位；insertAsyncTask 会用 DB 表达式覆盖下一列值
 		delayMs = spec.Delay.Milliseconds()
 	default:
 		// 立即执行：next_run_at 截断到整秒。避免 Go 的亚秒部分（如 .907）使 next_run_at
@@ -259,9 +259,9 @@ func (c *Manager) buildSubmitRow(spec *gasync.JobSpec) (*db.CoreJob, int64 /*del
 	return row, delayMs, nil
 }
 
-// insertJob 执行一次「冲突忽略」插入。返回 submitted=true 表示新建；
+// insertAsyncTask 执行一次「冲突忽略」插入。返回 submitted=true 表示新建；
 // false 表示命中唯一键冲突（未插入）。
-func (c *Manager) insertJob(ctx context.Context, row *db.CoreJob, delayMs int64) (bool, error) {
+func (c *Manager) insertAsyncTask(ctx context.Context, row *db.CoreAsyncTask, delayMs int64) (bool, error) {
 	prefix, suffix := c.dialect.InsertIgnoreClause()
 
 	nextRunExpr := "?"
@@ -278,7 +278,7 @@ func (c *Manager) insertJob(ctx context.Context, row *db.CoreJob, delayMs int64)
 VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
  ?, ?, ?, ?, ?, ?, ?, ?, ?,
  %s, '', 0, ?, '', NULLIF(?, ''))%s`,
-		prefix, db.CoreJobTableName, c.dialect.EmptyKeyExpr(), nextRunExpr, suffix)
+		prefix, db.CoreAsyncTaskTableName, c.dialect.EmptyKeyExpr(), nextRunExpr, suffix)
 
 	res := c.db.WithContext(ctx).Exec(sql,
 		row.ID, row.CreatedAt, row.UpdatedAt, row.TaskType, row.Status, row.Priority,
@@ -294,17 +294,17 @@ VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
 	return res.RowsAffected > 0, nil
 }
 
-// findByUniqKey 按幂等键回查任务，不存在返回 ErrJobNotFound。
-func (c *Manager) findByUniqKey(ctx context.Context, key string) (*gasync.Job, error) {
-	var row db.CoreJob
+// findByUniqKey 按幂等键回查任务，不存在返回 ErrAsyncTaskNotFound。
+func (c *Manager) findByUniqKey(ctx context.Context, key string) (*gasync.AsyncTask, error) {
+	var row db.CoreAsyncTask
 	err := c.db.WithContext(ctx).Where("uniq_key = ?", key).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, gasync.ErrJobNotFound
+		return nil, gasync.ErrAsyncTaskNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	return db.JobRowToDomain(&row), nil
+	return db.AsyncTaskRowToDomain(&row), nil
 }
 
 // SubmitAfter 提交「上游任务成功后才执行」的下一步（步骤化任务链）。
@@ -312,12 +312,12 @@ func (c *Manager) findByUniqKey(ctx context.Context, key string) (*gasync.Job, e
 // 行为：读取上游任务；若上游 chain_id 为空则以其 ID 作为 chain_id（首步即上游）；
 // 本步 Step=上游.Step+1、PrevStep=上游.Step、ChainID=上游.ChainID(或上游ID)；
 // 认领侧守卫保证「前序 step 已 succeeded」前本步不会被认领。
-// 上游不存在返回 ErrJobNotFound。
-func (c *Manager) SubmitAfter(ctx context.Context, upstreamID string, spec *gasync.JobSpec) (*gasync.Job, bool, error) {
+// 上游不存在返回 ErrAsyncTaskNotFound。
+func (c *Manager) SubmitAfter(ctx context.Context, upstreamID string, spec *gasync.AsyncTaskSpec) (*gasync.AsyncTask, bool, error) {
 	if spec == nil || spec.Type == "" {
 		return nil, false, gasync.ErrEmptyType
 	}
-	up, err := c.dbSrc.Store().GetJob(ctx, upstreamID)
+	up, err := c.dbSrc.Store().GetAsyncTask(ctx, upstreamID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -326,7 +326,7 @@ func (c *Manager) SubmitAfter(ctx context.Context, upstreamID string, spec *gasy
 		// 上游本身是首步/独立任务：以它的 ID 作为链标识，并把上游自身的 chain_id 补成该值，
 		// 保证链内「根」与「后续步骤」的 chain_id 口径一致（否则守卫子查询找不到根）。
 		chainID = up.ID
-		if uerr := c.db.WithContext(ctx).Model(&db.CoreJob{}).
+		if uerr := c.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
 			Where("id = ? AND (chain_id = '' OR chain_id IS NULL)", up.ID).
 			Update("chain_id", chainID).Error; uerr != nil {
 			return nil, false, uerr
@@ -336,43 +336,43 @@ func (c *Manager) SubmitAfter(ctx context.Context, upstreamID string, spec *gasy
 	merged.ChainID = chainID
 	merged.Step = up.Step + 1
 
-	job, submitted, err := c.Submit(ctx, &merged)
+	asyncTask, submitted, err := c.Submit(ctx, &merged)
 	if err != nil {
-		return job, submitted, err
+		return asyncTask, submitted, err
 	}
 	// Submit 已按独立任务写 prev_step=-1；这里回填本步的 prev_step=上游 step。
-	if submitted && job != nil {
-		if uerr := c.db.WithContext(ctx).Model(&db.CoreJob{}).
-			Where("id = ?", job.ID).Update("prev_step", up.Step).Error; uerr != nil {
-			return job, submitted, uerr
+	if submitted && asyncTask != nil {
+		if uerr := c.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
+			Where("id = ?", asyncTask.ID).Update("prev_step", up.Step).Error; uerr != nil {
+			return asyncTask, submitted, uerr
 		}
-		job.PrevStep = up.Step
+		asyncTask.PrevStep = up.Step
 	}
-	return job, submitted, nil
+	return asyncTask, submitted, nil
 }
 
 // Get 按 ID 取任务。
-func (c *Manager) Get(ctx context.Context, id string) (*gasync.Job, error) {
-	return c.dbSrc.Store().GetJob(ctx, id)
+func (c *Manager) Get(ctx context.Context, id string) (*gasync.AsyncTask, error) {
+	return c.dbSrc.Store().GetAsyncTask(ctx, id)
 }
 
 // GetRuns 取任务及其跨重放的全部尝试记录。
-func (c *Manager) GetRuns(ctx context.Context, id string) (*gasync.Job, []*gasync.JobRun, error) {
-	return c.dbSrc.Store().GetJobWithRuns(ctx, id)
+func (c *Manager) GetRuns(ctx context.Context, id string) (*gasync.AsyncTask, []*gasync.AsyncTaskRun, error) {
+	return c.dbSrc.Store().GetAsyncTaskWithRuns(ctx, id)
 }
 
 // List 分页查询任务。
-func (c *Manager) List(ctx context.Context, cond *gasync.JobCond) ([]*gasync.Job, int64, error) {
+func (c *Manager) List(ctx context.Context, cond *gasync.AsyncTaskCond) ([]*gasync.AsyncTask, int64, error) {
 	if cond == nil {
-		cond = &gasync.JobCond{}
+		cond = &gasync.AsyncTaskCond{}
 	}
-	return c.dbSrc.Store().ListJob(ctx, cond)
+	return c.dbSrc.Store().ListAsyncTask(ctx, cond)
 }
 
 // ListRuns 分页查询尝试记录。
-func (c *Manager) ListRuns(ctx context.Context, cond *gasync.RunCond) ([]*gasync.JobRun, int64, error) {
+func (c *Manager) ListRuns(ctx context.Context, cond *gasync.AsyncTaskRunCond) ([]*gasync.AsyncTaskRun, int64, error) {
 	if cond == nil {
-		cond = &gasync.RunCond{}
+		cond = &gasync.AsyncTaskRunCond{}
 	}
 	return c.dbSrc.Store().ListRun(ctx, cond)
 }
@@ -380,18 +380,18 @@ func (c *Manager) ListRuns(ctx context.Context, cond *gasync.RunCond) ([]*gasync
 // Cancel 取消一条任务：pending 立即、running 靠续租发现（≤1 个续租周期）。
 // 返回是否发生了状态翻转。已终态幂等返回 (false, nil)。
 func (c *Manager) Cancel(ctx context.Context, id string) (canceled bool, err error) {
-	job, err := c.dbSrc.Store().GetJob(ctx, id)
+	asyncTask, err := c.dbSrc.Store().GetAsyncTask(ctx, id)
 	if err != nil {
 		return false, err
 	}
-	if !job.CanCancel() {
+	if !asyncTask.CanCancel() {
 		// 已终态：幂等，不翻转为 canceled。
 		return false, nil
 	}
 	// pending → 立即翻转 canceled；running → 同样置 canceled，执行侧靠续租发现失权。
 	now := c.dialect.NowValueExpr()
 	sql := fmt.Sprintf(`UPDATE %s SET status = 'canceled', finished_at = %s
-WHERE id = ? AND status IN ('pending','running')`, db.CoreJobTableName, now)
+WHERE id = ? AND status IN ('pending','running')`, db.CoreAsyncTaskTableName, now)
 	res := c.db.WithContext(ctx).Exec(sql, id)
 	if res.Error != nil {
 		return false, res.Error
@@ -400,12 +400,12 @@ WHERE id = ? AND status IN ('pending','running')`, db.CoreJobTableName, now)
 }
 
 // Replay 重放一条终态任务（generation+1，回到 pending）。非终态返回 ErrNotReplayable。
-func (c *Manager) Replay(ctx context.Context, id string) (*gasync.Job, error) {
-	job, err := c.dbSrc.Store().GetJob(ctx, id)
+func (c *Manager) Replay(ctx context.Context, id string) (*gasync.AsyncTask, error) {
+	asyncTask, err := c.dbSrc.Store().GetAsyncTask(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if !isTerminal(job.Status) {
+	if !isTerminal(asyncTask.Status) {
 		return nil, gasync.ErrNotReplayable
 	}
 	now := c.dialect.NowValueExpr()
@@ -415,7 +415,7 @@ SET status = 'pending', generation = generation + 1, attempt = 0,
     next_run_at = %s, lease_until = NULL, worker_id = '', started_at = NULL,
     finished_at = NULL, duration_ms = 0
 WHERE id = ? AND status IN ('succeeded','failed','canceled','skipped')`,
-		db.CoreJobTableName, now)
+		db.CoreAsyncTaskTableName, now)
 	res := c.db.WithContext(ctx).Exec(sql, id)
 	if res.Error != nil {
 		return nil, res.Error
@@ -424,7 +424,7 @@ WHERE id = ? AND status IN ('succeeded','failed','canceled','skipped')`,
 		// 竞争：读回时已非终态。
 		return nil, gasync.ErrNotReplayable
 	}
-	return c.dbSrc.Store().GetJob(ctx, id)
+	return c.dbSrc.Store().GetAsyncTask(ctx, id)
 }
 
 // Stats 返回各状态的任务计数等统计。
@@ -433,7 +433,7 @@ func (c *Manager) Stats(ctx context.Context) (*Stats, error) {
 		Status string
 		Cnt    int64
 	}
-	if err := c.db.WithContext(ctx).Model(&db.CoreJob{}).
+	if err := c.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
 		Select("status, count(*) AS cnt").Group("status").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -487,7 +487,7 @@ func isTerminal(s gasync.Status) bool {
 }
 
 // resolveMaxAttempts 解析本轮最大尝试次数：显式值优先，否则配置默认。
-func (c *Manager) resolveMaxAttempts(spec *gasync.JobSpec) int {
+func (c *Manager) resolveMaxAttempts(spec *gasync.AsyncTaskSpec) int {
 	if spec.MaxAttempts > 0 {
 		return spec.MaxAttempts
 	}
@@ -495,7 +495,7 @@ func (c *Manager) resolveMaxAttempts(spec *gasync.JobSpec) int {
 }
 
 // resolveTimeout 解析单次超时：显式值优先，否则配置默认。
-func (c *Manager) resolveTimeout(spec *gasync.JobSpec) timeDuration {
+func (c *Manager) resolveTimeout(spec *gasync.AsyncTaskSpec) timeDuration {
 	if spec.Timeout > 0 {
 		return spec.Timeout
 	}
@@ -503,7 +503,7 @@ func (c *Manager) resolveTimeout(spec *gasync.JobSpec) timeDuration {
 }
 
 // payloadOrEmpty 返回 payload 文本（空即空串，交给 NULLIF 归一为 NULL）。
-func payloadOrEmpty(row *db.CoreJob) string { return row.Payload }
+func payloadOrEmpty(row *db.CoreAsyncTask) string { return row.Payload }
 
 // Mode 唤醒形态。
 type Mode string

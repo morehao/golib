@@ -2,15 +2,15 @@ package ginasync
 
 // --- uri ---
 
-// jobIDURI 任务 ID 路径参数 :id。
-type jobIDURI struct {
+// asyncTaskIDURI 任务 ID 路径参数 :id。
+type asyncTaskIDURI struct {
 	ID string `uri:"id" binding:"required"`
 }
 
 // --- 请求 ---
 
-// listJobsRequest 任务分页列表查询参数。
-type listJobsRequest struct {
+// listAsyncTasksRequest 任务分页列表查询参数。
+type listAsyncTasksRequest struct {
 	Type     string `form:"type"`
 	Status   string `form:"status"`
 	BizType  string `form:"biz_type"`
@@ -30,8 +30,8 @@ type listRunsRequest struct {
 
 // --- 响应 ---
 
-// jobResponse 任务详情/列表项。
-type jobResponse struct {
+// asyncTaskResponse 任务详情/列表项。
+type asyncTaskResponse struct {
 	ID          string `json:"id"`
 	Type        string `json:"type"`
 	Status      string `json:"status"`
@@ -60,7 +60,7 @@ type jobResponse struct {
 // runResponse 一次尝试记录。
 type runResponse struct {
 	ID         string `json:"id"`
-	JobID      string `json:"job_id"`
+	AsyncTaskID      string `json:"job_id"`
 	Generation int    `json:"generation"`
 	Attempt    int    `json:"attempt"`
 	Status     string `json:"status"`
@@ -76,9 +76,9 @@ type runResponse struct {
 	CreatedAt  int64  `json:"created_at"`
 }
 
-// jobListResponse 任务分页列表。
-type jobListResponse struct {
-	List  []*jobResponse `json:"list"`
+// asyncTaskListResponse 任务分页列表。
+type asyncTaskListResponse struct {
+	List  []*asyncTaskResponse `json:"list"`
 	Total int64          `json:"total"`
 }
 

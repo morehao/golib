@@ -14,7 +14,7 @@ import (
 
 // recordingHandler 实现 Handler + Lifecycle，记录各钩子被调用的次数与顺序。
 type recordingHandler struct {
-	execFn func(ctx context.Context, t *gasync.Job) error
+	execFn func(ctx context.Context, t *gasync.AsyncTask) error
 
 	mu        sync.Mutex
 	hooks     []string
@@ -22,7 +22,7 @@ type recordingHandler struct {
 	skip      bool // BeforeExecute 返回 ErrSkip
 }
 
-func (h *recordingHandler) Execute(ctx context.Context, t *gasync.Job) error {
+func (h *recordingHandler) Execute(ctx context.Context, t *gasync.AsyncTask) error {
 	atomic.AddInt32(&h.execCalls, 1)
 	h.record("Execute")
 	if h.execFn != nil {
@@ -31,7 +31,7 @@ func (h *recordingHandler) Execute(ctx context.Context, t *gasync.Job) error {
 	return nil
 }
 
-func (h *recordingHandler) BeforeExecute(ctx context.Context, t *gasync.Job) error {
+func (h *recordingHandler) BeforeExecute(ctx context.Context, t *gasync.AsyncTask) error {
 	h.record("BeforeExecute")
 	if h.skip {
 		return worker.ErrSkip
@@ -39,22 +39,22 @@ func (h *recordingHandler) BeforeExecute(ctx context.Context, t *gasync.Job) err
 	return nil
 }
 
-func (h *recordingHandler) OnRetry(ctx context.Context, t *gasync.Job, cause error) error {
+func (h *recordingHandler) OnRetry(ctx context.Context, t *gasync.AsyncTask, cause error) error {
 	h.record("OnRetry")
 	return nil
 }
 
-func (h *recordingHandler) OnSuccess(ctx context.Context, t *gasync.Job) error {
+func (h *recordingHandler) OnSuccess(ctx context.Context, t *gasync.AsyncTask) error {
 	h.record("OnSuccess")
 	return nil
 }
 
-func (h *recordingHandler) OnFailure(ctx context.Context, t *gasync.Job, cause error) error {
+func (h *recordingHandler) OnFailure(ctx context.Context, t *gasync.AsyncTask, cause error) error {
 	h.record("OnFailure")
 	return nil
 }
 
-func (h *recordingHandler) OnCanceled(ctx context.Context, t *gasync.Job) error {
+func (h *recordingHandler) OnCanceled(ctx context.Context, t *gasync.AsyncTask) error {
 	h.record("OnCanceled")
 	return nil
 }
@@ -78,10 +78,10 @@ func (h *recordingHandler) hookCount(name string) int {
 }
 
 // runWorker 构造并运行一个 worker，处理完毕后停机；返回 memSource 供断言。
-func runWorker(t *testing.T, h *recordingHandler, taskType string, jobs ...*gasync.Job) *memSource {
+func runWorker(t *testing.T, h *recordingHandler, taskType string, asyncTasks ...*gasync.AsyncTask) *memSource {
 	t.Helper()
 	src := newMemSource()
-	for _, j := range jobs {
+	for _, j := range asyncTasks {
 		src.push(taskType, j)
 	}
 
@@ -133,7 +133,7 @@ func waitCond(t *testing.T, cond func() bool, timeout time.Duration) {
 // 1. 成功结局：Succeeded + OnSuccess。
 func TestWorker_Succeeded(t *testing.T) {
 	h := &recordingHandler{}
-	src := runWorker(t, h, "invoice:issue", &gasync.Job{ID: "j1", MaxAttempts: 3})
+	src := runWorker(t, h, "invoice:issue", &gasync.AsyncTask{ID: "j1", MaxAttempts: 3})
 
 	res, _, _ := src.snapshot()
 	if len(res) == 0 || res[0].Outcome != gasync.OutcomeSucceeded {
@@ -150,11 +150,11 @@ func TestWorker_Succeeded(t *testing.T) {
 // 2. 失败可重试：Failed + OnRetry（多次尝试）。
 func TestWorker_FailedRetry(t *testing.T) {
 	h := &recordingHandler{
-		execFn: func(ctx context.Context, t *gasync.Job) error {
+		execFn: func(ctx context.Context, t *gasync.AsyncTask) error {
 			return errors.New("boom")
 		},
 	}
-	src := runWorker(t, h, "invoice:issue", &gasync.Job{ID: "j2", MaxAttempts: 3})
+	src := runWorker(t, h, "invoice:issue", &gasync.AsyncTask{ID: "j2", MaxAttempts: 3})
 	// 等到重试若干次并最终 failure。
 	waitCond(t, func() bool {
 		_, _, hooks := src.snapshot()
@@ -178,14 +178,14 @@ func TestWorker_FailedRetry(t *testing.T) {
 // 3. 次数用尽：最终 OnFailure。
 func TestWorker_FailedExhausted(t *testing.T) {
 	h := &recordingHandler{
-		execFn: func(ctx context.Context, t *gasync.Job) error {
+		execFn: func(ctx context.Context, t *gasync.AsyncTask) error {
 			return errors.New("always fail")
 		},
 	}
 	// MaxAttempts=2、retryUpperBound 小，确保很快耗尽并落到 OnFailure。
 	src := newMemSource()
 	src.retryUpperBound = 2
-	src.push("t3", &gasync.Job{ID: "j3", MaxAttempts: 2})
+	src.push("t3", &gasync.AsyncTask{ID: "j3", MaxAttempts: 2})
 
 	w := worker.New(src, &worker.WorkerConfig{Concurrency: 1, PollInterval: 5 * time.Millisecond})
 	if err := w.Register("t3", h); err != nil {
@@ -212,7 +212,7 @@ func TestWorker_FailedExhausted(t *testing.T) {
 // 4. ErrSkip：skipped 结局，Execute 与 OnSuccess 都不被调用，callback 为空。
 func TestWorker_Skip(t *testing.T) {
 	h := &recordingHandler{skip: true}
-	src := runWorker(t, h, "invoice:issue", &gasync.Job{ID: "j4", MaxAttempts: 3})
+	src := runWorker(t, h, "invoice:issue", &gasync.AsyncTask{ID: "j4", MaxAttempts: 3})
 
 	res, _, hooks := src.snapshot()
 	if len(res) == 0 || res[0].Outcome != gasync.OutcomeSkipped {
@@ -236,11 +236,11 @@ func TestWorker_Skip(t *testing.T) {
 // 5. panic：panic 结局，Failure=panic，error_msg 带栈顶。
 func TestWorker_Panic(t *testing.T) {
 	h := &recordingHandler{
-		execFn: func(ctx context.Context, t *gasync.Job) error {
+		execFn: func(ctx context.Context, t *gasync.AsyncTask) error {
 			panic("kaboom")
 		},
 	}
-	src := runWorker(t, h, "invoice:issue", &gasync.Job{ID: "j5", MaxAttempts: 1})
+	src := runWorker(t, h, "invoice:issue", &gasync.AsyncTask{ID: "j5", MaxAttempts: 1})
 
 	res, _, _ := src.snapshot()
 	if len(res) == 0 {
@@ -264,14 +264,14 @@ func TestWorker_Panic(t *testing.T) {
 func TestWorker_Lifecycle(t *testing.T) {
 	t.Run("New nil src", func(t *testing.T) {
 		w := worker.New(nil, nil)
-		if err := w.Register("x", worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil })); !errors.Is(err, gasync.ErrInvalidConfig) {
+		if err := w.Register("x", worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil })); !errors.Is(err, gasync.ErrInvalidConfig) {
 			t.Fatalf("want ErrInvalidConfig, got %v", err)
 		}
 	})
 
 	t.Run("duplicate type", func(t *testing.T) {
 		w := worker.New(newMemSource(), nil)
-		h := worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil })
+		h := worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil })
 		if err := w.Register("a", h); err != nil {
 			t.Fatal(err)
 		}
@@ -290,7 +290,7 @@ func TestWorker_Lifecycle(t *testing.T) {
 	t.Run("register after run and double run", func(t *testing.T) {
 		src := newMemSource()
 		w := worker.New(src, &worker.WorkerConfig{PollInterval: 5 * time.Millisecond})
-		if err := w.Register("a", worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil })); err != nil {
+		if err := w.Register("a", worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil })); err != nil {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -298,7 +298,7 @@ func TestWorker_Lifecycle(t *testing.T) {
 		go func() { done <- w.Run(ctx) }()
 		// 等 Run 真正开始。
 		time.Sleep(20 * time.Millisecond)
-		if err := w.Register("b", worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil })); !errors.Is(err, gasync.ErrWorkerAlreadyRunning) {
+		if err := w.Register("b", worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil })); !errors.Is(err, gasync.ErrWorkerAlreadyRunning) {
 			t.Fatalf("want ErrWorkerAlreadyRunning on register after run, got %v", err)
 		}
 		if err := w.Run(context.Background()); !errors.Is(err, gasync.ErrWorkerAlreadyRunning) {
@@ -314,7 +314,7 @@ func TestWorker_Lifecycle(t *testing.T) {
 			t.Fatalf("shutdown before run must be nil, got %v", err)
 		}
 		w2 := worker.New(newMemSource(), nil)
-		_ = w2.Register("a", worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil }))
+		_ = w2.Register("a", worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil }))
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() { done <- w2.Run(ctx) }()
@@ -332,13 +332,13 @@ func TestWorker_Lifecycle(t *testing.T) {
 func TestWorker_ShutdownReleasesLease(t *testing.T) {
 	block := make(chan struct{})
 	h := &recordingHandler{
-		execFn: func(ctx context.Context, t *gasync.Job) error {
+		execFn: func(ctx context.Context, t *gasync.AsyncTask) error {
 			<-block // 卡住直到测试放行
 			return nil
 		},
 	}
 	src := newMemSource()
-	src.push("t", &gasync.Job{ID: "s1", Timeout: 10 * time.Second})
+	src.push("t", &gasync.AsyncTask{ID: "s1", Timeout: 10 * time.Second})
 
 	w := worker.New(src, &worker.WorkerConfig{
 		Concurrency:     1,

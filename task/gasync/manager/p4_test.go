@@ -12,7 +12,7 @@ import (
 func TestP4_TimeoutStatus(t *testing.T) {
 	m := newChainTestManager(t, nil)
 	ctx := context.Background()
-	j, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "t"})
+	j, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t"})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -43,11 +43,11 @@ func TestP4_TimeoutStatus(t *testing.T) {
 func TestP4_LabelsFilter(t *testing.T) {
 	m := newChainTestManager(t, nil)
 	ctx := context.Background()
-	_, _, _ = m.Submit(ctx, &gasync.JobSpec{Type: "t", Labels: map[string]string{"app_group": "X", "company_id": "1"}})
-	_, _, _ = m.Submit(ctx, &gasync.JobSpec{Type: "t", Labels: map[string]string{"app_group": "Y", "company_id": "1"}})
-	_, _, _ = m.Submit(ctx, &gasync.JobSpec{Type: "t"})
+	_, _, _ = m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t", Labels: map[string]string{"app_group": "X", "company_id": "1"}})
+	_, _, _ = m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t", Labels: map[string]string{"app_group": "Y", "company_id": "1"}})
+	_, _, _ = m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t"})
 
-	list, total, err := m.List(ctx, &gasync.JobCond{Labels: map[string]string{"app_group": "X"}})
+	list, total, err := m.List(ctx, &gasync.AsyncTaskCond{Labels: map[string]string{"app_group": "X"}})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestP4_LabelsFilter(t *testing.T) {
 	}
 
 	// 多 label AND
-	_, total2, _ := m.List(ctx, &gasync.JobCond{Labels: map[string]string{"app_group": "Y", "company_id": "1"}})
+	_, total2, _ := m.List(ctx, &gasync.AsyncTaskCond{Labels: map[string]string{"app_group": "Y", "company_id": "1"}})
 	if total2 != 1 {
 		t.Fatalf("AND 过滤 total=%d, 期望 1", total2)
 	}
@@ -70,14 +70,14 @@ func TestP4_OrderByWhitelist(t *testing.T) {
 	m := newChainTestManager(t, nil)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		_, _, _ = m.Submit(ctx, &gasync.JobSpec{Type: "t"})
+		_, _, _ = m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t"})
 	}
 	// 合法的 priority asc
-	if _, _, err := m.List(ctx, &gasync.JobCond{OrderBy: "priority asc"}); err != nil {
+	if _, _, err := m.List(ctx, &gasync.AsyncTaskCond{OrderBy: "priority asc"}); err != nil {
 		t.Fatalf("orderBy priority asc: %v", err)
 	}
 	// 非法值不应导致 SQL 错误（回退默认）
-	if _, _, err := m.List(ctx, &gasync.JobCond{OrderBy: "created_at; DROP TABLE core_async_task"}); err != nil {
+	if _, _, err := m.List(ctx, &gasync.AsyncTaskCond{OrderBy: "created_at; DROP TABLE core_async_task"}); err != nil {
 		t.Fatalf("非法 orderBy 应回退默认而非报错: %v", err)
 	}
 }
@@ -86,17 +86,17 @@ func TestP4_OrderByWhitelist(t *testing.T) {
 func TestP4_TimeRange(t *testing.T) {
 	m := newChainTestManager(t, nil)
 	ctx := context.Background()
-	_, _, _ = m.Submit(ctx, &gasync.JobSpec{Type: "t"})
+	_, _, _ = m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t"})
 	now := time.Now()
 	past := now.Add(-time.Hour)
 	future := now.Add(time.Hour)
 	// 全区间命中
-	_, total, _ := m.List(ctx, &gasync.JobCond{CreatedAfter: &past, CreatedBefore: &future})
+	_, total, _ := m.List(ctx, &gasync.AsyncTaskCond{CreatedAfter: &past, CreatedBefore: &future})
 	if total != 1 {
 		t.Fatalf("区间内 total=%d, 期望 1", total)
 	}
 	// 排除区间
-	_, total2, _ := m.List(ctx, &gasync.JobCond{CreatedAfter: &future})
+	_, total2, _ := m.List(ctx, &gasync.AsyncTaskCond{CreatedAfter: &future})
 	if total2 != 0 {
 		t.Fatalf("未来区间 total=%d, 期望 0", total2)
 	}

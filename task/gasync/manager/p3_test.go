@@ -13,7 +13,7 @@ func TestP3_LeaseRegistry(t *testing.T) {
 	ctx := context.Background()
 
 	// 提交并认领一条任务（认领会写 worker_id + lease_until）。
-	_, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "t"})
+	_, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t"})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}

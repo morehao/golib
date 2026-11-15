@@ -35,16 +35,16 @@ func newSourceTestManager(t *testing.T) (*Manager, *gorm.DB) {
 	return m, gdb
 }
 
-// submitAndClaim 提交一条任务并经本地 Source 认领（Fetch），返回 running 态的 *gasync.Job
+// submitAndClaim 提交一条任务并经本地 Source 认领（Fetch），返回 running 态的 *gasync.AsyncTask
 // （已带 worker_id、attempt=1、status=running）。
-func submitAndClaim(t *testing.T, m *Manager, taskType string) *gasync.Job {
+func submitAndClaim(t *testing.T, m *Manager, taskType string) *gasync.AsyncTask {
 	t.Helper()
 	ctx := context.Background()
-	if _, _, err := m.Submit(ctx, &gasync.JobSpec{Type: taskType}); err != nil {
+	if _, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: taskType}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	// 认领可能因 next_run_at 的微小时钟差暂不可见，短轮询重试（与 worker 轮询语义一致）。
-	var task *gasync.Job
+	var task *gasync.AsyncTask
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var err error
@@ -52,7 +52,7 @@ func submitAndClaim(t *testing.T, m *Manager, taskType string) *gasync.Job {
 		if err == nil {
 			break
 		}
-		if !errors.Is(err, gasync.ErrNoJob) {
+		if !errors.Is(err, gasync.ErrNoAsyncTask) {
 			t.Fatalf("fetch: %v", err)
 		}
 		if time.Now().After(deadline) {
@@ -66,22 +66,22 @@ func submitAndClaim(t *testing.T, m *Manager, taskType string) *gasync.Job {
 	return task
 }
 
-// dbJobStatus 直接读库里的 core_async_task 行，返回 (status, worker_id)。
-func dbJobStatus(t *testing.T, gdb *gorm.DB, id string) (string, string) {
+// dbAsyncTaskStatus 直接读库里的 core_async_task 行，返回 (status, worker_id)。
+func dbAsyncTaskStatus(t *testing.T, gdb *gorm.DB, id string) (string, string) {
 	t.Helper()
-	var row db.CoreJob
+	var row db.CoreAsyncTask
 	if err := gdb.Where("id = ?", id).Take(&row).Error; err != nil {
-		t.Fatalf("load job %s: %v", id, err)
+		t.Fatalf("load asyncTask %s: %v", id, err)
 	}
 	return row.Status, row.WorkerID
 }
 
 // terminalRunCount 统计某任务下处于终态（非 running/pending）的尝试行数。
-func terminalRunCount(t *testing.T, gdb *gorm.DB, jobID string) int64 {
+func terminalRunCount(t *testing.T, gdb *gorm.DB, asyncTaskID string) int64 {
 	t.Helper()
 	var n int64
-	err := gdb.Model(&db.CoreJobRun{}).
-		Where("job_id = ? AND status IN ?", jobID,
+	err := gdb.Model(&db.CoreAsyncTaskRun{}).
+		Where("job_id = ? AND status IN ?", asyncTaskID,
 			[]string{"succeeded", "failed", "canceled", "skipped"}).
 		Count(&n).Error
 	if err != nil {
@@ -111,7 +111,7 @@ func TestSource_HookTxError_RollsBack(t *testing.T) {
 	}
 
 	// 任务仍 running（未被强写成 succeeded）。
-	if status, _ := dbJobStatus(t, gdb, task.ID); status != string(gasync.StatusRunning) {
+	if status, _ := dbAsyncTaskStatus(t, gdb, task.ID); status != string(gasync.StatusRunning) {
 		t.Fatalf("db status = %q, want running (rolled back)", status)
 	}
 	// 没有终态尝试行落库（整笔回滚，连 running 尝试行也不存在）。
@@ -119,7 +119,7 @@ func TestSource_HookTxError_RollsBack(t *testing.T) {
 		t.Fatalf("terminal run rows = %d, want 0 (rolled back)", n)
 	}
 	var total int64
-	gdb.Model(&db.CoreJobRun{}).Where("job_id = ?", task.ID).Count(&total)
+	gdb.Model(&db.CoreAsyncTaskRun{}).Where("job_id = ?", task.ID).Count(&total)
 	if total != 0 {
 		t.Fatalf("run rows = %d, want 0 (upsertRun rolled back too)", total)
 	}
@@ -127,8 +127,8 @@ func TestSource_HookTxError_RollsBack(t *testing.T) {
 
 // TestSource_LostLease_NoOverwrite 判据 2：已失权后慢返回不覆盖终态。
 //
-// 构造「task.WorkerID 与库中该 job 的 worker_id 不一致」：库里已被别的 worker 接管。
-// finishJob 的 UPDATE 带 `WHERE id=? AND worker_id=? AND status='running'` 守卫，
+// 构造「task.WorkerID 与库中该 asyncTask 的 worker_id 不一致」：库里已被别的 worker 接管。
+// finishAsyncTask 的 UPDATE 带 `WHERE id=? AND worker_id=? AND status='running'` 守卫，
 // 不匹配则 RowsAffected=0，库中该行不被改写（终态不被覆盖、worker_id 不被清）。
 func TestSource_LostLease_NoOverwrite(t *testing.T) {
 	m, gdb := newSourceTestManager(t)
@@ -150,21 +150,21 @@ func TestSource_LostLease_NoOverwrite(t *testing.T) {
 		t.Fatalf("Save err = %v, want nil (guard is not an error)", err)
 	}
 
-	status, worker := dbJobStatus(t, gdb, task.ID)
+	status, worker := dbAsyncTaskStatus(t, gdb, task.ID)
 	if status != string(gasync.StatusRunning) {
 		t.Fatalf("db status = %q, want running (terminal must not be overwritten)", status)
 	}
 	if worker != otherWorker {
 		t.Fatalf("db worker_id = %q, want %q (must not be cleared)", worker, otherWorker)
 	}
-	// finishJob 仅在 RowsAffected!=0 时回填 task.Status；此处应保持原值（running），
+	// finishAsyncTask 仅在 RowsAffected!=0 时回填 task.Status；此处应保持原值（running），
 	// 间接证明守卫命中 0 行。
 	if task.Status != gasync.StatusRunning {
 		t.Fatalf("in-memory task.Status = %q, want running (RowsAffected=0 branch)", task.Status)
 	}
 }
 
-// 注：原 TestSource_LostLease_DirectFinishJobRowsAffected 直接调用未导出的 finishJob + dialect.nowValueExpr()，
+// 注：原 TestSource_LostLease_DirectFinishAsyncTaskRowsAffected 直接调用未导出的 finishAsyncTask + dialect.nowValueExpr()，
 // 属于 DB 内部实现细节，已迁至 source/db 内部测试（source_internal_test.go）。
 
 // TestSource_ErrSkip_Skipped 判据 3：Save(Result{Outcome:Skipped}) → 任务 status=skipped。
@@ -184,7 +184,7 @@ func TestSource_ErrSkip_Skipped(t *testing.T) {
 	if task.Status != gasync.StatusSkipped {
 		t.Fatalf("task.Status = %q, want skipped", task.Status)
 	}
-	status, worker := dbJobStatus(t, gdb, task.ID)
+	status, worker := dbAsyncTaskStatus(t, gdb, task.ID)
 	if status != string(gasync.StatusSkipped) {
 		t.Fatalf("db status = %q, want skipped", status)
 	}
@@ -201,7 +201,7 @@ func TestSource_EndToEnd_Succeeded(t *testing.T) {
 	ctx := context.Background()
 
 	executed := make(chan struct{}, 1)
-	h := worker.HandlerFunc(func(ctx context.Context, task *gasync.Job) error {
+	h := worker.HandlerFunc(func(ctx context.Context, task *gasync.AsyncTask) error {
 		executed <- struct{}{}
 		return nil
 	})
@@ -214,7 +214,7 @@ func TestSource_EndToEnd_Succeeded(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	job, submitted, err := m.Submit(ctx, &gasync.JobSpec{Type: "e2e"})
+	asyncTask, submitted, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "e2e"})
 	if err != nil || !submitted {
 		t.Fatalf("submit: submitted=%v err=%v", submitted, err)
 	}
@@ -233,12 +233,12 @@ func TestSource_EndToEnd_Succeeded(t *testing.T) {
 	// 轮询等任务落到 succeeded。
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		status, _ := dbJobStatus(t, gdb, job.ID)
+		status, _ := dbAsyncTaskStatus(t, gdb, asyncTask.ID)
 		if status == string(gasync.StatusSucceeded) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("job status = %q, want succeeded", status)
+			t.Fatalf("asyncTask status = %q, want succeeded", status)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -258,7 +258,7 @@ func TestSource_EndToEnd_Succeeded(t *testing.T) {
 
 // TestSource_OnSuccessTxFromContext 判据 5：
 // OnSuccess 内 gasync.TxFromContext(ctx) 非 nil（本地形态），且在该 tx 上写业务表
-// 与任务终态同事务提交——成功后业务行与 job=succeeded 都在。
+// 与任务终态同事务提交——成功后业务行与 asyncTask=succeeded 都在。
 func TestSource_OnSuccessTxFromContext(t *testing.T) {
 	m, gdb := newSourceTestManager(t)
 	ctx := context.Background()
@@ -272,7 +272,7 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 
 	var sawTx atomic.Bool
 	h := &txWritingHandler{
-		onSuccess: func(ctx context.Context, task *gasync.Job) error {
+		onSuccess: func(ctx context.Context, task *gasync.AsyncTask) error {
 			raw := gasync.TxFromContext(ctx)
 			if raw == nil {
 				return errors.New("TxFromContext is nil in local OnSuccess")
@@ -295,7 +295,7 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	job, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "txhook"})
+	asyncTask, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "txhook"})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -306,12 +306,12 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		status, _ := dbJobStatus(t, gdb, job.ID)
+		status, _ := dbAsyncTaskStatus(t, gdb, asyncTask.ID)
 		if status == string(gasync.StatusSucceeded) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("job status = %q, want succeeded", status)
+			t.Fatalf("asyncTask status = %q, want succeeded", status)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -326,11 +326,11 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 		t.Fatal("OnSuccess did not see a non-nil *gorm.DB from gasync.TxFromContext")
 	}
 	var n int64
-	if err := gdb.Table(bizTable).Where("job_id = ?", job.ID).Count(&n).Error; err != nil {
+	if err := gdb.Table(bizTable).Where("job_id = ?", asyncTask.ID).Count(&n).Error; err != nil {
 		t.Fatalf("count biz rows: %v", err)
 	}
 	if n != 1 {
-		t.Fatalf("biz rows = %d, want 1 (committed together with job=succeeded)", n)
+		t.Fatalf("biz rows = %d, want 1 (committed together with asyncTask=succeeded)", n)
 	}
 }
 
@@ -338,26 +338,26 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 //
 // 注意：worker.asLifecycle 要求实现整个 Lifecycle 接口，缺一个方法就会退化为「无钩子」。
 type txWritingHandler struct {
-	onSuccess func(ctx context.Context, task *gasync.Job) error
+	onSuccess func(ctx context.Context, task *gasync.AsyncTask) error
 }
 
-func (h *txWritingHandler) Execute(ctx context.Context, task *gasync.Job) error { return nil }
+func (h *txWritingHandler) Execute(ctx context.Context, task *gasync.AsyncTask) error { return nil }
 
-func (h *txWritingHandler) BeforeExecute(ctx context.Context, task *gasync.Job) error { return nil }
+func (h *txWritingHandler) BeforeExecute(ctx context.Context, task *gasync.AsyncTask) error { return nil }
 
-func (h *txWritingHandler) OnRetry(ctx context.Context, task *gasync.Job, cause error) error {
+func (h *txWritingHandler) OnRetry(ctx context.Context, task *gasync.AsyncTask, cause error) error {
 	return nil
 }
 
-func (h *txWritingHandler) OnSuccess(ctx context.Context, task *gasync.Job) error {
+func (h *txWritingHandler) OnSuccess(ctx context.Context, task *gasync.AsyncTask) error {
 	if h.onSuccess != nil {
 		return h.onSuccess(ctx, task)
 	}
 	return nil
 }
 
-func (h *txWritingHandler) OnFailure(ctx context.Context, task *gasync.Job, cause error) error {
+func (h *txWritingHandler) OnFailure(ctx context.Context, task *gasync.AsyncTask, cause error) error {
 	return nil
 }
 
-func (h *txWritingHandler) OnCanceled(ctx context.Context, task *gasync.Job) error { return nil }
+func (h *txWritingHandler) OnCanceled(ctx context.Context, task *gasync.AsyncTask) error { return nil }

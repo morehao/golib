@@ -49,19 +49,19 @@ func setupFixture(t *testing.T) *fixture {
 	ctx := context.Background()
 
 	// pending 任务：不运行 worker，保持 pending。
-	pendingJob, _, err := mgr.Submit(ctx, &gasync.JobSpec{Type: "email:send", BizType: "order", BizID: "1"})
+	pendingAsyncTask, _, err := mgr.Submit(ctx, &gasync.AsyncTaskSpec{Type: "email:send", BizType: "order", BizID: "1"})
 	require.NoError(t, err)
-	require.Equal(t, gasync.StatusPending, pendingJob.Status)
+	require.Equal(t, gasync.StatusPending, pendingAsyncTask.Status)
 
 	// 另一条 pending，随后 Cancel 使其成为终态 canceled（可重放）。
-	replayJob, _, err := mgr.Submit(ctx, &gasync.JobSpec{Type: "sms:send", BizType: "order", BizID: "2"})
+	replayAsyncTask, _, err := mgr.Submit(ctx, &gasync.AsyncTaskSpec{Type: "sms:send", BizType: "order", BizID: "2"})
 	require.NoError(t, err)
-	canceled, err := mgr.Cancel(ctx, replayJob.ID)
+	canceled, err := mgr.Cancel(ctx, replayAsyncTask.ID)
 	require.NoError(t, err)
 	require.True(t, canceled)
 
 	// 再提交一条普通 pending，凑三任务便于列表/统计断言。
-	_, _, err = mgr.Submit(ctx, &gasync.JobSpec{Type: "email:send"})
+	_, _, err = mgr.Submit(ctx, &gasync.AsyncTaskSpec{Type: "email:send"})
 	require.NoError(t, err)
 
 	engine := gin.New()
@@ -72,8 +72,8 @@ func setupFixture(t *testing.T) *fixture {
 		engine:       engine,
 		mgr:          mgr,
 		db:           db,
-		pendingID:    pendingJob.ID,
-		replayableID: replayJob.ID,
+		pendingID:    pendingAsyncTask.ID,
+		replayableID: replayAsyncTask.ID,
 	}
 }
 
@@ -105,35 +105,35 @@ func requireOK(t *testing.T, code int, env map[string]any, msg string) {
 	require.EqualValues(t, 0, env["code"], "%s: %v", msg, env)
 }
 
-// TestListJobs 覆盖 GET /jobs（列表 + 过滤）。
-func TestListJobs(t *testing.T) {
+// TestListAsyncTasks 覆盖 GET /asyncTasks（列表 + 过滤）。
+func TestListAsyncTasks(t *testing.T) {
 	f := setupFixture(t)
 
-	code, env := f.doJSON(t, "GET", "/jobs", nil)
+	code, env := f.doJSON(t, "GET", "/asyncTasks", nil)
 	requireOK(t, code, env, "任务列表")
 	require.EqualValues(t, 3, dataMap(t, env)["total"])
 
 	// 按 type 过滤。
-	code, env = f.doJSON(t, "GET", "/jobs?type=email:send", nil)
+	code, env = f.doJSON(t, "GET", "/asyncTasks?type=email:send", nil)
 	requireOK(t, code, env, "按 type 过滤")
 	require.EqualValues(t, 2, dataMap(t, env)["total"])
 
 	// 按 status 过滤（canceled 只有 1 条）。
-	code, env = f.doJSON(t, "GET", "/jobs?status=canceled", nil)
+	code, env = f.doJSON(t, "GET", "/asyncTasks?status=canceled", nil)
 	requireOK(t, code, env, "按 status 过滤")
 	require.EqualValues(t, 1, dataMap(t, env)["total"])
 
 	// 按 biz_type + biz_id 过滤。
-	code, env = f.doJSON(t, "GET", "/jobs?biz_type=order&biz_id=1", nil)
+	code, env = f.doJSON(t, "GET", "/asyncTasks?biz_type=order&biz_id=1", nil)
 	requireOK(t, code, env, "按 biz 过滤")
 	require.EqualValues(t, 1, dataMap(t, env)["total"])
 }
 
-// TestGetJob 覆盖 GET /jobs/:id（详情 + 404）。
-func TestGetJob(t *testing.T) {
+// TestGetAsyncTask 覆盖 GET /asyncTasks/:id（详情 + 404）。
+func TestGetAsyncTask(t *testing.T) {
 	f := setupFixture(t)
 
-	code, env := f.doJSON(t, "GET", "/jobs/"+f.pendingID, nil)
+	code, env := f.doJSON(t, "GET", "/asyncTasks/"+f.pendingID, nil)
 	requireOK(t, code, env, "任务详情")
 	d := dataMap(t, env)
 	require.Equal(t, f.pendingID, d["id"])
@@ -141,53 +141,53 @@ func TestGetJob(t *testing.T) {
 	require.Equal(t, "pending", d["status"])
 
 	// 不存在 → 404。
-	code, env = f.doJSON(t, "GET", "/jobs/does-not-exist", nil)
+	code, env = f.doJSON(t, "GET", "/asyncTasks/does-not-exist", nil)
 	require.Equal(t, http.StatusNotFound, code, "不存在的任务应 404: %v", env)
 }
 
-// TestListRuns 覆盖 GET /jobs/:id/runs（尝试记录 + 不存在任务 404）。
+// TestListRuns 覆盖 GET /asyncTasks/:id/runs（尝试记录 + 不存在任务 404）。
 func TestListRuns(t *testing.T) {
 	f := setupFixture(t)
 
-	code, env := f.doJSON(t, "GET", "/jobs/"+f.pendingID+"/runs", nil)
+	code, env := f.doJSON(t, "GET", "/asyncTasks/"+f.pendingID+"/runs", nil)
 	requireOK(t, code, env, "尝试记录")
 	// 未运行过，尝试记录为 0（列表仍返回 list/total）。
 	require.EqualValues(t, 0, dataMap(t, env)["total"])
 
 	// 不存在任务 → 404（而非空列表）。
-	code, env = f.doJSON(t, "GET", "/jobs/nope/runs", nil)
+	code, env = f.doJSON(t, "GET", "/asyncTasks/nope/runs", nil)
 	require.Equal(t, http.StatusNotFound, code, "不存在任务的 runs 应 404: %v", env)
 }
 
-// TestCancel 覆盖 POST /jobs/:id/cancel（首取消翻转 true，再取消终态幂等 false）。
+// TestCancel 覆盖 POST /asyncTasks/:id/cancel（首取消翻转 true，再取消终态幂等 false）。
 func TestCancel(t *testing.T) {
 	f := setupFixture(t)
 
-	code, env := f.doJSON(t, "POST", "/jobs/"+f.pendingID+"/cancel", nil)
+	code, env := f.doJSON(t, "POST", "/asyncTasks/"+f.pendingID+"/cancel", nil)
 	requireOK(t, code, env, "取消任务")
 	require.Equal(t, true, dataMap(t, env)["canceled"])
 
 	// 已终态，再次取消幂等返回 canceled=false。
-	code, env = f.doJSON(t, "POST", "/jobs/"+f.pendingID+"/cancel", nil)
+	code, env = f.doJSON(t, "POST", "/asyncTasks/"+f.pendingID+"/cancel", nil)
 	requireOK(t, code, env, "重复取消")
 	require.Equal(t, false, dataMap(t, env)["canceled"])
 
 	// 确认落库为 canceled。
-	code, env = f.doJSON(t, "GET", "/jobs/"+f.pendingID, nil)
+	code, env = f.doJSON(t, "GET", "/asyncTasks/"+f.pendingID, nil)
 	requireOK(t, code, env, "取消后详情")
 	require.Equal(t, "canceled", dataMap(t, env)["status"])
 
 	// 不存在任务 → 404。
-	code, _ = f.doJSON(t, "POST", "/jobs/nope/cancel", nil)
+	code, _ = f.doJSON(t, "POST", "/asyncTasks/nope/cancel", nil)
 	require.Equal(t, http.StatusNotFound, code, "取消不存在任务应 404")
 }
 
-// TestReplay 覆盖 POST /jobs/:id/replay：终态可重放回 pending；非终态 409。
+// TestReplay 覆盖 POST /asyncTasks/:id/replay：终态可重放回 pending；非终态 409。
 func TestReplay(t *testing.T) {
 	f := setupFixture(t)
 
 	// 终态 canceled → 重放成功，回到 pending、generation+1。
-	code, env := f.doJSON(t, "POST", "/jobs/"+f.replayableID+"/replay", nil)
+	code, env := f.doJSON(t, "POST", "/asyncTasks/"+f.replayableID+"/replay", nil)
 	requireOK(t, code, env, "重放终态任务")
 	d := dataMap(t, env)
 	require.Equal(t, f.replayableID, d["id"])
@@ -195,19 +195,19 @@ func TestReplay(t *testing.T) {
 	require.EqualValues(t, 2, d["generation"])
 
 	// 现在该任务是 pending（非终态），再次重放应 409 conflict。
-	code, env = f.doJSON(t, "POST", "/jobs/"+f.replayableID+"/replay", nil)
+	code, env = f.doJSON(t, "POST", "/asyncTasks/"+f.replayableID+"/replay", nil)
 	require.Equal(t, http.StatusConflict, code, "非终态重放应 409: %v", env)
 
 	// 不存在任务 → 404。
-	code, _ = f.doJSON(t, "POST", "/jobs/nope/replay", nil)
+	code, _ = f.doJSON(t, "POST", "/asyncTasks/nope/replay", nil)
 	require.Equal(t, http.StatusNotFound, code, "重放不存在任务应 404")
 }
 
-// TestStats 覆盖 GET /jobs/-/stats。
+// TestStats 覆盖 GET /asyncTasks/-/stats。
 func TestStats(t *testing.T) {
 	f := setupFixture(t)
 
-	code, env := f.doJSON(t, "GET", "/jobs/-/stats", nil)
+	code, env := f.doJSON(t, "GET", "/asyncTasks/-/stats", nil)
 	requireOK(t, code, env, "统计")
 	d := dataMap(t, env)
 	// 三任务：1 pending（email）、1 pending（email 无 biz）、1 canceled（sms）。

@@ -87,7 +87,7 @@ WHERE j.task_type = ? AND j.status = 'pending' AND %s
         SELECT 1 FROM %s p
         WHERE p.chain_id = j.chain_id AND p.step = j.prev_step AND p.status = 'succeeded'))
 ORDER BY j.priority DESC, j.next_run_at, j.id
-LIMIT ?%s`, CoreJobTableName, s.dialect.colLE("next_run_at"), CoreJobTableName, lock)
+LIMIT ?%s`, CoreAsyncTaskTableName, s.dialect.colLE("next_run_at"), CoreAsyncTaskTableName, lock)
 
 	// ② 执行中但租约过期（接管）：走 idx_core_async_task_status_lease_until
 	sql2 := fmt.Sprintf(`SELECT id, generation, attempt, timeout_ms
@@ -95,7 +95,7 @@ FROM %s
 WHERE status = 'running' AND %s AND task_type = ?
   AND attempt < max_attempts
 ORDER BY lease_until
-LIMIT ?%s`, CoreJobTableName, s.dialect.colLT("lease_until"), lock)
+LIMIT ?%s`, CoreAsyncTaskTableName, s.dialect.colLT("lease_until"), lock)
 
 	var r1, r2 []claimedRow
 	if err := tx.Raw(sql1, taskType, want).Scan(&r1).Error; err != nil {
@@ -135,7 +135,7 @@ LIMIT ?%s`, CoreJobTableName, s.dialect.colLT("lease_until"), lock)
 	updSQL := fmt.Sprintf(`UPDATE %s
 SET status = 'running', worker_id = ?, attempt = attempt + 1,
     lease_until = %s, started_at = COALESCE(started_at, %s)
-WHERE id IN (%s)`, CoreJobTableName, s.dialect.afterExpr(), nowVal, wrapIDPlaceholders(len(ids)))
+WHERE id IN (%s)`, CoreAsyncTaskTableName, s.dialect.afterExpr(), nowVal, wrapIDPlaceholders(len(ids)))
 	if err := tx.Exec(updSQL, args...).Error; err != nil {
 		return nil, err
 	}
@@ -158,9 +158,9 @@ func wrapIDPlaceholders(n int) string {
 
 // 编译期断言：*store 满足 Store 接口（只读 + Cleanup）。
 
-// loadJobRow 按 id 读一行 core_async_task，不存在返回 gorm.ErrRecordNotFound。
-func (s *store) loadJobRow(ctx context.Context, id string) (*CoreJob, error) {
-	var row CoreJob
+// loadAsyncTaskRow 按 id 读一行 core_async_task，不存在返回 gorm.ErrRecordNotFound。
+func (s *store) loadAsyncTaskRow(ctx context.Context, id string) (*CoreAsyncTask, error) {
+	var row CoreAsyncTask
 	if err := s.db.WithContext(ctx).Where("id = ?", id).Take(&row).Error; err != nil {
 		return nil, err
 	}
@@ -168,4 +168,4 @@ func (s *store) loadJobRow(ctx context.Context, id string) (*CoreJob, error) {
 }
 
 // 保持 gasync 引用在编译期可见（转化函数在 convert.go）。
-var _ = gasync.ErrNoJob
+var _ = gasync.ErrNoAsyncTask

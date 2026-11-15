@@ -30,7 +30,7 @@ const (
 func (s *store) renew(ctx context.Context, id, workerID string) (RenewResult, error) {
 	sql := fmt.Sprintf(`UPDATE %s SET lease_until = %s
 WHERE id = ? AND worker_id = ? AND status = 'running'`,
-		CoreJobTableName, s.dialect.afterExpr())
+		CoreAsyncTaskTableName, s.dialect.afterExpr())
 	res := s.db.WithContext(ctx).Exec(sql, s.dialect.afterArg(s.leaseTTL), id, workerID)
 	if res.Error != nil {
 		return RenewOK, res.Error
@@ -40,7 +40,7 @@ WHERE id = ? AND worker_id = ? AND status = 'running'`,
 	}
 	// 失权：读回状态区分原因。
 	var status string
-	err := s.db.WithContext(ctx).Model(&CoreJob{}).Where("id = ?", id).
+	err := s.db.WithContext(ctx).Model(&CoreAsyncTask{}).Where("id = ?", id).
 		Select("status").Scan(&status).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -56,8 +56,8 @@ WHERE id = ? AND worker_id = ? AND status = 'running'`,
 
 // reapStaleRuns 回收器 ①：收口已失去归属的尝试行（running 但任务侧已不归它）。
 //
-// 谓词关联 job 表：一次仍在正常续租、耗时超过 2×LeaseTTL 的尝试会被纯时间谓词
-// 误判成残留——关联 job 表后，只要 job 仍 running 且 lease 未过期、attempt 一致，
+// 谓词关联 asyncTask 表：一次仍在正常续租、耗时超过 2×LeaseTTL 的尝试会被纯时间谓词
+// 误判成残留——关联 asyncTask 表后，只要 asyncTask 仍 running 且 lease 未过期、attempt 一致，
 // 尝试行就不算残留。finished_at 取失权时刻 LEAST(COALESCE(lease_until, now), now)。
 //
 // 返回处理的尝试行数。
@@ -67,14 +67,14 @@ func (s *store) reapStaleRuns(ctx context.Context, batch int) (int64, error) {
 	}
 	nowVal := s.dialect.nowValueExpr()
 
-	// ① SELECT 候选（关联 job 表判归属）。
+	// ① SELECT 候选（关联 asyncTask 表判归属）。
 	selSQL := fmt.Sprintf(`SELECT r.id AS id, j.lease_until AS lease_until
 FROM %s r JOIN %s j
   ON j.id = r.job_id AND j.generation = r.generation
 WHERE r.status = 'running'
   AND (j.status <> 'running' OR %s OR j.attempt <> r.attempt)
 LIMIT ?`,
-		CoreJobRunTableName, CoreJobTableName, s.dialect.colLT("j.lease_until"))
+		CoreAsyncTaskRunTableName, CoreAsyncTaskTableName, s.dialect.colLT("j.lease_until"))
 
 	type staleRow struct {
 		ID         string
@@ -95,7 +95,7 @@ LIMIT ?`,
 		finExpr, args := s.leastLeaseOrNow(r.LeaseUntil, nowVal)
 		updSQL := fmt.Sprintf(`UPDATE %s
 SET status = 'failed', failure_kind = 'lease_expired', finished_at = %s
-WHERE id = ? AND status = 'running'`, CoreJobRunTableName, finExpr)
+WHERE id = ? AND status = 'running'`, CoreAsyncTaskRunTableName, finExpr)
 		args = append(args, r.ID)
 		res := s.db.WithContext(ctx).Exec(updSQL, args...)
 		if res.Error != nil {
@@ -106,11 +106,11 @@ WHERE id = ? AND status = 'running'`, CoreJobRunTableName, finExpr)
 	return affected, nil
 }
 
-// reapDeadJobs 回收器 ②：次数用尽且租约过期 → 判死。
+// reapDeadAsyncTasks 回收器 ②：次数用尽且租约过期 → 判死。
 //
 // 清 worker_id/lease_until：否则僵尸进程的续租会成功。
 // 返回处理的任务数。
-func (s *store) reapDeadJobs(ctx context.Context, batch int) (int64, error) {
+func (s *store) reapDeadAsyncTasks(ctx context.Context, batch int) (int64, error) {
 	if batch <= 0 {
 		batch = 200
 	}
@@ -118,7 +118,7 @@ func (s *store) reapDeadJobs(ctx context.Context, batch int) (int64, error) {
 
 	selSQL := fmt.Sprintf(`SELECT id FROM %s
 WHERE status = 'running' AND %s AND attempt >= max_attempts LIMIT ?`,
-		CoreJobTableName, s.dialect.colLT("lease_until"))
+		CoreAsyncTaskTableName, s.dialect.colLT("lease_until"))
 	var ids []string
 	if err := s.db.WithContext(ctx).Raw(selSQL, batch).Scan(&ids).Error; err != nil {
 		return 0, err
@@ -130,7 +130,7 @@ WHERE status = 'running' AND %s AND attempt >= max_attempts LIMIT ?`,
 	for _, id := range ids {
 		updSQL := fmt.Sprintf(`UPDATE %s
 SET status = 'failed', finished_at = %s, worker_id = '', lease_until = NULL
-WHERE id = ? AND status = 'running' AND attempt >= max_attempts`, CoreJobTableName, nowVal)
+WHERE id = ? AND status = 'running' AND attempt >= max_attempts`, CoreAsyncTaskTableName, nowVal)
 		res := s.db.WithContext(ctx).Exec(updSQL, id)
 		if res.Error != nil {
 			return affected, res.Error
@@ -141,16 +141,16 @@ WHERE id = ? AND status = 'running' AND attempt >= max_attempts`, CoreJobTableNa
 }
 
 // reap 跑回收器两段（① 收口残留尝试行、② 判死次数用尽）。供后台循环与测试调用。
-func (s *store) reap(ctx context.Context, batch int) (runs int64, jobs int64, err error) {
+func (s *store) reap(ctx context.Context, batch int) (runs int64, asyncTasks int64, err error) {
 	runs, err = s.reapStaleRuns(ctx, batch)
 	if err != nil {
 		return 0, 0, err
 	}
-	jobs, err = s.reapDeadJobs(ctx, batch)
+	asyncTasks, err = s.reapDeadAsyncTasks(ctx, batch)
 	if err != nil {
 		return runs, 0, err
 	}
-	return runs, jobs, nil
+	return runs, asyncTasks, nil
 }
 
 // Cleanup 删除 before 之前进入终态的旧任务与其尝试记录（分批，最多若干批）。
@@ -176,13 +176,13 @@ func (s *store) Cleanup(ctx context.Context, before time.Time, batch int) (tasks
 	return tasks, runs, nil
 }
 
-// cleanupOnce 执行一批清理：SELECT id → 事务内先删 run 再删 job。
+// cleanupOnce 执行一批清理：SELECT id → 事务内先删 run 再删 asyncTask。
 // more 表示本批已满、可能还有。
 func (s *store) cleanupOnce(ctx context.Context, before time.Time, batch int) (tasks, runs int64, more bool, err error) {
 	// ① SELECT 候选 id：终态且 finished_at < before。
 	selSQL := fmt.Sprintf(`SELECT id FROM %s
 WHERE status IN ('succeeded','failed','canceled','skipped') AND %s LIMIT ?`,
-		CoreJobTableName, s.dialect.colLTBefore("finished_at"))
+		CoreAsyncTaskTableName, s.dialect.colLTBefore("finished_at"))
 	var ids []string
 	if err := s.db.WithContext(ctx).Raw(selSQL, s.dialect.beforeArg(time.Since(before)), batch).Scan(&ids).Error; err != nil {
 		return 0, 0, false, err
@@ -190,16 +190,16 @@ WHERE status IN ('succeeded','failed','canceled','skipped') AND %s LIMIT ?`,
 	if len(ids) == 0 {
 		return 0, 0, false, nil
 	}
-	// ② 事务内先删 run（按 task_id），再删 job（带终态条件）。
+	// ② 事务内先删 run（按 task_id），再删 asyncTask（带终态条件）。
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		r := tx.Exec(fmt.Sprintf("DELETE FROM %s WHERE job_id IN (%s)",
-			CoreJobRunTableName, wrapIDPlaceholders(len(ids))), toArgs(ids)...)
+			CoreAsyncTaskRunTableName, wrapIDPlaceholders(len(ids))), toArgs(ids)...)
 		if r.Error != nil {
 			return r.Error
 		}
 		runs = r.RowsAffected
 		j := tx.Exec(fmt.Sprintf("DELETE FROM %s WHERE id IN (%s) AND status IN ('succeeded','failed','canceled','skipped')",
-			CoreJobTableName, wrapIDPlaceholders(len(ids))), toArgs(ids)...)
+			CoreAsyncTaskTableName, wrapIDPlaceholders(len(ids))), toArgs(ids)...)
 		if j.Error != nil {
 			return j.Error
 		}

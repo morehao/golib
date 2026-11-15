@@ -48,28 +48,28 @@ func TestNewInvalidConfig(t *testing.T) {
 func TestSubmitBasic(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
-	job, submitted, err := m.Submit(ctx, &gasync.JobSpec{Type: "invoice", Payload: []byte(`{"a":1}`)})
+	asyncTask, submitted, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice", Payload: []byte(`{"a":1}`)})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if !submitted || job == nil {
-		t.Fatalf("submitted=%v job=%v, want true + job", submitted, job)
+	if !submitted || asyncTask == nil {
+		t.Fatalf("submitted=%v asyncTask=%v, want true + asyncTask", submitted, asyncTask)
 	}
-	if job.Status != gasync.StatusPending {
-		t.Errorf("status = %q, want pending", job.Status)
+	if asyncTask.Status != gasync.StatusPending {
+		t.Errorf("status = %q, want pending", asyncTask.Status)
 	}
-	if job.Generation != 1 || job.Attempt != 0 {
-		t.Errorf("gen=%d attempt=%d, want 1/0", job.Generation, job.Attempt)
+	if asyncTask.Generation != 1 || asyncTask.Attempt != 0 {
+		t.Errorf("gen=%d attempt=%d, want 1/0", asyncTask.Generation, asyncTask.Attempt)
 	}
-	if job.MaxAttempts != 3 {
-		t.Errorf("max_attempts = %d, want default 3", job.MaxAttempts)
+	if asyncTask.MaxAttempts != 3 {
+		t.Errorf("max_attempts = %d, want default 3", asyncTask.MaxAttempts)
 	}
 }
 
 // TestSubmitEmptyType ErrEmptyType。
 func TestSubmitEmptyType(t *testing.T) {
 	m := newTestManager(t)
-	if _, _, err := m.Submit(context.Background(), &gasync.JobSpec{}); err != gasync.ErrEmptyType {
+	if _, _, err := m.Submit(context.Background(), &gasync.AsyncTaskSpec{}); err != gasync.ErrEmptyType {
 		t.Fatalf("err = %v, want ErrEmptyType", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestSubmitEmptyType(t *testing.T) {
 // TestSubmitPayloadTooLarge 超 MaxPayloadBytes → ErrPayloadTooLarge。
 func TestSubmitPayloadTooLarge(t *testing.T) {
 	m := newTestManager(t)
-	_, _, err := m.Submit(context.Background(), &gasync.JobSpec{
+	_, _, err := m.Submit(context.Background(), &gasync.AsyncTaskSpec{
 		Type: "invoice", Payload: make([]byte, m.cfg.MaxPayloadBytes+1),
 	})
 	if err != gasync.ErrPayloadTooLarge {
@@ -89,11 +89,11 @@ func TestSubmitPayloadTooLarge(t *testing.T) {
 func TestSubmitIdempotentUniqKey(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
-	j1, s1, err := m.Submit(ctx, &gasync.JobSpec{Type: "invoice", UniqKey: "k1"})
+	j1, s1, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice", UniqKey: "k1"})
 	if err != nil || !s1 {
 		t.Fatalf("first submit: s=%v err=%v", s1, err)
 	}
-	j2, s2, err := m.Submit(ctx, &gasync.JobSpec{Type: "invoice", UniqKey: "k1"})
+	j2, s2, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice", UniqKey: "k1"})
 	if err != nil {
 		t.Fatalf("second submit: %v", err)
 	}
@@ -117,10 +117,10 @@ func TestA3SameKeyConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, submitted, err := m.Submit(ctx, &gasync.JobSpec{Type: "invoice", UniqKey: "same-key"})
+			_, submitted, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice", UniqKey: "same-key"})
 			if err != nil {
 				// sqlite 单写者可能 busy；允许重试后成功。
-				_, submitted, err = m.Submit(ctx, &gasync.JobSpec{Type: "invoice", UniqKey: "same-key"})
+				_, submitted, err = m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice", UniqKey: "same-key"})
 				if err != nil {
 					return
 				}
@@ -134,7 +134,7 @@ func TestA3SameKeyConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 	var cnt int64
-	if err := m.db.Model(&db.CoreJob{}).Where("uniq_key = ?", "same-key").Count(&cnt).Error; err != nil {
+	if err := m.db.Model(&db.CoreAsyncTask{}).Where("uniq_key = ?", "same-key").Count(&cnt).Error; err != nil {
 		t.Fatal(err)
 	}
 	if cnt != 1 {
@@ -149,8 +149,8 @@ func TestA3SameKeyConcurrent(t *testing.T) {
 func TestA3NoKeyTwoRows(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
-	_, s1, err1 := m.Submit(ctx, &gasync.JobSpec{Type: "invoice"})
-	_, s2, err2 := m.Submit(ctx, &gasync.JobSpec{Type: "invoice"})
+	_, s1, err1 := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
+	_, s2, err2 := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
 	if err1 != nil || err2 != nil {
 		t.Fatalf("errs = %v %v", err1, err2)
 	}
@@ -158,7 +158,7 @@ func TestA3NoKeyTwoRows(t *testing.T) {
 		t.Fatalf("submitted = %v %v, want both true", s1, s2)
 	}
 	var cnt int64
-	m.db.Model(&db.CoreJob{}).Count(&cnt)
+	m.db.Model(&db.CoreAsyncTask{}).Count(&cnt)
 	if cnt != 2 {
 		t.Fatalf("rows = %d, want 2 (empty uniq_key → NULL, not deduped)", cnt)
 	}
@@ -168,15 +168,15 @@ func TestA3NoKeyTwoRows(t *testing.T) {
 func TestCancelPendingFlips(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
-	job, _, _ := m.Submit(ctx, &gasync.JobSpec{Type: "invoice"})
-	canceled, err := m.Cancel(ctx, job.ID)
+	asyncTask, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
+	canceled, err := m.Cancel(ctx, asyncTask.ID)
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	if !canceled {
 		t.Fatalf("canceled = false, want true")
 	}
-	got, _ := m.Get(ctx, job.ID)
+	got, _ := m.Get(ctx, asyncTask.ID)
 	if got.Status != gasync.StatusCanceled {
 		t.Errorf("status = %q, want canceled", got.Status)
 	}
@@ -186,11 +186,11 @@ func TestCancelPendingFlips(t *testing.T) {
 func TestCancelTerminalIdempotent(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
-	job, _, _ := m.Submit(ctx, &gasync.JobSpec{Type: "invoice"})
-	if _, err := m.Cancel(ctx, job.ID); err != nil {
+	asyncTask, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
+	if _, err := m.Cancel(ctx, asyncTask.ID); err != nil {
 		t.Fatalf("first cancel: %v", err)
 	}
-	canceled, err := m.Cancel(ctx, job.ID)
+	canceled, err := m.Cancel(ctx, asyncTask.ID)
 	if err != nil {
 		t.Fatalf("second cancel: %v", err)
 	}
@@ -199,11 +199,11 @@ func TestCancelTerminalIdempotent(t *testing.T) {
 	}
 }
 
-// TestCancelNotFound 不存在 → ErrJobNotFound。
+// TestCancelNotFound 不存在 → ErrAsyncTaskNotFound。
 func TestCancelNotFound(t *testing.T) {
 	m := newTestManager(t)
-	if _, err := m.Cancel(context.Background(), "nope"); err != gasync.ErrJobNotFound {
-		t.Fatalf("err = %v, want ErrJobNotFound", err)
+	if _, err := m.Cancel(context.Background(), "nope"); err != gasync.ErrAsyncTaskNotFound {
+		t.Fatalf("err = %v, want ErrAsyncTaskNotFound", err)
 	}
 }
 
@@ -211,12 +211,12 @@ func TestCancelNotFound(t *testing.T) {
 func TestReplayTerminal(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
-	job, _, _ := m.Submit(ctx, &gasync.JobSpec{Type: "invoice"})
+	asyncTask, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
 	// 做成功终态。
-	m.db.Model(&db.CoreJob{}).Where("id = ?", job.ID).Updates(map[string]any{
+	m.db.Model(&db.CoreAsyncTask{}).Where("id = ?", asyncTask.ID).Updates(map[string]any{
 		"status": "succeeded", "attempt": 1, "finished_at": time.Now(),
 	})
-	rp, err := m.Replay(ctx, job.ID)
+	rp, err := m.Replay(ctx, asyncTask.ID)
 	if err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -235,8 +235,8 @@ func TestReplayTerminal(t *testing.T) {
 func TestReplayNonTerminal(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
-	job, _, _ := m.Submit(ctx, &gasync.JobSpec{Type: "invoice"}) // pending
-	if _, err := m.Replay(ctx, job.ID); err != gasync.ErrNotReplayable {
+	asyncTask, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"}) // pending
+	if _, err := m.Replay(ctx, asyncTask.ID); err != gasync.ErrNotReplayable {
 		t.Fatalf("Replay(pending) err = %v, want ErrNotReplayable", err)
 	}
 }
@@ -245,8 +245,8 @@ func TestReplayNonTerminal(t *testing.T) {
 func TestStats(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
-	m.Submit(ctx, &gasync.JobSpec{Type: "invoice"})
-	j2, _, _ := m.Submit(ctx, &gasync.JobSpec{Type: "invoice"})
+	m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
+	j2, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
 	m.Cancel(ctx, j2.ID)
 	st, err := m.Stats(ctx)
 	if err != nil {
@@ -262,17 +262,17 @@ func TestListPagination(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		m.Submit(ctx, &gasync.JobSpec{Type: "invoice"})
+		m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
 	}
-	jobs, total, err := m.List(ctx, &gasync.JobCond{Page: 1, PageSize: 2})
+	asyncTasks, total, err := m.List(ctx, &gasync.AsyncTaskCond{Page: 1, PageSize: 2})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if total != 5 {
 		t.Errorf("total = %d, want 5", total)
 	}
-	if len(jobs) != 2 {
-		t.Errorf("len = %d, want 2", len(jobs))
+	if len(asyncTasks) != 2 {
+		t.Errorf("len = %d, want 2", len(asyncTasks))
 	}
 }
 

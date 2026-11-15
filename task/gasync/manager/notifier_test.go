@@ -57,7 +57,7 @@ type countingHandler struct {
 	calls int32
 }
 
-func (h *countingHandler) Execute(ctx context.Context, t *gasync.Job) error {
+func (h *countingHandler) Execute(ctx context.Context, t *gasync.AsyncTask) error {
 	atomic.AddInt32(&h.calls, 1)
 	return nil
 }
@@ -178,7 +178,7 @@ func TestA7_Forward_WakeUpFast(t *testing.T) {
 	defer stop()
 
 	start := time.Now()
-	if _, _, err := m.Submit(context.Background(), &gasync.JobSpec{Type: taskType, Payload: []byte(`{}`)}); err != nil {
+	if _, _, err := m.Submit(context.Background(), &gasync.AsyncTaskSpec{Type: taskType, Payload: []byte(`{}`)}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	executed := waitFor(t, func() bool { return h.count() >= 1 }, 2*time.Second)
@@ -186,7 +186,7 @@ func TestA7_Forward_WakeUpFast(t *testing.T) {
 	if !executed {
 		t.Fatalf("A7 forward: worker not woken within 2s (fallback=10s, so wake must have failed)")
 	}
-	t.Logf("A7 forward: executed %d job after %v (fallback poll was 10s → wake path proven)", h.count(), elapsed)
+	t.Logf("A7 forward: executed %d asyncTask after %v (fallback poll was 10s → wake path proven)", h.count(), elapsed)
 }
 
 // TestA7_Degrade_FallbackPolling A7 退化：
@@ -232,14 +232,14 @@ func TestA7_Degrade_FallbackPolling(t *testing.T) {
 	defer stop()
 
 	start := time.Now()
-	_, _, err = m.Submit(context.Background(), &gasync.JobSpec{Type: taskType, Payload: []byte(`{}`)})
+	_, _, err = m.Submit(context.Background(), &gasync.AsyncTaskSpec{Type: taskType, Payload: []byte(`{}`)})
 	if err != gasync.ErrNotify {
 		t.Fatalf("Submit after notifier closed: err = %v, want ErrNotify", err)
 	}
 	executed := waitFor(t, func() bool { return h.count() >= 1 }, 2*time.Second)
 	elapsed := time.Since(start)
 	if !executed {
-		t.Fatalf("A7 degrade: fallback polling did not pick up job within 2s (fallback=50ms)")
+		t.Fatalf("A7 degrade: fallback polling did not pick up asyncTask within 2s (fallback=50ms)")
 	}
 	t.Logf("A7 degrade: Notify returned ErrNotify, fallback polling executed within %v", elapsed)
 }

@@ -27,7 +27,7 @@ func (r *leaseWorkerRegistryMgr) IsWorkerAlive(ctx context.Context, taskType, wo
 	// 用方言的「当前时间」表达式比较，避免 Go time.Time 参数在各驱动下的序列化格式差异
 	// （sqlite 下 time.Time 参数与存储的 RFC3339 文本字典序不兼容，会导致比较恒假）。
 	nowExpr := r.m.dialect.NowValueExpr()
-	q := r.m.db.WithContext(ctx).Model(&db.CoreJob{}).
+	q := r.m.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
 		Where("worker_id = ? AND lease_until > "+nowExpr, workerID)
 	if taskType != "" {
 		q = q.Where("task_type = ?", taskType)
@@ -41,7 +41,7 @@ func (r *leaseWorkerRegistryMgr) IsWorkerAlive(ctx context.Context, taskType, wo
 
 func (r *leaseWorkerRegistryMgr) AliveWorkers(ctx context.Context, taskType string) (int64, error) {
 	nowExpr := r.m.dialect.NowValueExpr()
-	q := r.m.db.WithContext(ctx).Model(&db.CoreJob{}).
+	q := r.m.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
 		Where("worker_id <> '' AND lease_until > "+nowExpr)
 	if taskType != "" {
 		q = q.Where("task_type = ?", taskType)

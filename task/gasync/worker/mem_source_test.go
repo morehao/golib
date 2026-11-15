@@ -11,16 +11,16 @@ import (
 // memSource 是内存队列版 Source 测试替身，供 W1 自测 Worker 而不依赖 manager。
 //
 // 行为：
-//   - Fetch：有任务则出队；无任务返回 gasync.ErrNoJob。
+//   - Fetch：有任务则出队；无任务返回 gasync.ErrNoAsyncTask。
 //   - Save：记录本次 Result 与所选回调是否被调用；并模拟 Source 的重试决策——
 //     可重试的失败会把任务以 Attempt+1 重新入队（供「失败重试」用例观察多次尝试）。
 //   - Renew：记录调用次数（供停机放租约用例断言）。
 type memSource struct {
 	mu     sync.Mutex
-	queues map[string][]*gasync.Job
+	queues map[string][]*gasync.AsyncTask
 
 	results   []recordedResult // 每次 Save 的客观结果
-	renews    []*gasync.Job      // 每次 Renew 的任务（停机放租约证据）
+	renews    []*gasync.AsyncTask      // 每次 Renew 的任务（停机放租约证据）
 	callbacks int              // 被实际调用的钩子次数
 	hooks     []string         // 被调用的钩子名（on_success / on_retry / on_failure / on_canceled）
 
@@ -31,7 +31,7 @@ type memSource struct {
 var _ gasync.Source = (*memSource)(nil)
 
 type recordedResult struct {
-	JobID   string
+	AsyncTaskID   string
 	Outcome gasync.Outcome
 	Failure gasync.FailureKind
 	Err     error
@@ -39,13 +39,13 @@ type recordedResult struct {
 
 func newMemSource() *memSource {
 	return &memSource{
-		queues:          make(map[string][]*gasync.Job),
+		queues:          make(map[string][]*gasync.AsyncTask),
 		retryUpperBound: 3,
 	}
 }
 
 // push 把任务放入指定类型的队列。
-func (m *memSource) push(taskType string, task *gasync.Job) {
+func (m *memSource) push(taskType string, task *gasync.AsyncTask) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if task.Type == "" {
@@ -54,13 +54,13 @@ func (m *memSource) push(taskType string, task *gasync.Job) {
 	m.queues[taskType] = append(m.queues[taskType], task)
 }
 
-// Fetch 从队列取一条；无任务返回 ErrNoJob。
-func (m *memSource) Fetch(ctx context.Context, taskType string) (*gasync.Job, error) {
+// Fetch 从队列取一条；无任务返回 ErrNoAsyncTask。
+func (m *memSource) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	q := m.queues[taskType]
 	if len(q) == 0 {
-		return nil, gasync.ErrNoJob
+		return nil, gasync.ErrNoAsyncTask
 	}
 	task := q[0]
 	m.queues[taskType] = q[1:]
@@ -68,7 +68,7 @@ func (m *memSource) Fetch(ctx context.Context, taskType string) (*gasync.Job, er
 }
 
 // Renew 记录放租约的调用（内存实现无实际租约）。
-func (m *memSource) Renew(ctx context.Context, task *gasync.Job) error {
+func (m *memSource) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.renews = append(m.renews, task)
@@ -76,10 +76,10 @@ func (m *memSource) Renew(ctx context.Context, task *gasync.Job) error {
 }
 
 // Save 记录结果与回调调用，并按「本地 Source」的语义模拟重试流转。
-func (m *memSource) Save(ctx context.Context, task *gasync.Job, r gasync.Result, callback gasync.EnsureFunc) error {
+func (m *memSource) Save(ctx context.Context, task *gasync.AsyncTask, r gasync.Result, callback gasync.EnsureFunc) error {
 	m.mu.Lock()
 	m.results = append(m.results, recordedResult{
-		JobID:   task.ID,
+		AsyncTaskID:   task.ID,
 		Outcome: r.Outcome,
 		Failure: r.Failure,
 		Err:     r.Err,
@@ -108,7 +108,7 @@ func (m *memSource) Save(ctx context.Context, task *gasync.Job, r gasync.Result,
 }
 
 // hasAttemptsLeft：MaxAttempts<=0 视为不设上限。
-func hasAttemptsLeft(task *gasync.Job) bool {
+func hasAttemptsLeft(task *gasync.AsyncTask) bool {
 	if task.MaxAttempts <= 0 {
 		return true
 	}

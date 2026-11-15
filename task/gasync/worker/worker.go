@@ -39,7 +39,7 @@ type Worker struct {
 	fetchCancel  context.CancelFunc
 	fetchStop    atomic.Bool // 停机时先停 Fetch
 	inflight     sync.WaitGroup
-	inflightJobs map[*gasync.Job]struct{} // 在途任务，用于 Shutdown 放租约
+	inflightTasks map[*gasync.AsyncTask]struct{} // 在途任务，用于 Shutdown 放租约
 	exited       chan struct{}          // Run 的槽全部退出后关闭
 
 	// 类型级启停开关的本地缓存（TypeGateTTL 内有效）。
@@ -306,7 +306,7 @@ func (w *Worker) healthReportLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			w.mu.Lock()
-			running := len(w.inflightJobs)
+			running := len(w.inflightTasks)
 			w.mu.Unlock()
 			if err := w.cfg.HealthReporter.ReportAlive(context.WithoutCancel(ctx), w.cfg.WorkerID, running); err != nil {
 				w.logger.Warnw(ctx, "gasync health report failed", "worker_id", w.cfg.WorkerID, "error", err)
@@ -407,9 +407,9 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 // 本卡 memSource 的 Renew 为空操作，本地 manager 实现会把 lease_until 置为 NOW(3)。
 func (w *Worker) releaseStuck() {
 	w.mu.Lock()
-	tasks := make([]*gasync.Job, 0, len(w.inflightJobs))
-	for job := range w.inflightJobs {
-		tasks = append(tasks, job)
+	tasks := make([]*gasync.AsyncTask, 0, len(w.inflightTasks))
+	for asyncTask := range w.inflightTasks {
+		tasks = append(tasks, asyncTask)
 	}
 	w.mu.Unlock()
 
@@ -443,9 +443,9 @@ func (w *Worker) slotLoop(taskType string) {
 			continue
 		}
 
-		job, err := w.fetch(taskType)
+		asyncTask, err := w.fetch(taskType)
 		if err != nil {
-			if errors.Is(err, gasync.ErrNoJob) {
+			if errors.Is(err, gasync.ErrNoAsyncTask) {
 				if !w.wait(taskType) {
 					return // 停机
 				}
@@ -461,7 +461,7 @@ func (w *Worker) slotLoop(taskType string) {
 			}
 			continue
 		}
-		if job == nil {
+		if asyncTask == nil {
 			if !w.wait(taskType) {
 				return
 			}
@@ -469,15 +469,15 @@ func (w *Worker) slotLoop(taskType string) {
 		}
 
 		w.inflight.Add(1)
-		w.trackInflight(job, true)
-		w.process(taskType, job)
-		w.trackInflight(job, false)
+		w.trackInflight(asyncTask, true)
+		w.process(taskType, asyncTask)
+		w.trackInflight(asyncTask, false)
 		w.inflight.Done()
 	}
 }
 
-// fetch 调用 src.Fetch，并防御性处理「err==nil 但 job==nil」的情形。
-func (w *Worker) fetch(taskType string) (*gasync.Job, error) {
+// fetch 调用 src.Fetch，并防御性处理「err==nil 但 asyncTask==nil」的情形。
+func (w *Worker) fetch(taskType string) (*gasync.AsyncTask, error) {
 	return w.src.Fetch(w.fetchCtx, taskType)
 }
 
@@ -540,16 +540,16 @@ func (w *Worker) wait(taskType string) bool {
 }
 
 // trackInflight 记录/移除在途任务（用于 Shutdown 放租约），由 mu 保护。
-func (w *Worker) trackInflight(job *gasync.Job, add bool) {
+func (w *Worker) trackInflight(asyncTask *gasync.AsyncTask, add bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.inflightJobs == nil {
-		w.inflightJobs = make(map[*gasync.Job]struct{})
+	if w.inflightTasks == nil {
+		w.inflightTasks = make(map[*gasync.AsyncTask]struct{})
 	}
 	if add {
-		w.inflightJobs[job] = struct{}{}
+		w.inflightTasks[asyncTask] = struct{}{}
 	} else {
-		delete(w.inflightJobs, job)
+		delete(w.inflightTasks, asyncTask)
 	}
 }
 
@@ -600,7 +600,7 @@ type BackoffFunc func(attempt int) time.Duration
 // Event 是执行过程事件，通过 WorkerConfig.EventHandler 回调（仅用于观察，不参与正确性）。
 type Event struct {
 	Type     string // 事件类型（如 started / succeeded / failed / retried / canceled）
-	JobID    string
+	AsyncTaskID    string
 	TaskType string
 	WorkerID string
 	Attempt  int

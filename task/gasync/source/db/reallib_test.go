@@ -64,20 +64,20 @@ func realPGDB(t *testing.T) *gorm.DB {
 // resetRealDB 重建两表，隔离各用例。
 func resetRealDB(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.Migrator().DropTable(&CoreJob{}, &CoreJobRun{}); err != nil {
+	if err := db.Migrator().DropTable(&CoreAsyncTask{}, &CoreAsyncTaskRun{}); err != nil {
 		t.Fatalf("drop: %v", err)
 	}
-	if err := db.AutoMigrate(&CoreJob{}, &CoreJobRun{}); err != nil {
+	if err := db.AutoMigrate(&CoreAsyncTask{}, &CoreAsyncTaskRun{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 }
 
-// seedJobs 插入 n 条到点的 pending 任务。
-func seedJobs(t *testing.T, db *gorm.DB, taskType string, n int) {
+// seedAsyncTasks 插入 n 条到点的 pending 任务。
+func seedAsyncTasks(t *testing.T, db *gorm.DB, taskType string, n int) {
 	t.Helper()
 	now := time.Now()
 	for i := 0; i < n; i++ {
-		row := &CoreJob{
+		row := &CoreAsyncTask{
 			ID: genUUID(), CreatedAt: now, UpdatedAt: now, TaskType: taskType,
 			Status: "pending", Generation: 1, MaxAttempts: 3, NextRunAt: now.Add(-time.Minute),
 		}
@@ -87,7 +87,7 @@ func seedJobs(t *testing.T, db *gorm.DB, taskType string, n int) {
 	}
 }
 
-// TestRealA1ConcurrentClaim 多 goroutine / 多连接并发认领，断言无同一 job 被两次认领
+// TestRealA1ConcurrentClaim 多 goroutine / 多连接并发认领，断言无同一 asyncTask 被两次认领
 // （attempt 求和 == 认领次数 == 任务数；每行 attempt==1 且只被一个 worker 持有）。
 func TestRealA1ConcurrentClaim(t *testing.T) {
 	runA1(t, realMySQLDB(t), DialectMySQL, "invoice")
@@ -99,7 +99,7 @@ func runA1(t *testing.T, db *gorm.DB, dialect Dialect, taskType string) {
 	resetRealDB(t, db)
 	const total = 200
 	const workers = 16
-	seedJobs(t, db, taskType, total)
+	seedAsyncTasks(t, db, taskType, total)
 
 	base := newStore(db, dialect, 60*time.Second)
 
@@ -137,19 +137,19 @@ func runA1(t *testing.T, db *gorm.DB, dialect Dialect, taskType string) {
 	// 断言：每个 id 至多被认领一次。
 	for id, c := range claimed {
 		if c > 1 {
-			t.Fatalf("[%s A1] job %s claimed %d times (double claim)", dialect, id, c)
+			t.Fatalf("[%s A1] asyncTask %s claimed %d times (double claim)", dialect, id, c)
 		}
 	}
 	var cnt int64
-	db.Model(&CoreJob{}).Where("status = 'running'").Count(&cnt)
-	t.Logf("[%s A1] claimed unique jobs=%d, running rows=%d (seed=%d workers=%d)",
+	db.Model(&CoreAsyncTask{}).Where("status = 'running'").Count(&cnt)
+	t.Logf("[%s A1] claimed unique asyncTasks=%d, running rows=%d (seed=%d workers=%d)",
 		dialect, len(claimed), cnt, total, workers)
 	if int64(len(claimed)) != cnt {
 		t.Fatalf("[%s A1] claimed=%d but running rows=%d (mismatch)", dialect, len(claimed), cnt)
 	}
 	// 每行 attempt 必须恰为 1（未被重复认领累加）。
 	var bad int64
-	db.Model(&CoreJob{}).Where("status = 'running' AND attempt <> 1").Count(&bad)
+	db.Model(&CoreAsyncTask{}).Where("status = 'running' AND attempt <> 1").Count(&bad)
 	if bad != 0 {
 		t.Fatalf("[%s A1] %d running rows with attempt != 1 (repeat claim)", dialect, bad)
 	}
@@ -165,7 +165,7 @@ func TestRealA2LeaseTakeover(t *testing.T) {
 func runA2(t *testing.T, db *gorm.DB, dialect Dialect) {
 	t.Helper()
 	resetRealDB(t, db)
-	seedJobs(t, db, "invoice", 1)
+	seedAsyncTasks(t, db, "invoice", 1)
 	s := newStore(db, dialect, 60*time.Second)
 	ctx := context.Background()
 
@@ -177,7 +177,7 @@ func runA2(t *testing.T, db *gorm.DB, dialect Dialect) {
 
 	// 停续租 + 手工把 lease_until 改到过去（internals：A2 改成停续租 + 手工改 lease_until）。
 	past := time.Now().Add(-time.Minute)
-	if err := db.Model(&CoreJob{}).Where("id = ?", id).Update("lease_until", past).Error; err != nil {
+	if err := db.Model(&CoreAsyncTask{}).Where("id = ?", id).Update("lease_until", past).Error; err != nil {
 		t.Fatalf("[%s A2] force lease: %v", dialect, err)
 	}
 
@@ -189,7 +189,7 @@ func runA2(t *testing.T, db *gorm.DB, dialect Dialect) {
 	if len(rows2) != 1 || rows2[0].ID != id {
 		t.Fatalf("[%s A2] takeover failed: %+v", dialect, rows2)
 	}
-	var got CoreJob
+	var got CoreAsyncTask
 	db.Where("id = ?", id).Take(&got)
 	if got.Attempt != 2 {
 		t.Fatalf("[%s A2] attempt = %d, want 2 after takeover", dialect, got.Attempt)
@@ -197,7 +197,7 @@ func runA2(t *testing.T, db *gorm.DB, dialect Dialect) {
 	if got.WorkerID != "w2" {
 		t.Fatalf("[%s A2] worker = %q, want w2", dialect, got.WorkerID)
 	}
-	t.Logf("[%s A2] takeover ok: job=%s attempt=%d worker=%s", dialect, id, got.Attempt, got.WorkerID)
+	t.Logf("[%s A2] takeover ok: asyncTask=%s attempt=%d worker=%s", dialect, id, got.Attempt, got.WorkerID)
 }
 
 // TestRealA8Explain 两支认领 SQL 的 EXPLAIN 命中预期索引、rows examined ≈ 候选数。
@@ -293,7 +293,7 @@ func indexOf(s, sub string) int {
 func seedHeavyMySQL(t *testing.T, db *gorm.DB, total, due int) {
 	t.Helper()
 	now := time.Now()
-	batch := make([]CoreJob, 0, 2000)
+	batch := make([]CoreAsyncTask, 0, 2000)
 	err := db.Transaction(func(tx *gorm.DB) error {
 		flush := func() error {
 			if len(batch) == 0 {
@@ -310,7 +310,7 @@ func seedHeavyMySQL(t *testing.T, db *gorm.DB, total, due int) {
 			if i < due {
 				nra = now.Add(-time.Minute)
 			}
-			batch = append(batch, CoreJob{
+			batch = append(batch, CoreAsyncTask{
 				ID: genUUID(), CreatedAt: now, UpdatedAt: now, TaskType: "invoice",
 				Status: "pending", Generation: 1, MaxAttempts: 3, NextRunAt: nra,
 			})
@@ -323,9 +323,9 @@ func seedHeavyMySQL(t *testing.T, db *gorm.DB, total, due int) {
 		}
 		// 再灌少量 running 且租约过期的行，供认领 ② 走 idx_core_async_task_status_lease_until。
 		past := now.Add(-time.Minute)
-		rbatch := make([]CoreJob, 0, 500)
+		rbatch := make([]CoreAsyncTask, 0, 500)
 		for i := 0; i < 1000; i++ {
-			rbatch = append(rbatch, CoreJob{
+			rbatch = append(rbatch, CoreAsyncTask{
 				ID: genUUID(), CreatedAt: now, UpdatedAt: now, TaskType: "invoice",
 				Status: "running", Generation: 1, Attempt: 1, MaxAttempts: 3,
 				NextRunAt: now.Add(-time.Hour), LeaseUntil: &past, WorkerID: "dead",
@@ -345,4 +345,4 @@ func seedHeavyPG(t *testing.T, db *gorm.DB, total, due int) {
 	seedHeavyMySQL(t, db, total, due) // 结构一致，复用
 }
 
-var _ = gasync.ErrNoJob
+var _ = gasync.ErrNoAsyncTask

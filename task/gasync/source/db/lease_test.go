@@ -11,7 +11,7 @@ func TestRenewOK(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	past := time.Now().Add(-time.Minute)
-	id := insertJob(t, s, &CoreJob{
+	id := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType: "invoice", Status: "running", Attempt: 1,
 		NextRunAt: time.Now().Add(-time.Minute), LeaseUntil: &past, WorkerID: "w1",
 	})
@@ -22,7 +22,7 @@ func TestRenewOK(t *testing.T) {
 	if res != RenewOK {
 		t.Fatalf("renew result = %v, want RenewOK", res)
 	}
-	var got CoreJob
+	var got CoreAsyncTask
 	if err := s.db.Where("id = ?", id).Take(&got).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestRenewOK(t *testing.T) {
 func TestRenewLostToOtherWorker(t *testing.T) {
 	s := newTestStore(t)
 	future := time.Now().Add(time.Minute)
-	id := insertJob(t, s, &CoreJob{
+	id := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType: "invoice", Status: "running", Attempt: 1,
 		NextRunAt: time.Now().Add(-time.Minute), LeaseUntil: &future, WorkerID: "w2",
 	})
@@ -51,7 +51,7 @@ func TestRenewLostToOtherWorker(t *testing.T) {
 // TestRenewCanceled 已 canceled 时续租失败 → RenewCanceled。
 func TestRenewCanceled(t *testing.T) {
 	s := newTestStore(t)
-	id := insertJob(t, s, &CoreJob{
+	id := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType: "invoice", Status: "canceled", Attempt: 1,
 		NextRunAt: time.Now().Add(-time.Minute), WorkerID: "w1",
 	})
@@ -68,38 +68,38 @@ func TestRenewCanceled(t *testing.T) {
 func TestReapStaleRunLongRunningNotReaped(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	// 任务 lease 仍未来（正常续租），job attempt==run attempt。
+	// 任务 lease 仍未来（正常续租），asyncTask attempt==run attempt。
 	future := time.Now().Add(time.Minute)
-	jobID := insertJob(t, s, &CoreJob{
+	asyncTaskID := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType: "invoice", Status: "running", Attempt: 1,
 		NextRunAt: time.Now().Add(-time.Hour), LeaseUntil: &future, WorkerID: "w1",
 		Generation: 1,
 	})
 	started := time.Now().Add(-3 * time.Minute) // 长任务
-	insertRun(t, s, &CoreJobRun{
-		JobID: jobID, Generation: 1, Attempt: 1, Status: "running",
+	insertRun(t, s, &CoreAsyncTaskRun{
+		AsyncTaskID: asyncTaskID, Generation: 1, Attempt: 1, Status: "running",
 		WorkerID: "w1", StartedAt: started,
 	})
-	runs, jobs, err := s.reap(ctx, 100)
+	runs, asyncTasks, err := s.reap(ctx, 100)
 	if err != nil {
 		t.Fatalf("reap: %v", err)
 	}
-	if runs != 0 || jobs != 0 {
-		t.Fatalf("reap runs=%d jobs=%d, want 0/0 (long running must survive)", runs, jobs)
+	if runs != 0 || asyncTasks != 0 {
+		t.Fatalf("reap runs=%d asyncTasks=%d, want 0/0 (long running must survive)", runs, asyncTasks)
 	}
 }
 
-// TestReapStaleRunReaped job 已终态但尝试行仍 running → 收口为 failed/lease_expired。
+// TestReapStaleRunReaped asyncTask 已终态但尝试行仍 running → 收口为 failed/lease_expired。
 func TestReapStaleRunReaped(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	// job 已 failed（不再 running），尝试行残留 running。
-	pid := insertJob(t, s, &CoreJob{
+	// asyncTask 已 failed（不再 running），尝试行残留 running。
+	pid := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType: "invoice", Status: "failed", Attempt: 1,
 		NextRunAt: time.Now().Add(-time.Hour), Generation: 1, WorkerID: "",
 	})
-	insertRun(t, s, &CoreJobRun{
-		JobID: pid, Generation: 1, Attempt: 1, Status: "running",
+	insertRun(t, s, &CoreAsyncTaskRun{
+		AsyncTaskID: pid, Generation: 1, Attempt: 1, Status: "running",
 		WorkerID: "w1", StartedAt: time.Now().Add(-time.Minute),
 	})
 	runs, _, err := s.reap(ctx, 100)
@@ -109,7 +109,7 @@ func TestReapStaleRunReaped(t *testing.T) {
 	if runs != 1 {
 		t.Fatalf("reap runs=%d, want 1", runs)
 	}
-	var r CoreJobRun
+	var r CoreAsyncTaskRun
 	if err := s.db.Where("job_id = ?", pid).Take(&r).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -127,25 +127,25 @@ func TestReapIdempotent(t *testing.T) {
 	ctx := context.Background()
 	// 一个次数用尽且租约过期的 running 任务 → 判死。
 	past := time.Now().Add(-time.Minute)
-	deadID := insertJob(t, s, &CoreJob{
+	deadID := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType: "invoice", Status: "running", Attempt: 3, MaxAttempts: 3,
 		NextRunAt: time.Now().Add(-time.Hour), LeaseUntil: &past, WorkerID: "w1",
 	})
-	runs1, jobs1, err := s.reap(ctx, 100)
+	runs1, tasks1, err := s.reap(ctx, 100)
 	if err != nil {
 		t.Fatalf("reap#1: %v", err)
 	}
-	runs2, jobs2, err := s.reap(ctx, 100)
+	runs2, tasks2, err := s.reap(ctx, 100)
 	if err != nil {
 		t.Fatalf("reap#2: %v", err)
 	}
-	if jobs1 != 1 {
-		t.Fatalf("reap#1 jobs=%d, want 1", jobs1)
+	if tasks1 != 1 {
+		t.Fatalf("reap#1 asyncTasks=%d, want 1", tasks1)
 	}
-	if runs2 != 0 || jobs2 != 0 {
-		t.Fatalf("reap#2 runs=%d jobs=%d, want 0/0 (idempotent)", runs2, jobs2)
+	if runs2 != 0 || tasks2 != 0 {
+		t.Fatalf("reap#2 runs=%d asyncTasks=%d, want 0/0 (idempotent)", runs2, tasks2)
 	}
-	var got CoreJob
+	var got CoreAsyncTask
 	if err := s.db.Where("id = ?", deadID).Take(&got).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestReapIdempotent(t *testing.T) {
 }
 
 // insertRun 插入一行 core_async_task_run。
-func insertRun(t *testing.T, s *store, r *CoreJobRun) string {
+func insertRun(t *testing.T, s *store, r *CoreAsyncTaskRun) string {
 	t.Helper()
 	if r.ID == "" {
 		r.ID = genUUID()

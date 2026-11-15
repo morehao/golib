@@ -1,5 +1,5 @@
-// Package gasync 是任务中心的契约内核：实体（Job / JobRun）、任务规格（JobSpec）、
-// 查询条件（JobCond / RunCond）、状态与失败分类、Source 取任务接口、错误哨兵。
+// Package gasync 是任务中心的契约内核：实体（AsyncTask / AsyncTaskRun）、任务规格（AsyncTaskSpec）、
+// 查询条件（AsyncTaskCond / AsyncTaskRunCond）、状态与失败分类、Source 取任务接口、错误哨兵。
 //
 // 依赖方向：manager（任务中心）与 worker（执行运行时）互不依赖，只在根包碰面；
 // worker 不引入 gorm。由 A10 的 go list -deps 断言。
@@ -36,8 +36,8 @@ const (
 	FailureSkipped      FailureKind = "skipped"
 )
 
-// Job 是一条有状态的任务实体，对应表 core_async_task。
-type Job struct {
+// AsyncTask 是一条有状态的任务实体，对应表 core_async_task。
+type AsyncTask struct {
 	ID          string
 	Type        string
 	Status      Status
@@ -73,7 +73,7 @@ type Job struct {
 }
 
 // Bind 反序列化 Payload 到 v。
-func (t *Job) Bind(v any) error {
+func (t *AsyncTask) Bind(v any) error {
 	if len(t.Payload) == 0 {
 		return json.Unmarshal(nil, v)
 	}
@@ -81,7 +81,7 @@ func (t *Job) Bind(v any) error {
 }
 
 // IsStuck 判断任务是否卡住：running 且租约已过期（now 之后无可续租的归属）。
-func (t *Job) IsStuck(now time.Time) bool {
+func (t *AsyncTask) IsStuck(now time.Time) bool {
 	if t.Status != StatusRunning || t.LeaseUntil == nil {
 		return false
 	}
@@ -89,14 +89,14 @@ func (t *Job) IsStuck(now time.Time) bool {
 }
 
 // CanCancel 判断任务是否可取消：pending 或 running。
-func (t *Job) CanCancel() bool {
+func (t *AsyncTask) CanCancel() bool {
 	return t.Status == StatusPending || t.Status == StatusRunning
 }
 
-// JobRun 是一次尝试记录，对应表 core_async_task_run。一条任务有 0..N 次尝试，按 generation 分组。
-type JobRun struct {
+// AsyncTaskRun 是一次尝试记录，对应表 core_async_task_run。一条任务有 0..N 次尝试，按 generation 分组。
+type AsyncTaskRun struct {
 	ID         string
-	JobID      string
+	AsyncTaskID      string
 	Generation int
 	Attempt    int
 	Status     Status
@@ -112,8 +112,8 @@ type JobRun struct {
 	CreatedAt  time.Time
 }
 
-// JobSpec 是提交任务时的参数。显式值落库非 0，其余在 Fetch 时按「JobSpec > HandlerOption > 配置默认」解析。
-type JobSpec struct {
+// AsyncTaskSpec 是提交任务时的参数。显式值落库非 0，其余在 Fetch 时按「AsyncTaskSpec > HandlerOption > 配置默认」解析。
+type AsyncTaskSpec struct {
 	Type        string        // 必填
 	Payload     []byte        // 可选，上限 MaxPayloadBytes
 	Priority    int           // 可选，默认 0
@@ -128,13 +128,13 @@ type JobSpec struct {
 	ChainID string
 	// Step 可选：步骤序号，默认 0。
 	Step int
-	// Labels 可选：通用业务维度键值（如 app_group/company_id/uin），落 labels 列，可被 JobCond 精确过滤。
+	// Labels 可选：通用业务维度键值（如 app_group/company_id/uin），落 labels 列，可被 AsyncTaskCond 精确过滤。
 	Labels    map[string]string
 	RequestID string // 可选，覆盖从 ctx 取的 request id
 }
 
-// JobCond 任务列表查询条件（manager 使用；根包只定义结构）。
-type JobCond struct {
+// AsyncTaskCond 任务列表查询条件（manager 使用；根包只定义结构）。
+type AsyncTaskCond struct {
 	Page, PageSize int
 	Type           string
 	Status         Status
@@ -151,10 +151,10 @@ type JobCond struct {
 	OrderBy string
 }
 
-// RunCond 尝试列表查询条件（manager 使用；根包只定义结构）。
-type RunCond struct {
+// AsyncTaskRunCond 尝试列表查询条件（manager 使用；根包只定义结构）。
+type AsyncTaskRunCond struct {
 	Page, PageSize int
-	JobID          string
+	AsyncTaskID          string
 	Generation     int
 	Status         Status
 	Failure        FailureKind

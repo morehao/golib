@@ -15,8 +15,8 @@ func tsPtr(t *time.Time) *int64 {
 	return &v
 }
 
-func toJobResponse(j *gasync.Job) *jobResponse {
-	return &jobResponse{
+func toAsyncTaskResponse(j *gasync.AsyncTask) *asyncTaskResponse {
+	return &asyncTaskResponse{
 		ID:          j.ID,
 		Type:        j.Type,
 		Status:      string(j.Status),
@@ -43,18 +43,18 @@ func toJobResponse(j *gasync.Job) *jobResponse {
 	}
 }
 
-func toJobResponses(list []*gasync.Job) []*jobResponse {
-	out := make([]*jobResponse, 0, len(list))
+func toAsyncTaskResponses(list []*gasync.AsyncTask) []*asyncTaskResponse {
+	out := make([]*asyncTaskResponse, 0, len(list))
 	for _, j := range list {
-		out = append(out, toJobResponse(j))
+		out = append(out, toAsyncTaskResponse(j))
 	}
 	return out
 }
 
-func toRunResponse(r *gasync.JobRun) *runResponse {
+func toRunResponse(r *gasync.AsyncTaskRun) *runResponse {
 	return &runResponse{
 		ID:         r.ID,
-		JobID:      r.JobID,
+		AsyncTaskID:      r.AsyncTaskID,
 		Generation: r.Generation,
 		Attempt:    r.Attempt,
 		Status:     string(r.Status),
@@ -71,7 +71,7 @@ func toRunResponse(r *gasync.JobRun) *runResponse {
 	}
 }
 
-func toRunResponses(list []*gasync.JobRun) []*runResponse {
+func toRunResponses(list []*gasync.AsyncTaskRun) []*runResponse {
 	out := make([]*runResponse, 0, len(list))
 	for _, r := range list {
 		out = append(out, toRunResponse(r))

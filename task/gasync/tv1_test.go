@@ -70,15 +70,15 @@ func newSQLiteManager(t *testing.T, opts ...manager.Option) *manager.Manager {
 	return m
 }
 
-// countingHandler 记录被执行的 job id，可选注入 Execute 行为。
+// countingHandler 记录被执行的 asyncTask id，可选注入 Execute 行为。
 type countingHandler struct {
 	mu    sync.Mutex
 	ids   []string
-	exec  func(ctx context.Context, t *gasync.Job) error
+	exec  func(ctx context.Context, t *gasync.AsyncTask) error
 	hookN int32 // OnSuccess 调用次数
 }
 
-func (h *countingHandler) Execute(ctx context.Context, t *gasync.Job) error {
+func (h *countingHandler) Execute(ctx context.Context, t *gasync.AsyncTask) error {
 	h.mu.Lock()
 	h.ids = append(h.ids, t.ID)
 	h.mu.Unlock()
@@ -88,7 +88,7 @@ func (h *countingHandler) Execute(ctx context.Context, t *gasync.Job) error {
 	return nil
 }
 
-func (h *countingHandler) OnSuccess(ctx context.Context, t *gasync.Job) error {
+func (h *countingHandler) OnSuccess(ctx context.Context, t *gasync.AsyncTask) error {
 	atomic.AddInt32(&h.hookN, 1)
 	return nil
 }
@@ -215,7 +215,7 @@ func scenario(t *testing.T, poll bool) (succeeded int) {
 
 	if notifier != nil {
 		// 消费端把唤醒信号交给 wakeAdapter
-		if err := notifier.Consume(ctx, []string{"tv1:job"}, wa.wake); err != nil {
+		if err := notifier.Consume(ctx, []string{"tv1:asyncTask"}, wa.wake); err != nil {
 			t.Fatalf("Consume: %v", err)
 		}
 	}
@@ -224,7 +224,7 @@ func scenario(t *testing.T, poll bool) (succeeded int) {
 	go func() { runDone <- w.Run(ctx) }()
 
 	for i := 0; i < n; i++ {
-		if _, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "tv1:job", Payload: []byte(`{"i":1}`)}); err != nil {
+		if _, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "tv1:asyncTask", Payload: []byte(`{"i":1}`)}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 	}
@@ -297,7 +297,7 @@ func TestA7_RealRedis_WakeAndDegrade(t *testing.T) {
 	w := newWorker(m, h, wa)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := notifier.Consume(ctx, []string{"a7:job"}, wa.wake); err != nil {
+	if err := notifier.Consume(ctx, []string{"a7:asyncTask"}, wa.wake); err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
 	runDone := make(chan error, 1)
@@ -305,7 +305,7 @@ func TestA7_RealRedis_WakeAndDegrade(t *testing.T) {
 
 	// 正向
 	start := time.Now()
-	if _, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "a7:job"}); err != nil {
+	if _, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "a7:asyncTask"}); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	waitCount(t, h, 1, 3*time.Second)
@@ -345,10 +345,10 @@ func newWorker(m *manager.Manager, h worker.Handler, wa *wakeAdapter) *worker.Wo
 		cfg.FallbackPollInterval = 100 * time.Millisecond
 	}
 	w := worker.New(m.Source(), cfg)
-	if err := w.Register("tv1:job", h); err != nil {
+	if err := w.Register("tv1:asyncTask", h); err != nil {
 		panic(err)
 	}
-	_ = w.Register("a7:job", h)
+	_ = w.Register("a7:asyncTask", h)
 	return w
 }
 
@@ -367,14 +367,14 @@ func TestA12_SourceReplaceable(t *testing.T) {
 		h := &txProbeHandler{executed: &[]int{}, sawTx: &sawTx}
 		cfg := &worker.WorkerConfig{Concurrency: 1, PollInterval: 50 * time.Millisecond, LeaseTTL: 30 * time.Second, ShutdownTimeout: 5 * time.Second}
 		w := worker.New(m.Source(), cfg)
-		if err := w.Register("a12:job", h); err != nil {
+		if err := w.Register("a12:asyncTask", h); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		done := make(chan error, 1)
 		go func() { done <- w.Run(ctx) }()
-		if _, _, err := m.Submit(ctx, &gasync.JobSpec{Type: "a12:job"}); err != nil {
+		if _, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "a12:asyncTask"}); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
 		waitExec(t, h, 1, 5*time.Second)
@@ -396,7 +396,7 @@ func TestA12_SourceReplaceable(t *testing.T) {
 				mu.Lock()
 				if !fetched {
 					fetched = true
-					pending = []byte(`{"available":true,"job":{"id":"remote-1","type":"a12:job","attempt":1,"max_attempts":3}}`)
+					pending = []byte(`{"available":true,"asyncTask":{"id":"remote-1","type":"a12:asyncTask","attempt":1,"max_attempts":3}}`)
 					mu.Unlock()
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(200)
@@ -423,7 +423,7 @@ func TestA12_SourceReplaceable(t *testing.T) {
 		h := &txProbeHandler{executed: &[]int{}, sawTx: &sawTx}
 		cfg := &worker.WorkerConfig{Concurrency: 1, PollInterval: 50 * time.Millisecond, LeaseTTL: 30 * time.Second, ShutdownTimeout: 5 * time.Second}
 		w := worker.New(rs, cfg)
-		if err := w.Register("a12:job", h); err != nil {
+		if err := w.Register("a12:asyncTask", h); err != nil {
 			t.Fatalf("register: %v", err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -459,14 +459,14 @@ type txProbeHandler struct {
 	sawTx    *int32
 }
 
-func (h *txProbeHandler) Execute(ctx context.Context, t *gasync.Job) error {
+func (h *txProbeHandler) Execute(ctx context.Context, t *gasync.AsyncTask) error {
 	h.mu.Lock()
 	h.n++
 	h.mu.Unlock()
 	return nil
 }
 
-func (h *txProbeHandler) OnSuccess(ctx context.Context, t *gasync.Job) error {
+func (h *txProbeHandler) OnSuccess(ctx context.Context, t *gasync.AsyncTask) error {
 	if gasync.TxFromContext(ctx) != nil {
 		atomic.StoreInt32(h.sawTx, 1)
 	}
@@ -475,10 +475,10 @@ func (h *txProbeHandler) OnSuccess(ctx context.Context, t *gasync.Job) error {
 
 // asLifecycle 要求 Lifecycle 接口方法齐全，缺一即退化为「无钩子」，
 // 因此这里补齐其余 4 个方法（空实现）。
-func (h *txProbeHandler) BeforeExecute(ctx context.Context, t *gasync.Job) error          { return nil }
-func (h *txProbeHandler) OnRetry(ctx context.Context, t *gasync.Job, cause error) error   { return nil }
-func (h *txProbeHandler) OnFailure(ctx context.Context, t *gasync.Job, cause error) error { return nil }
-func (h *txProbeHandler) OnCanceled(ctx context.Context, t *gasync.Job) error             { return nil }
+func (h *txProbeHandler) BeforeExecute(ctx context.Context, t *gasync.AsyncTask) error          { return nil }
+func (h *txProbeHandler) OnRetry(ctx context.Context, t *gasync.AsyncTask, cause error) error   { return nil }
+func (h *txProbeHandler) OnFailure(ctx context.Context, t *gasync.AsyncTask, cause error) error { return nil }
+func (h *txProbeHandler) OnCanceled(ctx context.Context, t *gasync.AsyncTask) error             { return nil }
 
 func waitExec(t *testing.T, h *txProbeHandler, want int, d time.Duration) {
 	t.Helper()

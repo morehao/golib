@@ -12,12 +12,12 @@ func TestCleanupDeletesTerminalOld(t *testing.T) {
 	ctx := context.Background()
 	old := time.Now().Add(-48 * time.Hour)
 	// 终态、finished_at 早于 before。
-	id := insertJob(t, s, &CoreJob{
+	id := insertAsyncTask(t, s, &CoreAsyncTask{
 		TaskType: "invoice", Status: "succeeded", Attempt: 1,
 		NextRunAt: old, FinishedAt: &old,
 	})
-	insertRun(t, s, &CoreJobRun{
-		JobID: id, Generation: 1, Attempt: 1, Status: "succeeded",
+	insertRun(t, s, &CoreAsyncTaskRun{
+		AsyncTaskID: id, Generation: 1, Attempt: 1, Status: "succeeded",
 		StartedAt: old, FinishedAt: &old,
 	})
 
@@ -29,8 +29,8 @@ func TestCleanupDeletesTerminalOld(t *testing.T) {
 	if tasks != 1 || runs != 1 {
 		t.Fatalf("cleanup tasks=%d runs=%d, want 1/1", tasks, runs)
 	}
-	if n, _ := s.countJobs(ctx); n != 0 {
-		t.Errorf("jobs left = %d, want 0", n)
+	if n, _ := s.countAsyncTasks(ctx); n != 0 {
+		t.Errorf("asyncTasks left = %d, want 0", n)
 	}
 	if n, _ := s.countRuns(ctx); n != 0 {
 		t.Errorf("runs left = %d, want 0", n)
@@ -42,11 +42,11 @@ func TestCleanupKeepsPendingRunning(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	old := time.Now().Add(-48 * time.Hour)
-	insertJob(t, s, &CoreJob{TaskType: "invoice", Status: "pending", NextRunAt: old})
-	insertJob(t, s, &CoreJob{TaskType: "invoice", Status: "running", NextRunAt: old, Attempt: 1})
+	insertAsyncTask(t, s, &CoreAsyncTask{TaskType: "invoice", Status: "pending", NextRunAt: old})
+	insertAsyncTask(t, s, &CoreAsyncTask{TaskType: "invoice", Status: "running", NextRunAt: old, Attempt: 1})
 	// 终态但 finished_at 不到期。
 	recent := time.Now().Add(-time.Hour)
-	insertJob(t, s, &CoreJob{TaskType: "invoice", Status: "failed", NextRunAt: old, FinishedAt: &recent})
+	insertAsyncTask(t, s, &CoreAsyncTask{TaskType: "invoice", Status: "failed", NextRunAt: old, FinishedAt: &recent})
 
 	before := time.Now().Add(-24 * time.Hour)
 	tasks, runs, err := s.Cleanup(ctx, before, 200)
@@ -56,8 +56,8 @@ func TestCleanupKeepsPendingRunning(t *testing.T) {
 	if tasks != 0 || runs != 0 {
 		t.Fatalf("cleanup tasks=%d runs=%d, want 0/0 (pending/running/recent kept)", tasks, runs)
 	}
-	if n, _ := s.countJobs(ctx); n != 3 {
-		t.Errorf("jobs left = %d, want 3", n)
+	if n, _ := s.countAsyncTasks(ctx); n != 3 {
+		t.Errorf("asyncTasks left = %d, want 3", n)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestCleanupBatch(t *testing.T) {
 	ctx := context.Background()
 	old := time.Now().Add(-48 * time.Hour)
 	for i := 0; i < 5; i++ {
-		insertJob(t, s, &CoreJob{TaskType: "invoice", Status: "failed", NextRunAt: old, FinishedAt: &old})
+		insertAsyncTask(t, s, &CoreAsyncTask{TaskType: "invoice", Status: "failed", NextRunAt: old, FinishedAt: &old})
 	}
 	before := time.Now().Add(-24 * time.Hour)
 	tasks, _, err := s.Cleanup(ctx, before, 2)
@@ -77,19 +77,19 @@ func TestCleanupBatch(t *testing.T) {
 	if tasks != 5 {
 		t.Fatalf("cleanup tasks=%d, want 5 (loops batches)", tasks)
 	}
-	if n, _ := s.countJobs(ctx); n != 0 {
-		t.Errorf("jobs left = %d, want 0", n)
+	if n, _ := s.countAsyncTasks(ctx); n != 0 {
+		t.Errorf("asyncTasks left = %d, want 0", n)
 	}
 }
 
-func (s *store) countJobs(ctx context.Context) (int64, error) {
+func (s *store) countAsyncTasks(ctx context.Context) (int64, error) {
 	var n int64
-	err := s.db.WithContext(ctx).Model(&CoreJob{}).Count(&n).Error
+	err := s.db.WithContext(ctx).Model(&CoreAsyncTask{}).Count(&n).Error
 	return n, err
 }
 
 func (s *store) countRuns(ctx context.Context) (int64, error) {
 	var n int64
-	err := s.db.WithContext(ctx).Model(&CoreJobRun{}).Count(&n).Error
+	err := s.db.WithContext(ctx).Model(&CoreAsyncTaskRun{}).Count(&n).Error
 	return n, err
 }

@@ -110,38 +110,38 @@ func newSource(t *testing.T, f *fakeCenter) *Source {
 
 // ---- Fetch ----
 
-func TestFetch_HasJob(t *testing.T) {
+func TestFetch_HasAsyncTask(t *testing.T) {
 	f := newFakeCenter(t)
 	f.on("/GetPendingJob", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": true,
-			"job": map[string]any{
-				"id": "job-1", "type": "invoice", "payload": "aGVsbG8=",
+			"asyncTask": map[string]any{
+				"id": "asyncTask-1", "type": "invoice", "payload": "aGVsbG8=",
 				"attempt": 3, "max_attempts": 5, "timeout_ms": 1500,
 			},
 		})
 	})
 	s := newSource(t, f)
 
-	job, err := s.Fetch(context.Background(), "invoice")
+	asyncTask, err := s.Fetch(context.Background(), "invoice")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if job == nil || job.ID != "job-1" {
-		t.Fatalf("unexpected job: %+v", job)
+	if asyncTask == nil || asyncTask.ID != "asyncTask-1" {
+		t.Fatalf("unexpected asyncTask: %+v", asyncTask)
 	}
 	// attempt 由中心给出。
-	if job.Attempt != 3 {
-		t.Errorf("attempt = %d, want 3 (from center)", job.Attempt)
+	if asyncTask.Attempt != 3 {
+		t.Errorf("attempt = %d, want 3 (from center)", asyncTask.Attempt)
 	}
-	if job.MaxAttempts != 5 {
-		t.Errorf("max_attempts = %d, want 5", job.MaxAttempts)
+	if asyncTask.MaxAttempts != 5 {
+		t.Errorf("max_attempts = %d, want 5", asyncTask.MaxAttempts)
 	}
-	if job.Timeout != 1500*time.Millisecond {
-		t.Errorf("timeout = %v, want 1.5s", job.Timeout)
+	if asyncTask.Timeout != 1500*time.Millisecond {
+		t.Errorf("timeout = %v, want 1.5s", asyncTask.Timeout)
 	}
-	if string(job.Payload) != "hello" {
-		t.Errorf("payload = %q, want hello", job.Payload)
+	if string(asyncTask.Payload) != "hello" {
+		t.Errorf("payload = %q, want hello", asyncTask.Payload)
 	}
 	// 请求体断言。
 	f.mu.Lock()
@@ -152,7 +152,7 @@ func TestFetch_HasJob(t *testing.T) {
 	}
 }
 
-func TestFetch_NoJob(t *testing.T) {
+func TestFetch_NoAsyncTask(t *testing.T) {
 	for name, status := range map[string]int{
 		"available_false": http.StatusOK,
 		"no_content":      http.StatusNoContent,
@@ -167,20 +167,20 @@ func TestFetch_NoJob(t *testing.T) {
 				writeJSON(w, status, map[string]any{"available": false})
 			})
 			s := newSource(t, f)
-			job, err := s.Fetch(context.Background(), "invoice")
-			if job != nil {
-				t.Fatalf("want nil job, got %+v", job)
+			asyncTask, err := s.Fetch(context.Background(), "invoice")
+			if asyncTask != nil {
+				t.Fatalf("want nil asyncTask, got %+v", asyncTask)
 			}
-			if !errors.Is(err, gasync.ErrNoJob) {
-				t.Fatalf("err = %v, want ErrNoJob", err)
+			if !errors.Is(err, gasync.ErrNoAsyncTask) {
+				t.Fatalf("err = %v, want ErrNoAsyncTask", err)
 			}
 		})
 	}
 }
 
-// TestFetch_5xx_NotNoJob 证明「5xx 时 Worker 不空转」：
-// 5xx 必须返回一个非 ErrNoJob 的普通错误，Worker 据此走错误退避而非把 5xx 当「无任务」。
-func TestFetch_5xx_NotNoJob(t *testing.T) {
+// TestFetch_5xx_NotNoAsyncTask 证明「5xx 时 Worker 不空转」：
+// 5xx 必须返回一个非 ErrNoAsyncTask 的普通错误，Worker 据此走错误退避而非把 5xx 当「无任务」。
+func TestFetch_5xx_NotNoAsyncTask(t *testing.T) {
 	f := newFakeCenter(t)
 	f.on("/GetPendingJob", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -188,15 +188,15 @@ func TestFetch_5xx_NotNoJob(t *testing.T) {
 	})
 	s := newSource(t, f)
 
-	job, err := s.Fetch(context.Background(), "invoice")
-	if job != nil {
-		t.Fatalf("want nil job, got %+v", job)
+	asyncTask, err := s.Fetch(context.Background(), "invoice")
+	if asyncTask != nil {
+		t.Fatalf("want nil asyncTask, got %+v", asyncTask)
 	}
 	if err == nil {
 		t.Fatal("want error on 5xx, got nil")
 	}
-	if errors.Is(err, gasync.ErrNoJob) {
-		t.Fatalf("5xx must NOT map to ErrNoJob (would cause busy-spin), got %v", err)
+	if errors.Is(err, gasync.ErrNoAsyncTask) {
+		t.Fatalf("5xx must NOT map to ErrNoAsyncTask (would cause busy-spin), got %v", err)
 	}
 	if !strings.Contains(err.Error(), "502") {
 		t.Errorf("error should carry status: %v", err)
@@ -212,13 +212,13 @@ func TestRenew_Success(t *testing.T) {
 	})
 	s := newSource(t, f)
 
-	if err := s.Renew(context.Background(), &gasync.Job{ID: "job-1"}); err != nil {
+	if err := s.Renew(context.Background(), &gasync.AsyncTask{ID: "asyncTask-1"}); err != nil {
 		t.Fatalf("Renew: %v", err)
 	}
 	f.mu.Lock()
 	got := f.lastHeartbeat
 	f.mu.Unlock()
-	if got["task_id"] != "job-1" || got["worker_id"] != "w-1" {
+	if got["task_id"] != "asyncTask-1" || got["worker_id"] != "w-1" {
 		t.Errorf("Heartbeat body = %v", got)
 	}
 }
@@ -231,9 +231,9 @@ func TestRenew_TwoConsecutiveFailures(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	s := newSource(t, f)
-	job := &gasync.Job{ID: "job-1"}
+	asyncTask := &gasync.AsyncTask{ID: "asyncTask-1"}
 
-	err1 := s.Renew(context.Background(), job)
+	err1 := s.Renew(context.Background(), asyncTask)
 	if err1 == nil {
 		t.Fatal("1st renew want error, got nil")
 	}
@@ -241,7 +241,7 @@ func TestRenew_TwoConsecutiveFailures(t *testing.T) {
 		t.Fatalf("1st failure must not be ErrRenewLost yet: %v", err1)
 	}
 
-	err2 := s.Renew(context.Background(), job)
+	err2 := s.Renew(context.Background(), asyncTask)
 	if err2 == nil {
 		t.Fatal("2nd renew want error, got nil")
 	}
@@ -263,15 +263,15 @@ func TestRenew_SuccessResetsCounter(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	s := newSource(t, f)
-	job := &gasync.Job{ID: "job-1"}
+	asyncTask := &gasync.AsyncTask{ID: "asyncTask-1"}
 
-	_ = s.Renew(context.Background(), job) // fail 1
+	_ = s.Renew(context.Background(), asyncTask) // fail 1
 	fail.Store(false)
-	if err := s.Renew(context.Background(), job); err != nil { // success resets
+	if err := s.Renew(context.Background(), asyncTask); err != nil { // success resets
 		t.Fatalf("renew success: %v", err)
 	}
 	fail.Store(true)
-	err := s.Renew(context.Background(), job) // fail again -> only 1st consecutive
+	err := s.Renew(context.Background(), asyncTask) // fail again -> only 1st consecutive
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -302,7 +302,7 @@ func TestSave_Success_CallbackAndPost(t *testing.T) {
 	}
 
 	r := gasync.Result{Outcome: gasync.OutcomeSucceeded, Payload: []byte("done")}
-	if err := s.Save(context.Background(), &gasync.Job{ID: "job-1"}, r, callback); err != nil {
+	if err := s.Save(context.Background(), &gasync.AsyncTask{ID: "asyncTask-1"}, r, callback); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -320,7 +320,7 @@ func TestSave_Success_CallbackAndPost(t *testing.T) {
 	}
 
 	cb := f.lastCallback()
-	if cb["task_id"] != "job-1" || cb["worker_id"] != "w-1" || cb["status"] != "succeeded" {
+	if cb["task_id"] != "asyncTask-1" || cb["worker_id"] != "w-1" || cb["status"] != "succeeded" {
 		t.Errorf("callback body = %v", cb)
 	}
 }
@@ -332,7 +332,7 @@ func TestSave_FailureStillCallbacks(t *testing.T) {
 	s := newSource(t, f)
 
 	r := gasync.Result{Outcome: gasync.OutcomeFailed, Failure: gasync.FailureHandler, Err: errors.New("boom")}
-	if err := s.Save(context.Background(), &gasync.Job{ID: "job-1"}, r, nil); err != nil {
+	if err := s.Save(context.Background(), &gasync.AsyncTask{ID: "asyncTask-1"}, r, nil); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	cb := f.lastCallback()
@@ -352,7 +352,7 @@ func TestSave_HookErrorDoesNotBlockCallback(t *testing.T) {
 
 	callback := func(context.Context) error { return errors.New("hook failed") }
 	r := gasync.Result{Outcome: gasync.OutcomeSucceeded, Payload: []byte("ok")}
-	if err := s.Save(context.Background(), &gasync.Job{ID: "job-1"}, r, callback); err != nil {
+	if err := s.Save(context.Background(), &gasync.AsyncTask{ID: "asyncTask-1"}, r, callback); err != nil {
 		t.Fatalf("Save should not fail on hook error (still callback), got %v", err)
 	}
 	if f.callbackCount() != 1 {
@@ -375,7 +375,7 @@ func TestSave_CallbackRetry(t *testing.T) {
 	s := newSource(t, f)
 
 	r := gasync.Result{Outcome: gasync.OutcomeSucceeded}
-	if err := s.Save(context.Background(), &gasync.Job{ID: "job-1"}, r, nil); err != nil {
+	if err := s.Save(context.Background(), &gasync.AsyncTask{ID: "asyncTask-1"}, r, nil); err != nil {
 		t.Fatalf("Save should recover after retries: %v", err)
 	}
 	if got := atomic.LoadInt32(&hits); got != 3 {
@@ -393,7 +393,7 @@ func TestSave_CallbackExhausted(t *testing.T) {
 	})
 	s := newSource(t, f)
 
-	err := s.Save(context.Background(), &gasync.Job{ID: "job-1"}, gasync.Result{Outcome: gasync.OutcomeSucceeded}, nil)
+	err := s.Save(context.Background(), &gasync.AsyncTask{ID: "asyncTask-1"}, gasync.Result{Outcome: gasync.OutcomeSucceeded}, nil)
 	if !errors.Is(err, ErrCallbackLost) {
 		t.Fatalf("err = %v, want ErrCallbackLost", err)
 	}
@@ -403,9 +403,9 @@ func TestSave_CallbackExhausted(t *testing.T) {
 	}
 }
 
-// ---- NoJobBackoff ----
+// ---- NoAsyncTaskBackoff ----
 
-func TestNoJobBackoff(t *testing.T) {
+func TestNoAsyncTaskBackoff(t *testing.T) {
 	cases := []struct {
 		n    int
 		want time.Duration
@@ -419,8 +419,8 @@ func TestNoJobBackoff(t *testing.T) {
 		{-1, 500 * time.Millisecond},
 	}
 	for _, c := range cases {
-		if got := NoJobBackoff(c.n); got != c.want {
-			t.Errorf("NoJobBackoff(%d) = %v, want %v", c.n, got, c.want)
+		if got := NoAsyncTaskBackoff(c.n); got != c.want {
+			t.Errorf("NoAsyncTaskBackoff(%d) = %v, want %v", c.n, got, c.want)
 		}
 	}
 }

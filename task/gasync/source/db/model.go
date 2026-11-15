@@ -4,13 +4,13 @@ import "time"
 
 // 表名常量。两表都以 id 为主键；core_async_task_run.job_id 是逻辑关联，无物理外键。
 const (
-	// CoreJobTableName 任务实体表。
-	CoreJobTableName = "core_async_task"
-	// CoreJobRunTableName 单次尝试记录表。
-	CoreJobRunTableName = "core_async_task_run"
+	// CoreAsyncTaskTableName 任务实体表。
+	CoreAsyncTaskTableName = "core_async_task"
+	// CoreAsyncTaskRunTableName 单次尝试记录表。
+	CoreAsyncTaskRunTableName = "core_async_task_run"
 )
 
-// CoreJob 是有状态的任务实体，对应表 core_async_task。
+// CoreAsyncTask 是有状态的任务实体，对应表 core_async_task。
 //
 // 与契约「数据模型」字段表逐列对齐：
 //   - 时间列不写 type:datetime(3)（写了 PG 会生成非法类型）；
@@ -18,7 +18,7 @@ const (
 //   - uniq_key 用 *string：空即 NULL，不参与唯一约束；
 //   - 无软删除（不做 gorm.DeletedAt）；
 //   - 索引名一律带表前缀（PG 索引名 schema 级唯一）。
-type CoreJob struct {
+type CoreAsyncTask struct {
 	ID string `gorm:"column:id;primaryKey;type:varchar(36);comment:任务 ID（UUID v4）"`
 	// created_at / updated_at 由 GORM 维护（可空）。created_at 单独参与
 	// idx_core_async_task_task_type_status_created_at（管理面按类型+状态倒序分页）。
@@ -59,18 +59,18 @@ type CoreJob struct {
 }
 
 // TableName 固定表名。
-func (CoreJob) TableName() string { return CoreJobTableName }
+func (CoreAsyncTask) TableName() string { return CoreAsyncTaskTableName }
 
-// CoreJobRun 是单次尝试记录，对应表 core_async_task_run。
+// CoreAsyncTaskRun 是单次尝试记录，对应表 core_async_task_run。
 //
 // 一条任务有 0..N 次尝试，按 generation（重放轮次）分组；
 // (job_id, generation, attempt) 唯一，表示同一轮次第 N 次尝试只允许一行。
-type CoreJobRun struct {
+type CoreAsyncTaskRun struct {
 	ID string `gorm:"column:id;primaryKey;type:varchar(36);comment:尝试 ID（UUID v4）"`
 	// created_at 单独索引：兜底清理按范围删除。
 	CreatedAt time.Time `gorm:"column:created_at;index:idx_core_async_task_run_created_at;comment:创建时间"`
 
-	JobID      string `gorm:"column:job_id;type:varchar(36);not null;uniqueIndex:uk_core_async_task_run_task_id_generation_attempt,priority:1;comment:所属任务 ID"`
+	AsyncTaskID      string `gorm:"column:job_id;type:varchar(36);not null;uniqueIndex:uk_core_async_task_run_task_id_generation_attempt,priority:1;comment:所属任务 ID"`
 	Generation int32  `gorm:"column:generation;not null;default:1;uniqueIndex:uk_core_async_task_run_task_id_generation_attempt,priority:2;comment:所属重放轮次"`
 	Attempt    int32  `gorm:"column:attempt;not null;uniqueIndex:uk_core_async_task_run_task_id_generation_attempt,priority:3;comment:本轮第几次尝试"`
 
@@ -89,15 +89,15 @@ type CoreJobRun struct {
 }
 
 // TableName 固定表名。
-func (CoreJobRun) TableName() string { return CoreJobRunTableName }
+func (CoreAsyncTaskRun) TableName() string { return CoreAsyncTaskRunTableName }
 
-// CoreJobTypeTableName 任务类型开关表名。
-const CoreJobTypeTableName = "core_async_task_type"
+// CoreAsyncTaskTypeTableName 任务类型开关表名。
+const CoreAsyncTaskTypeTableName = "core_async_task_type"
 
-// CoreJobType 是任务类型开关（仅记录被显式 Disable 的类型；无行 = 启用，fail-open）。
+// CoreAsyncTaskType 是任务类型开关（仅记录被显式 Disable 的类型；无行 = 启用，fail-open）。
 //
 // 与 core_async_task（任务实例）解耦：本表只承载「某类型当前是否允许被认领执行」这一运营开关。
-type CoreJobType struct {
+type CoreAsyncTaskType struct {
 	// ID 代理主键（与其他 gasync 表一致，均为 string id）；业务唯一键是 task_type（唯一索引）。
 	ID        string    `gorm:"column:id;primaryKey;type:varchar(36);comment:主键"`
 	TaskType  string    `gorm:"column:task_type;type:varchar(128);not null;uniqueIndex:uk_core_async_task_type_task_type;comment:任务类型"`
@@ -106,4 +106,4 @@ type CoreJobType struct {
 }
 
 // TableName 固定表名。
-func (CoreJobType) TableName() string { return CoreJobTypeTableName }
+func (CoreAsyncTaskType) TableName() string { return CoreAsyncTaskTypeTableName }

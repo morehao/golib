@@ -17,7 +17,7 @@ func TestStart_ReturnsImmediately(t *testing.T) {
 		Concurrency:  2,
 		PollInterval: 5 * time.Millisecond,
 	})
-	if err := w.Register("invoice:issue", worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil })); err != nil {
+	if err := w.Register("invoice:issue", worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil })); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -64,7 +64,7 @@ func TestStart_InvalidConfig(t *testing.T) {
 // 重复 Start（以及 Run 后再 Start）返回 ErrWorkerAlreadyRunning。
 func TestStart_AlreadyRunning(t *testing.T) {
 	w := worker.New(newMemSource(), &worker.WorkerConfig{PollInterval: 5 * time.Millisecond})
-	if err := w.Register("a", worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil })); err != nil {
+	if err := w.Register("a", worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil })); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
@@ -90,7 +90,7 @@ func TestStart_AlreadyRunning(t *testing.T) {
 // 停止后 Start 返回 ErrWorkerStopped。
 func TestStart_Stopped(t *testing.T) {
 	w := worker.New(newMemSource(), nil)
-	if err := w.Register("a", worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil })); err != nil {
+	if err := w.Register("a", worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil })); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if err := w.Shutdown(context.Background()); err != nil {
@@ -105,7 +105,7 @@ func TestStart_Stopped(t *testing.T) {
 func TestStart_RunBlocksUntilCancel(t *testing.T) {
 	src := newMemSource()
 	w := worker.New(src, &worker.WorkerConfig{PollInterval: 5 * time.Millisecond})
-	if err := w.Register("a", worker.HandlerFunc(func(context.Context, *gasync.Job) error { return nil })); err != nil {
+	if err := w.Register("a", worker.HandlerFunc(func(context.Context, *gasync.AsyncTask) error { return nil })); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 

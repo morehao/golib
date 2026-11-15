@@ -16,7 +16,7 @@ import (
 
 // IsTypeEnabled 查询某类型是否启用；无行或查询失败返回 true（fail-open）。
 func (s *store) IsTypeEnabled(ctx context.Context, taskType string) bool {
-	var row CoreJobType
+	var row CoreAsyncTaskType
 	err := s.db.WithContext(ctx).Where("task_type = ?", taskType).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return true
@@ -31,7 +31,7 @@ func (s *store) IsTypeEnabled(ctx context.Context, taskType string) bool {
 func (s *store) SetTypeEnabled(ctx context.Context, taskType string, enabled bool) error {
 	// 用 map 显式写入，避免 GORM 对 bool 零值(false)套用列默认 true。
 	row := map[string]any{"id": genUUID(), "task_type": taskType, "enabled": enabled, "updated_at": time.Now()}
-	return s.db.WithContext(ctx).Table(CoreJobTypeTableName).
+	return s.db.WithContext(ctx).Table(CoreAsyncTaskTypeTableName).
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "task_type"}},
 			DoUpdates: clause.AssignmentColumns([]string{"enabled", "updated_at"}),

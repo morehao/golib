@@ -21,16 +21,16 @@ import (
 // @Param biz_id query string false "业务 ID"
 // @Param page query int false "页码"
 // @Param page_size query int false "每页条数"
-// @Success 200 {object} gincontext.DtoRender{data=jobListResponse}
-// @Router /jobs [get]
+// @Success 200 {object} gincontext.DtoRender{data=asyncTaskListResponse}
+// @Router /asyncTasks [get]
 func handleList(mgr *manager.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req listJobsRequest
+		var req listAsyncTasksRequest
 		if err := c.ShouldBindQuery(&req); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		cond := &gasync.JobCond{
+		cond := &gasync.AsyncTaskCond{
 			Type:    req.Type,
 			Status:  gasync.Status(req.Status),
 			BizType: req.BizType,
@@ -40,10 +40,10 @@ func handleList(mgr *manager.Manager) gin.HandlerFunc {
 		cond.PageSize = req.PageSize
 		list, total, err := mgr.List(c.Request.Context(), cond)
 		if err != nil {
-			failJobOp(c, err)
+			failAsyncTaskOp(c, err)
 			return
 		}
-		gincontext.Success(c, &jobListResponse{List: toJobResponses(list), Total: total})
+		gincontext.Success(c, &asyncTaskListResponse{List: toAsyncTaskResponses(list), Total: total})
 	}
 }
 
@@ -54,21 +54,21 @@ func handleList(mgr *manager.Manager) gin.HandlerFunc {
 // @accept application/json
 // @Produce application/json
 // @Param id path string true "任务 ID"
-// @Success 200 {object} gincontext.DtoRender{data=jobResponse}
-// @Router /jobs/{id} [get]
+// @Success 200 {object} gincontext.DtoRender{data=asyncTaskResponse}
+// @Router /asyncTasks/{id} [get]
 func handleGet(mgr *manager.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var uri jobIDURI
+		var uri asyncTaskIDURI
 		if err := c.ShouldBindUri(&uri); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		job, err := mgr.Get(c.Request.Context(), uri.ID)
+		asyncTask, err := mgr.Get(c.Request.Context(), uri.ID)
 		if err != nil {
-			failJobOp(c, err)
+			failAsyncTaskOp(c, err)
 			return
 		}
-		gincontext.Success(c, toJobResponse(job))
+		gincontext.Success(c, toAsyncTaskResponse(asyncTask))
 	}
 }
 
@@ -85,10 +85,10 @@ func handleGet(mgr *manager.Manager) gin.HandlerFunc {
 // @Param page query int false "页码"
 // @Param page_size query int false "每页条数"
 // @Success 200 {object} gincontext.DtoRender{data=runListResponse}
-// @Router /jobs/{id}/runs [get]
+// @Router /asyncTasks/{id}/runs [get]
 func handleListRuns(mgr *manager.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var uri jobIDURI
+		var uri asyncTaskIDURI
 		if err := c.ShouldBindUri(&uri); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
@@ -100,11 +100,11 @@ func handleListRuns(mgr *manager.Manager) gin.HandlerFunc {
 		}
 		// 先校验任务存在，避免不存在的任务返回空列表掩盖 404。
 		if _, err := mgr.Get(c.Request.Context(), uri.ID); err != nil {
-			failJobOp(c, err)
+			failAsyncTaskOp(c, err)
 			return
 		}
-		cond := &gasync.RunCond{
-			JobID:      uri.ID,
+		cond := &gasync.AsyncTaskRunCond{
+			AsyncTaskID:      uri.ID,
 			Generation: req.Generation,
 			Status:     gasync.Status(req.Status),
 			Failure:    gasync.FailureKind(req.Failure),
@@ -113,7 +113,7 @@ func handleListRuns(mgr *manager.Manager) gin.HandlerFunc {
 		cond.PageSize = req.PageSize
 		list, total, err := mgr.ListRuns(c.Request.Context(), cond)
 		if err != nil {
-			failJobOp(c, err)
+			failAsyncTaskOp(c, err)
 			return
 		}
 		gincontext.Success(c, &runListResponse{List: toRunResponses(list), Total: total})
@@ -128,17 +128,17 @@ func handleListRuns(mgr *manager.Manager) gin.HandlerFunc {
 // @Produce application/json
 // @Param id path string true "任务 ID"
 // @Success 200 {object} gincontext.DtoRender{data=cancelResponse}
-// @Router /jobs/{id}/cancel [post]
+// @Router /asyncTasks/{id}/cancel [post]
 func handleCancel(mgr *manager.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var uri jobIDURI
+		var uri asyncTaskIDURI
 		if err := c.ShouldBindUri(&uri); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
 		canceled, err := mgr.Cancel(c.Request.Context(), uri.ID)
 		if err != nil {
-			failJobOp(c, err)
+			failAsyncTaskOp(c, err)
 			return
 		}
 		gincontext.Success(c, &cancelResponse{Canceled: canceled})
@@ -152,21 +152,21 @@ func handleCancel(mgr *manager.Manager) gin.HandlerFunc {
 // @accept application/json
 // @Produce application/json
 // @Param id path string true "任务 ID"
-// @Success 200 {object} gincontext.DtoRender{data=jobResponse}
-// @Router /jobs/{id}/replay [post]
+// @Success 200 {object} gincontext.DtoRender{data=asyncTaskResponse}
+// @Router /asyncTasks/{id}/replay [post]
 func handleReplay(mgr *manager.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var uri jobIDURI
+		var uri asyncTaskIDURI
 		if err := c.ShouldBindUri(&uri); err != nil {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		job, err := mgr.Replay(c.Request.Context(), uri.ID)
+		asyncTask, err := mgr.Replay(c.Request.Context(), uri.ID)
 		if err != nil {
-			failJobOp(c, err)
+			failAsyncTaskOp(c, err)
 			return
 		}
-		gincontext.Success(c, toJobResponse(job))
+		gincontext.Success(c, toAsyncTaskResponse(asyncTask))
 	}
 }
 
@@ -177,12 +177,12 @@ func handleReplay(mgr *manager.Manager) gin.HandlerFunc {
 // @accept application/json
 // @Produce application/json
 // @Success 200 {object} gincontext.DtoRender{data=statsResponse}
-// @Router /jobs/-/stats [get]
+// @Router /asyncTasks/-/stats [get]
 func handleStats(mgr *manager.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		st, err := mgr.Stats(c.Request.Context())
 		if err != nil {
-			failJobOp(c, err)
+			failAsyncTaskOp(c, err)
 			return
 		}
 		gincontext.Success(c, toStatsResponse(st))

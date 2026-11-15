@@ -12,45 +12,45 @@ import (
 
 // Store 是管理面的只读存储 + Cleanup。写操作走 Manager。
 type Store interface {
-	GetJob(ctx context.Context, id string) (*gasync.Job, error)
-	GetJobWithRuns(ctx context.Context, id string) (*gasync.Job, []*gasync.JobRun, error)
-	ListJob(ctx context.Context, cond *gasync.JobCond) ([]*gasync.Job, int64, error)
-	ListRun(ctx context.Context, cond *gasync.RunCond) ([]*gasync.JobRun, int64, error)
-	GetRun(ctx context.Context, id string) (*gasync.JobRun, error)
+	GetAsyncTask(ctx context.Context, id string) (*gasync.AsyncTask, error)
+	GetAsyncTaskWithRuns(ctx context.Context, id string) (*gasync.AsyncTask, []*gasync.AsyncTaskRun, error)
+	ListAsyncTask(ctx context.Context, cond *gasync.AsyncTaskCond) ([]*gasync.AsyncTask, int64, error)
+	ListRun(ctx context.Context, cond *gasync.AsyncTaskRunCond) ([]*gasync.AsyncTaskRun, int64, error)
+	GetRun(ctx context.Context, id string) (*gasync.AsyncTaskRun, error)
 	Cleanup(ctx context.Context, before time.Time, batch int) (tasks int64, runs int64, err error)
 }
 
-// GetJob 按 ID 取任务，不存在返回 ErrJobNotFound。
-func (s *store) GetJob(ctx context.Context, id string) (*gasync.Job, error) {
-	row, err := s.loadJobRow(ctx, id)
+// GetAsyncTask 按 ID 取任务，不存在返回 ErrAsyncTaskNotFound。
+func (s *store) GetAsyncTask(ctx context.Context, id string) (*gasync.AsyncTask, error) {
+	row, err := s.loadAsyncTaskRow(ctx, id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, gasync.ErrJobNotFound
+		return nil, gasync.ErrAsyncTaskNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	return jobRowToDomain(row), nil
+	return asyncTaskRowToDomain(row), nil
 }
 
-// GetJobWithRuns 取任务及其跨重放的全部尝试记录（按 generation, attempt 升序）。
-// 任务不存在返回 ErrJobNotFound。
-func (s *store) GetJobWithRuns(ctx context.Context, id string) (*gasync.Job, []*gasync.JobRun, error) {
-	job, err := s.GetJob(ctx, id)
+// GetAsyncTaskWithRuns 取任务及其跨重放的全部尝试记录（按 generation, attempt 升序）。
+// 任务不存在返回 ErrAsyncTaskNotFound。
+func (s *store) GetAsyncTaskWithRuns(ctx context.Context, id string) (*gasync.AsyncTask, []*gasync.AsyncTaskRun, error) {
+	asyncTask, err := s.GetAsyncTask(ctx, id)
 	if err != nil {
 		return nil, nil, err
 	}
-	var rows []CoreJobRun
+	var rows []CoreAsyncTaskRun
 	if err := s.db.WithContext(ctx).Where("job_id = ?", id).
 		Order("generation ASC, attempt ASC").Find(&rows).Error; err != nil {
 		return nil, nil, err
 	}
-	return job, runRowsToDomain(rows), nil
+	return asyncTask, runRowsToDomain(rows), nil
 }
 
-// ListJob 分页查询任务，返回当页与总数。条件缺省即不过滤；PageSize<=0 默认 20，上限 200。
-func (s *store) ListJob(ctx context.Context, cond *gasync.JobCond) ([]*gasync.Job, int64, error) {
+// ListAsyncTask 分页查询任务，返回当页与总数。条件缺省即不过滤；PageSize<=0 默认 20，上限 200。
+func (s *store) ListAsyncTask(ctx context.Context, cond *gasync.AsyncTaskCond) ([]*gasync.AsyncTask, int64, error) {
 	page, size := normPage(cond.Page, cond.PageSize)
-	q := s.db.WithContext(ctx).Model(&CoreJob{})
+	q := s.db.WithContext(ctx).Model(&CoreAsyncTask{})
 	if cond.Type != "" {
 		q = q.Where("task_type = ?", cond.Type)
 	}
@@ -84,15 +84,15 @@ func (s *store) ListJob(ctx context.Context, cond *gasync.JobCond) ([]*gasync.Jo
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	var rows []CoreJob
+	var rows []CoreAsyncTask
 	if err := q.Order(orderByClause(cond.OrderBy)).
 		Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
-	return jobRowsToDomain(rows), total, nil
+	return asyncTaskRowsToDomain(rows), total, nil
 }
 
-// orderByClause 把 JobCond.OrderBy 白名单化；默认 created_at desc。
+// orderByClause 把 AsyncTaskCond.OrderBy 白名单化；默认 created_at desc。
 func orderByClause(ob string) string {
 	switch strings.TrimSpace(strings.ToLower(ob)) {
 	case "created_at asc", "created_at": return "created_at ASC, id DESC"
@@ -108,11 +108,11 @@ func orderByClause(ob string) string {
 }
 
 // ListRun 分页查询尝试记录。条件缺省即不过滤；PageSize<=0 默认 20，上限 200。
-func (s *store) ListRun(ctx context.Context, cond *gasync.RunCond) ([]*gasync.JobRun, int64, error) {
+func (s *store) ListRun(ctx context.Context, cond *gasync.AsyncTaskRunCond) ([]*gasync.AsyncTaskRun, int64, error) {
 	page, size := normPage(cond.Page, cond.PageSize)
-	q := s.db.WithContext(ctx).Model(&CoreJobRun{})
-	if cond.JobID != "" {
-		q = q.Where("job_id = ?", cond.JobID)
+	q := s.db.WithContext(ctx).Model(&CoreAsyncTaskRun{})
+	if cond.AsyncTaskID != "" {
+		q = q.Where("job_id = ?", cond.AsyncTaskID)
 	}
 	if cond.Generation != 0 {
 		q = q.Where("generation = ?", cond.Generation)
@@ -127,7 +127,7 @@ func (s *store) ListRun(ctx context.Context, cond *gasync.RunCond) ([]*gasync.Jo
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	var rows []CoreJobRun
+	var rows []CoreAsyncTaskRun
 	if err := q.Order("created_at DESC, id DESC").
 		Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
 		return nil, 0, err
@@ -136,8 +136,8 @@ func (s *store) ListRun(ctx context.Context, cond *gasync.RunCond) ([]*gasync.Jo
 }
 
 // GetRun 按 ID 取尝试记录，不存在返回 ErrRunNotFound。
-func (s *store) GetRun(ctx context.Context, id string) (*gasync.JobRun, error) {
-	var row CoreJobRun
+func (s *store) GetRun(ctx context.Context, id string) (*gasync.AsyncTaskRun, error) {
+	var row CoreAsyncTaskRun
 	err := s.db.WithContext(ctx).Where("id = ?", id).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, gasync.ErrRunNotFound

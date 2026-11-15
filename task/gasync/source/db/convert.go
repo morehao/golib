@@ -19,8 +19,8 @@ func LabelsToJSON(labels map[string]string) string {
 	return string(b)
 }
 
-// jobRowToDomain 把数据库行 CoreJob 转为契约实体 gasync.Job。
-func jobRowToDomain(r *CoreJob) *gasync.Job {
+// asyncTaskRowToDomain 把数据库行 CoreAsyncTask 转为契约实体 gasync.AsyncTask。
+func asyncTaskRowToDomain(r *CoreAsyncTask) *gasync.AsyncTask {
 	if r == nil {
 		return nil
 	}
@@ -28,7 +28,7 @@ func jobRowToDomain(r *CoreJob) *gasync.Job {
 	if r.UniqKey != nil {
 		uniq = *r.UniqKey
 	}
-	j := &gasync.Job{
+	j := &gasync.AsyncTask{
 		ID:          r.ID,
 		Type:        r.TaskType,
 		Status:      gasync.Status(r.Status),
@@ -67,23 +67,23 @@ func jobRowToDomain(r *CoreJob) *gasync.Job {
 	return j
 }
 
-// jobRowsToDomain 批量转换。
-func jobRowsToDomain(rows []CoreJob) []*gasync.Job {
-	out := make([]*gasync.Job, len(rows))
+// asyncTaskRowsToDomain 批量转换。
+func asyncTaskRowsToDomain(rows []CoreAsyncTask) []*gasync.AsyncTask {
+	out := make([]*gasync.AsyncTask, len(rows))
 	for i := range rows {
-		out[i] = jobRowToDomain(&rows[i])
+		out[i] = asyncTaskRowToDomain(&rows[i])
 	}
 	return out
 }
 
-// runRowToDomain 把数据库行 CoreJobRun 转为契约实体 gasync.JobRun。
-func runRowToDomain(r *CoreJobRun) *gasync.JobRun {
+// runRowToDomain 把数据库行 CoreAsyncTaskRun 转为契约实体 gasync.AsyncTaskRun。
+func runRowToDomain(r *CoreAsyncTaskRun) *gasync.AsyncTaskRun {
 	if r == nil {
 		return nil
 	}
-	jr := &gasync.JobRun{
+	jr := &gasync.AsyncTaskRun{
 		ID:         r.ID,
-		JobID:      r.JobID,
+		AsyncTaskID:      r.AsyncTaskID,
 		Generation: int(r.Generation),
 		Attempt:    int(r.Attempt),
 		Status:     gasync.Status(r.Status),
@@ -104,8 +104,8 @@ func runRowToDomain(r *CoreJobRun) *gasync.JobRun {
 }
 
 // runRowsToDomain 批量转换。
-func runRowsToDomain(rows []CoreJobRun) []*gasync.JobRun {
-	out := make([]*gasync.JobRun, len(rows))
+func runRowsToDomain(rows []CoreAsyncTaskRun) []*gasync.AsyncTaskRun {
+	out := make([]*gasync.AsyncTaskRun, len(rows))
 	for i := range rows {
 		out[i] = runRowToDomain(&rows[i])
 	}
@@ -123,5 +123,5 @@ func uniqKeyPtr(k string) *string {
 // UniqKeyPtr 把幂等键转为可空指针（空串 → nil），供 manager 提交侧复用。导出包装。
 func UniqKeyPtr(k string) *string { return uniqKeyPtr(k) }
 
-// JobRowToDomain 把数据库行 CoreJob 转为契约实体 gasync.Job。导出包装，供 manager 回查复用。
-func JobRowToDomain(r *CoreJob) *gasync.Job { return jobRowToDomain(r) }
+// AsyncTaskRowToDomain 把数据库行 CoreAsyncTask 转为契约实体 gasync.AsyncTask。导出包装，供 manager 回查复用。
+func AsyncTaskRowToDomain(r *CoreAsyncTask) *gasync.AsyncTask { return asyncTaskRowToDomain(r) }

@@ -17,7 +17,7 @@ import (
 // Register 注册任务中心管理面路由到指定路由组。
 // 路由风格见 docs/router-style.md §3.3：RESTful 资源式。
 func Register(group *gin.RouterGroup, mgr *manager.Manager) {
-	j := group.Group("/jobs")
+	j := group.Group("/asyncTasks")
 	{
 		j.GET("", handleList(mgr))               // 任务分页列表
 		j.GET("/:id", handleGet(mgr))            // 任务详情

@@ -10,14 +10,14 @@ import (
 // 本地实现（manager）在事务内调用回调，TxFromContext 非 nil；
 // 远程实现（source/remote）只是回调，TxFromContext 为 nil。
 type Source interface {
-	// Fetch 取一条待执行任务。无任务时返回 ErrNoJob（实现可短暂阻塞）。
-	Fetch(ctx context.Context, taskType string) (*Job, error)
+	// Fetch 取一条待执行任务。无任务时返回 ErrNoAsyncTask（实现可短暂阻塞）。
+	Fetch(ctx context.Context, taskType string) (*AsyncTask, error)
 	// Renew 续租所有权。本地实现更新 lease_until；远程实现发心跳；队列实现可为空操作。
-	Renew(ctx context.Context, task *Job) error
+	Renew(ctx context.Context, task *AsyncTask) error
 	// Save 保存一次执行结果，并在合适的时机调用 callback
 	// （本地实现在事务内，远程实现在回传前或回传后，由其决定）。
 	// 结果如何流转（是否重试、下一次何时）由 Source 决定，不由 Worker 决定。
-	Save(ctx context.Context, task *Job, r Result, callback EnsureFunc) error
+	Save(ctx context.Context, task *AsyncTask, r Result, callback EnsureFunc) error
 	// Close 释放连接（本地关 Store 引用，远程关 HTTP 连接）。
 	Close(ctx context.Context) error
 }
