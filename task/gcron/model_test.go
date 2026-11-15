@@ -34,13 +34,13 @@ func TestTableNames(t *testing.T) {
 // TestNew_MigratesByDefaultAndWithoutAutoMigrate 验证默认建表与选项开关。
 func TestNew_MigratesByDefaultAndWithoutAutoMigrate(t *testing.T) {
 	db := newTestDB(t)
-	_, err := New(db, nil, nil)
+	_, err := New(db, nil)
 	require.NoError(t, err)
 	require.True(t, db.Migrator().HasTable("core_cron_task"), "New 默认应建表")
 	require.True(t, db.Migrator().HasTable("core_cron_task_run"))
 
 	fresh := newTestDB(t)
-	_, err = New(fresh, nil, nil, WithoutAutoMigrate())
+	_, err = New(fresh, nil, WithoutAutoMigrate())
 	require.NoError(t, err)
 	require.False(t, fresh.Migrator().HasTable("core_cron_task"), "WithoutAutoMigrate 后不应建表")
 	require.False(t, fresh.Migrator().HasTable("core_cron_task_run"))

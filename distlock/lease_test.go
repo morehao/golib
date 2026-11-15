@@ -3,7 +3,6 @@ package distlock
 import (
 	"context"
 	"errors"
-	"fmt"
 	"runtime"
 	"sync"
 	"testing"
@@ -12,254 +11,167 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ---- 通用 fake 后端 ----
-
-// fakeMutex 是可编程的内存锁，用于覆盖 Lease 状态机与 Locker 的三态语义。
-type fakeMutex struct {
-	mu sync.Mutex
-
-	token  string
-	locked bool
-
-	tryErr   error
-	tryCalls int
-
-	refreshN  int
-	refreshFn func(call int, ctx context.Context) error
-
-	unlockN   int
-	unlockErr error
-}
-
-func (f *fakeMutex) TryLock(ctx context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.tryCalls++
-	if f.tryErr != nil {
-		return f.tryErr
-	}
-	if f.locked {
-		return ErrLocked
-	}
-	f.locked = true
-	return nil
-}
-
-func (f *fakeMutex) Refresh(ctx context.Context) error {
-	f.mu.Lock()
-	f.refreshN++
-	call := f.refreshN
-	fn := f.refreshFn
-	f.mu.Unlock()
-	if fn != nil {
-		return fn(call, ctx)
-	}
-	return nil
-}
-
-func (f *fakeMutex) Unlock(ctx context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.unlockN++
-	f.locked = false
-	return f.unlockErr
-}
-
-func (f *fakeMutex) Token() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.token
-}
-
-func (f *fakeMutex) refreshCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.refreshN
-}
-
-func (f *fakeMutex) tryCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.tryCalls
-}
-
-func (f *fakeMutex) unlockCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.unlockN
-}
-
-// fakeFactory 返回固定或按键创建的 fakeMutex。
-type fakeFactory struct {
-	newMutex func(key string, ttl time.Duration) (Mutex, error)
-}
-
-func (f *fakeFactory) NewMutex(key string, ttl time.Duration) (Mutex, error) {
-	if f.newMutex != nil {
-		return f.newMutex(key, ttl)
-	}
-	return &fakeMutex{}, nil
-}
-
-func newLockerWith(t *testing.T, m Mutex) *Locker {
-	t.Helper()
-	return newLockerWithFactory(t, &fakeFactory{
-		newMutex: func(string, time.Duration) (Mutex, error) { return m, nil },
-	})
-}
-
-func newLockerWithFactory(t *testing.T, f Factory) *Locker {
-	t.Helper()
-	locker, err := New(f)
-	require.NoError(t, err)
-	return locker
-}
-
-func mustAcquire(t *testing.T, locker *Locker, key string, ttl time.Duration, opts ...AcquireOption) *Lease {
-	t.Helper()
-	lease, err := locker.TryAcquire(context.Background(), key, ttl, opts...)
-	require.NoError(t, err)
-	require.NotNil(t, lease)
-	return lease
-}
-
-// waitLost 等待 Lost 关闭；超时即测试失败。
-func waitLost(t *testing.T, l *Lease, d time.Duration) error {
-	t.Helper()
-	select {
-	case <-l.Lost():
-		return l.Cause()
-	case <-time.After(d):
-		t.Fatalf("lease %q did not report loss within %s", l.Key(), d)
-		return nil
-	}
-}
-
 // ---- 获取侧语义 ----
 
 func TestTryAcquireValidation(t *testing.T) {
-	locker, err := New(nil)
-	require.ErrorIs(t, err, ErrNilFactory)
-	require.Nil(t, locker)
+	l := newTestLocker(newFakeStore())
 
-	locker = newLockerWith(t, &fakeMutex{})
+	_, err := l.TryAcquire(context.Background(), "", MinTTL)
+	require.ErrorIs(t, err, ErrInvalidConfig)
 
-	_, err = locker.TryAcquire(context.Background(), "", time.Second)
-	require.ErrorIs(t, err, ErrInvalidKey)
+	_, err = l.TryAcquire(context.Background(), "k", MinTTL-time.Millisecond)
+	require.ErrorIs(t, err, ErrInvalidConfig)
+	require.Contains(t, err.Error(), MinTTL.String(), "错误里要能看到上下限")
 
-	_, err = locker.TryAcquire(context.Background(), "k", MinTTL-time.Millisecond)
-	require.ErrorIs(t, err, ErrInvalidTTL)
-
-	_, err = locker.TryAcquire(context.Background(), "k", time.Second, WithRenewDeadline(-time.Second))
-	require.ErrorIs(t, err, ErrInvalidOption)
-
-	_, err = locker.TryAcquire(context.Background(), "k", time.Second, WithRetryInterval(0))
-	require.ErrorIs(t, err, ErrInvalidOption)
-
-	lease := mustAcquire(t, locker, "k", MinTTL)
-	require.Equal(t, "k", lease.Key())
-	require.Equal(t, MinTTL, lease.TTL())
-	require.NoError(t, lease.Release(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = l.TryAcquire(ctx, "k", MinTTL)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, ErrLocked, "调用方自己的取消不能被归成竞争")
 }
 
-func TestTryAcquireBusyAndStoreFailure(t *testing.T) {
+func TestTryAcquireThreeStates(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("acquired", func(t *testing.T) {
+		st := newFakeStore()
+		l := newTestLocker(st)
+		lease, err := l.TryAcquire(ctx, "k", MinTTL)
+		require.NoError(t, err)
+		require.Equal(t, "k", lease.Key())
+		require.Equal(t, MinTTL, lease.TTL())
+		require.NotEmpty(t, lease.Token())
+		require.NoError(t, lease.Context().Err())
+		require.NoError(t, lease.Release(ctx))
+	})
+
 	t.Run("busy", func(t *testing.T) {
-		m := &fakeMutex{locked: true}
-		locker := newLockerWith(t, m)
-		lease, err := locker.TryAcquire(context.Background(), "k", time.Second)
+		l := newTestLocker(newFakeStore())
+		first, err := l.TryAcquire(ctx, "k", MinTTL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = first.Release(context.Background()) })
+
+		lease, err := l.TryAcquire(ctx, "k", MinTTL)
 		require.ErrorIs(t, err, ErrLocked)
 		require.Nil(t, lease)
 	})
 
 	t.Run("store failure", func(t *testing.T) {
 		boom := errors.New("redis down")
-		m := &fakeMutex{tryErr: boom}
-		locker := newLockerWith(t, m)
-		lease, err := locker.TryAcquire(context.Background(), "k", time.Second)
-		require.Error(t, err)
-		require.NotErrorIs(t, err, ErrLocked)
+		st := newFakeStore()
+		st.acquireErr = boom
+		lease, err := newTestLocker(st).TryAcquire(ctx, "k", MinTTL)
 		require.ErrorIs(t, err, boom)
+		require.NotErrorIs(t, err, ErrLocked)
 		require.Nil(t, lease)
 	})
 }
 
-// ---- 续期状态机（review P0 的核心回归） ----
+// ---- 续期状态机（P0 回归） ----
 
-// 单次瞬时续期错误不得宣告丢锁：这是旧实现最严重的缺陷（会把健康临界区误杀）。
-func TestTransientRenewalErrorDoesNotLoseLease(t *testing.T) {
-	m := &fakeMutex{refreshFn: func(call int, _ context.Context) error {
+// 单次「卡满 timeout」的续期不得当场判死：窗口内还要有第二次机会。
+func TestSlowRenewDoesNotLoseLeaseBeforeDeadline(t *testing.T) {
+	st := newFakeStore()
+	st.renewFn = func(call int, ctx context.Context) error {
 		if call == 1 {
-			return errors.New("transient: redis blip")
+			<-ctx.Done() // 模拟一次卡到 attempt 上限的续期
+			return ctx.Err()
 		}
 		return nil
-	}}
-	locker := newLockerWith(t, m)
-	lease := mustAcquire(t, locker, "k", 900*time.Millisecond)
+	}
+	l := newTestLocker(st)
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lease.Release(context.Background()) })
 
-	// 至少发生两次续期（第一次失败 + 重试成功）才算覆盖到目标路径。
-	require.Eventually(t, func() bool { return m.refreshCalls() >= 2 }, 3*time.Second, 10*time.Millisecond)
+	// 第一次尝试的上限是 min(1s, TTL/10)=100ms，而旧实现这里是 TTL/3=333ms。
+	require.Eventually(t, func() bool {
+		_, renew, _ := st.counts()
+		return renew >= 2
+	}, 3*time.Second, 10*time.Millisecond, "窗口内必须发起第二次续期")
 
 	select {
 	case <-lease.Lost():
-		t.Fatalf("transient renewal error must not lose the lease, cause=%v", lease.Cause())
+		t.Fatalf("a single stalled renew must not lose the lease, cause=%v", lease.Cause())
 	default:
 	}
 	require.NoError(t, lease.Cause())
-	require.True(t, lease.Context().Err() == nil)
-
-	require.NoError(t, lease.Release(context.Background()))
+	require.NoError(t, lease.Context().Err())
 }
 
-// 续期持续失败直到超过 renewDeadline 才判定丢失，且原因是 ErrRenewFailed（不是 ErrLockLost）。
-func TestRenewFailureBeyondDeadlineLosesLease(t *testing.T) {
-	m := &fakeMutex{refreshFn: func(int, context.Context) error {
-		return errors.New("persistent: redis unavailable")
-	}}
-	locker := newLockerWith(t, m)
-	// renewDeadline 必须大于续期节奏（TTL/3 = 300ms），否则「首次续期失败即到期」，
-	// 就覆盖不到「失败后重试、重试仍失败」这条路径了。
-	lease := mustAcquire(t, locker, "k", 900*time.Millisecond,
-		WithRenewDeadline(600*time.Millisecond))
+// 续期持续失败直到窗口耗尽才判丢，且时间点落在 [deadline, deadline+renewTimeout]。
+func TestRenewDeadlineExhaustedLosesLease(t *testing.T) {
+	st := newFakeStore()
+	st.renewFn = func(int, context.Context) error { return errors.New("persistent: redis unavailable") }
+	l := newTestLocker(st)
+	start := time.Now()
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
 
-	require.Eventually(t, func() bool { return m.refreshCalls() >= 2 }, 3*time.Second, 10*time.Millisecond)
-	cause := waitLost(t, lease, 3*time.Second)
+	select {
+	case <-lease.Lost():
+	case <-time.After(3 * time.Second):
+		t.Fatal("lease did not report loss")
+	}
+	elapsed := time.Since(start)
+
+	cause := lease.Cause()
 	require.ErrorIs(t, cause, ErrRenewFailed)
 	require.NotErrorIs(t, cause, ErrLockLost)
-	require.Equal(t, cause, lease.Cause())
-	require.Error(t, lease.Context().Err())
 
+	tm := timingFor(MinTTL)
+	require.GreaterOrEqual(t, elapsed, tm.deadline-retryFloor,
+		"不得早于确认窗口（允许最多一个地板值的前置）")
+	require.LessOrEqual(t, elapsed, tm.deadline+tm.renewTimeout+200*time.Millisecond,
+		"判丢不得被无限推迟")
+
+	_, renew, _ := st.counts()
+	require.GreaterOrEqual(t, renew, 2, "窗口内应至少尝试两次")
 	require.NoError(t, lease.Release(context.Background()))
 }
 
-// 底层明确报告「不持有」时立即判定 ErrLockLost，不等待 renewDeadline。
-func TestNotHeldRenewalLosesLeaseImmediately(t *testing.T) {
-	m := &fakeMutex{refreshFn: func(int, context.Context) error { return ErrLocked }}
-	locker := newLockerWith(t, m)
-	lease := mustAcquire(t, locker, "k", 900*time.Millisecond)
+// 底层明确报告「不持有」时立即判定 ErrLockLost，不等待窗口耗尽。
+func TestNotHeldRenewLosesLeaseImmediately(t *testing.T) {
+	st := newFakeStore()
+	l := newTestLocker(st)
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
 
 	start := time.Now()
-	cause := waitLost(t, lease, 2*time.Second)
-	require.ErrorIs(t, cause, ErrLockLost)
-	// cadence = 300ms，因此第一次续期前就该判定，远小于 renewDeadline(600ms)。
-	require.Less(t, time.Since(start), 900*time.Millisecond)
+	st.steal("k") // 模拟 key 被抢占/过期
 
+	select {
+	case <-lease.Lost():
+	case <-time.After(2 * time.Second):
+		t.Fatal("lease did not report loss")
+	}
+	require.ErrorIs(t, lease.Cause(), ErrLockLost)
+	require.Less(t, time.Since(start), timingFor(MinTTL).deadline,
+		"明确不持有应立即判丢，不必等窗口耗尽")
+	require.Error(t, lease.Context().Err())
 	require.NoError(t, lease.Release(context.Background()))
 }
 
 // ---- Release 语义 ----
 
 func TestReleaseIsIdempotentAndStopsRenewal(t *testing.T) {
-	m := &fakeMutex{}
-	locker := newLockerWith(t, m)
-	lease := mustAcquire(t, locker, "k", 900*time.Millisecond)
+	st := newFakeStore()
+	l := newTestLocker(st)
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
 
-	require.Eventually(t, func() bool { return m.refreshCalls() >= 1 }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		_, renew, _ := st.counts()
+		return renew >= 1
+	}, 2*time.Second, 10*time.Millisecond)
 
 	require.NoError(t, lease.Release(context.Background()))
-	require.NoError(t, lease.Release(context.Background())) // 幂等
-	require.Equal(t, 1, m.unlockCalls(), "Release must unlock exactly once")
+	require.NoError(t, lease.Release(context.Background()))
 
-	// 正常释放不产生丢失信号。
+	_, _, releases := st.counts()
+	require.Equal(t, 1, releases, "Release 只能真正释放一次")
+	require.False(t, st.holds("k"))
+
 	select {
 	case <-lease.Lost():
 		t.Fatal("normal release must not close Lost")
@@ -269,73 +181,116 @@ func TestReleaseIsIdempotentAndStopsRenewal(t *testing.T) {
 	require.Error(t, lease.Context().Err())
 
 	// 续期已停止。
-	calls := m.refreshCalls()
-	time.Sleep(400 * time.Millisecond)
-	require.Equal(t, calls, m.refreshCalls(), "renewal must stop after release")
+	_, before, _ := st.counts()
+	time.Sleep(timingFor(MinTTL).interval + 100*time.Millisecond)
+	_, after, _ := st.counts()
+	require.Equal(t, before, after, "renewal must stop after release")
 }
 
-func TestConcurrentRelease(t *testing.T) {
-	m := &fakeMutex{}
-	locker := newLockerWith(t, m)
-	lease := mustAcquire(t, locker, "k", time.Second)
+// 并发 Release：第一个调用者执行释放，其余等待并拿到同一结果（包括错误）。
+func TestConcurrentReleaseSharesResult(t *testing.T) {
+	unlockStarted := make(chan struct{})
+	unblock := make(chan struct{})
+	boom := errors.New("redis down during release")
+
+	st := newFakeStore()
+	st.releaseFn = func(ctx context.Context) error {
+		close(unlockStarted)
+		<-unblock
+		return boom
+	}
+	l := newTestLocker(st)
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		select {
+		case <-unblock:
+		default:
+			close(unblock)
+		}
+	})
 
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	errs := make([]error, 8)
+	for i := range errs {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			require.NoError(t, lease.Release(context.Background()))
-		}()
+			errs[i] = lease.Release(context.Background())
+		}(i)
 	}
+
+	<-unlockStarted
+	close(unblock)
 	wg.Wait()
-	require.Equal(t, 1, m.unlockCalls())
+
+	_, _, releases := st.counts()
+	require.Equal(t, 1, releases, "并发 Release 只应触发一次底层释放")
+	for _, e := range errs {
+		require.ErrorIs(t, e, boom, "所有调用者都要拿到第一个人的错误")
+	}
 }
 
-// 续期 RPC 卡住时 Release 必须有界返回（旧实现会阻塞到 TTL/3）。
+// 续期 RPC 卡住（不理会 ctx）时 Release 也必须有界返回。
 func TestReleaseBoundedWhenRenewalStuck(t *testing.T) {
 	unblock := make(chan struct{})
-	m := &fakeMutex{refreshFn: func(int, context.Context) error {
-		<-unblock // 模拟「不理会 ctx 的慢调用」
+	st := newFakeStore()
+	st.renewFn = func(int, context.Context) error {
+		<-unblock // 模拟不理会 ctx 的慢调用
 		return nil
-	}}
-	locker := newLockerWith(t, m)
-	lease := mustAcquire(t, locker, "k", 300*time.Millisecond)
+	}
+	l := newTestLocker(st)
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
 	t.Cleanup(func() { close(unblock) })
 
-	require.Eventually(t, func() bool { return m.refreshCalls() >= 1 }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		_, renew, _ := st.counts()
+		return renew >= 1
+	}, 2*time.Second, 10*time.Millisecond)
 
 	start := time.Now()
-	err := lease.Release(context.Background())
-	elapsed := time.Since(start)
-	require.NoError(t, err)
-	require.Less(t, elapsed, 300*time.Millisecond, "Release must not wait for the stuck renewal RPC")
+	require.NoError(t, lease.Release(context.Background()))
+	require.Less(t, time.Since(start), MinTTL/3+200*time.Millisecond,
+		"Release 不能被卡住的续期拖住")
 	require.NoError(t, lease.Cause(), "release during stuck renewal must not report loss")
 }
 
 func TestReleaseErrorPropagated(t *testing.T) {
 	boom := errors.New("redis down")
-	m := &fakeMutex{unlockErr: boom}
-	locker := newLockerWith(t, m)
-	lease := mustAcquire(t, locker, "k", time.Second)
-
+	st := newFakeStore()
+	st.releaseFn = func(context.Context) error { return boom }
+	l := newTestLocker(st)
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
 	require.ErrorIs(t, lease.Release(context.Background()), boom)
 }
 
-// Cause 在 Lost 关闭后必须可见。
-func TestCauseVisibleAfterLost(t *testing.T) {
-	for i := 0; i < 5; i++ {
-		m := &fakeMutex{refreshFn: func(int, context.Context) error { return ErrLocked }}
-		locker := newLockerWith(t, m)
-		lease := mustAcquire(t, locker, "k", 300*time.Millisecond)
-		select {
-		case <-lease.Lost():
-		case <-time.After(2 * time.Second):
-			t.Fatal("Lost not closed")
-		}
-		require.Error(t, lease.Cause())
-		require.NoError(t, lease.Release(context.Background()))
+func TestReleaseAfterLossStillReleases(t *testing.T) {
+	st := newFakeStore()
+	l := newTestLocker(st)
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
+
+	st.steal("k")
+	select {
+	case <-lease.Lost():
+	case <-time.After(2 * time.Second):
+		t.Fatal("lease did not report loss")
 	}
+
+	require.NoError(t, lease.Release(context.Background()))
+	_, _, releases := st.counts()
+	require.Equal(t, 1, releases, "丢锁后仍应尽力释放一次")
+	select {
+	case <-lease.Lost():
+	default:
+		t.Fatal("Lost 已关闭后不应被 Release 影响")
+	}
+	require.ErrorIs(t, lease.Cause(), ErrLockLost)
 }
+
+// ---- Hooks ----
 
 func TestHooks(t *testing.T) {
 	var (
@@ -344,44 +299,43 @@ func TestHooks(t *testing.T) {
 		releases int
 		losts    int
 		renews   int
+		ctxSeen  bool
 	)
 	h := Hooks{
-		OnAcquire: func(string, time.Duration, time.Duration, error) {
+		OnAcquire: func(ctx context.Context, _ string, _, _ time.Duration, _ error) {
 			mu.Lock()
 			acquires++
+			ctxSeen = ctxSeen || ctx != nil
 			mu.Unlock()
 		},
-		OnRelease: func(string, error) {
-			mu.Lock()
-			releases++
-			mu.Unlock()
-		},
-		OnLost: func(string, error) {
-			mu.Lock()
-			losts++
-			mu.Unlock()
-		},
-		OnRenew: func(string, error) {
+		OnRenew: func(context.Context, string, error) {
 			mu.Lock()
 			renews++
 			mu.Unlock()
 		},
+		OnLost: func(context.Context, string, error) {
+			mu.Lock()
+			losts++
+			mu.Unlock()
+		},
+		OnRelease: func(context.Context, string, error) {
+			mu.Lock()
+			releases++
+			mu.Unlock()
+		},
 	}
-	m := &fakeMutex{refreshFn: func(call int, _ context.Context) error {
-		if call == 1 {
-			return ErrLocked
-		}
-		return nil
-	}}
-	locker := newLockerWith(t, m)
-	lease, err := locker.TryAcquire(context.Background(), "k", 300*time.Millisecond, WithHooks(h))
+
+	st := newFakeStore()
+	l := newTestLocker(st, WithHooks(h))
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
 	require.NoError(t, err)
 
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return losts == 1
-	}, 2*time.Second, 10*time.Millisecond)
+	st.steal("k")
+	select {
+	case <-lease.Lost():
+	case <-time.After(2 * time.Second):
+		t.Fatal("lease did not report loss")
+	}
 	require.NoError(t, lease.Release(context.Background()))
 
 	mu.Lock()
@@ -390,34 +344,50 @@ func TestHooks(t *testing.T) {
 	require.Equal(t, 1, releases)
 	require.Equal(t, 1, losts)
 	require.GreaterOrEqual(t, renews, 1)
+	require.True(t, ctxSeen)
 }
 
-// 租约结束后不得残留 goroutine。
-func TestNoGoroutineLeak(t *testing.T) {
-	locker := newLockerWithFactory(t, &fakeFactory{})
+// 钩子 panic 不能拖垮续期循环。
+func TestHooksPanicIsRecovered(t *testing.T) {
+	st := newFakeStore()
+	l := newTestLocker(st, WithHooks(Hooks{
+		OnRenew: func(context.Context, string, error) { panic("boom") },
+	}))
+	lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
 
-	// 先跑一轮让运行的 goroutine 稳定下来，再取基线。
+	require.Eventually(t, func() bool {
+		_, renew, _ := st.counts()
+		return renew >= 2
+	}, 3*time.Second, 10*time.Millisecond, "钩子 panic 之后续期应继续")
+	require.NoError(t, lease.Cause())
+	require.NoError(t, lease.Release(context.Background()))
+}
+
+// ---- goroutine 生命周期 ----
+
+func TestNoGoroutineLeak(t *testing.T) {
+	l := newTestLocker(newFakeStore())
+
 	for i := 0; i < 5; i++ {
-		lease := mustAcquire(t, locker, "warmup", time.Second)
+		lease, err := l.TryAcquire(context.Background(), "warmup", MinTTL)
+		require.NoError(t, err)
 		require.NoError(t, lease.Release(context.Background()))
 	}
 	time.Sleep(50 * time.Millisecond)
-	base := runtimeNumGoroutine()
+	base := runtime.NumGoroutine()
 
 	for i := 0; i < 20; i++ {
-		lease := mustAcquire(t, locker, fmt.Sprintf("k-%d", i), 300*time.Millisecond)
+		lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+		require.NoError(t, err)
 		require.NoError(t, lease.Release(context.Background()))
 	}
 
-	// 不能用 require.Eventually：它把条件放到临时 goroutine 里执行，NumGoroutine 会把那个
-	// goroutine 也算进去，导致基线永远差 1。这里用普通轮询。
 	deadline := time.Now().Add(2 * time.Second)
-	for runtimeNumGoroutine() > base {
+	for runtime.NumGoroutine() > base {
 		if time.Now().After(deadline) {
-			t.Fatalf("lease goroutines leaked: base=%d now=%d", base, runtimeNumGoroutine())
+			t.Fatalf("lease goroutines leaked: base=%d now=%d", base, runtime.NumGoroutine())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
-
-func runtimeNumGoroutine() int { return runtime.NumGoroutine() }

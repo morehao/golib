@@ -127,13 +127,13 @@ var components = []component{
 		models:  gcron.SchemaModels(),
 		migrate: gcron.AutoMigrate,
 		withAuto: func(t *testing.T, db *gorm.DB) error {
-			// cfg/lockFactory 传 nil：默认配置既不启动兜底循环也不连 Redis，
+			// cfg 传 nil：默认配置既不启动兜底循环也不连 Redis，
 			// 构造期唯一副作用就是建表，正是本用例要观察的行为。
-			_, err := gcron.New(db, nil, nil)
+			_, err := gcron.New(db, nil)
 			return err
 		},
 		withoutAuto: func(t *testing.T, db *gorm.DB) error {
-			_, err := gcron.New(db, nil, nil, gcron.WithoutAutoMigrate())
+			_, err := gcron.New(db, nil, gcron.WithoutAutoMigrate())
 			return err
 		},
 		typeChecks: map[string][]columnTypeCheck{

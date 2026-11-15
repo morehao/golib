@@ -12,10 +12,11 @@ import (
 
 // Acquire 应一直等到锁被释放。
 func TestAcquireWaitsForRelease(t *testing.T) {
-	m := &fakeMutex{}
-	locker := newLockerWith(t, m)
+	st := newFakeStore()
+	l := newTestLocker(st, WithRetryInterval(20*time.Millisecond))
 
-	first := mustAcquire(t, locker, "k", 900*time.Millisecond)
+	first, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
 
 	type result struct {
 		lease *Lease
@@ -23,12 +24,10 @@ func TestAcquireWaitsForRelease(t *testing.T) {
 	}
 	got := make(chan result, 1)
 	go func() {
-		lease, err := locker.Acquire(context.Background(), "k", 900*time.Millisecond,
-			WithRetryInterval(20*time.Millisecond))
+		lease, err := l.Acquire(context.Background(), "k", MinTTL)
 		got <- result{lease: lease, err: err}
 	}()
 
-	// 未释放前不应拿到锁。
 	select {
 	case r := <-got:
 		t.Fatalf("Acquire returned before release: err=%v", r.err)
@@ -47,98 +46,95 @@ func TestAcquireWaitsForRelease(t *testing.T) {
 	}
 }
 
-// Acquire 在 ctx 到期时返回可同时判定的错误。
-func TestAcquireContextDeadline(t *testing.T) {
-	m := &fakeMutex{locked: true} // 永远被占
-	locker := newLockerWith(t, m)
+// 等待超时返回独立哨兵：不是「被占用」，也不带 ErrLocked。
+func TestAcquireTimeoutIsDistinct(t *testing.T) {
+	st := newFakeStore()
+	l := newTestLocker(st, WithRetryInterval(20*time.Millisecond))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	held, err := l.TryAcquire(context.Background(), "k", MinTTL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = held.Release(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	lease, err := locker.Acquire(ctx, "k", time.Second, WithRetryInterval(20*time.Millisecond))
+	lease, err := l.Acquire(ctx, "k", MinTTL)
 	require.Nil(t, lease)
-	require.ErrorIs(t, err, ErrLocked)
+	require.ErrorIs(t, err, ErrAcquireTimeout)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Greater(t, m.tryCount(), 1, "Acquire should retry while the lock is busy")
+	require.NotErrorIs(t, err, ErrLocked, "超时不能同时命中竞争")
+	require.NotContains(t, err.Error(), "\n", "错误串应保持单行，便于日志")
 }
 
 // Acquire 遇到存储故障立即返回，不在内部吞掉重试。
 func TestAcquireStopsOnStoreFailure(t *testing.T) {
 	boom := errors.New("redis down")
-	m := &fakeMutex{tryErr: boom}
-	locker := newLockerWith(t, m)
+	st := newFakeStore()
+	st.acquireErr = boom
+	l := newTestLocker(st, WithRetryInterval(20*time.Millisecond))
 
-	lease, err := locker.Acquire(context.Background(), "k", time.Second)
+	lease, err := l.Acquire(context.Background(), "k", MinTTL)
 	require.Nil(t, lease)
 	require.ErrorIs(t, err, boom)
 	require.NotErrorIs(t, err, ErrLocked)
-	require.Equal(t, 1, m.tryCount())
+
+	acquire, _, _ := st.counts()
+	require.Equal(t, 1, acquire)
 }
 
-// 并发获取同一 key 只有一个成功，其余是 ErrLocked。
-func TestTryAcquireOnlyOneWinner(t *testing.T) {
-	store := &sync.Mutex{}
-	held := false
-	f := &fakeFactory{newMutex: func(string, time.Duration) (Mutex, error) {
-		return &lockedMutex{state: store, held: &held}, nil
-	}}
-	locker := newLockerWithFactory(t, f)
+func TestAcquireCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var wins int
-	var unexpected []error
-	for i := 0; i < 16; i++ {
+	lease, err := newTestLocker(newFakeStore()).Acquire(ctx, "k", MinTTL)
+	require.Nil(t, lease)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, ErrAcquireTimeout)
+}
+
+// 并发获取同一 key 只有一个赢家（赢家在其他尝试结束前不释放）。
+func TestTryAcquireOnlyOneWinner(t *testing.T) {
+	st := newFakeStore()
+	l := newTestLocker(st)
+
+	const n = 16
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		wins    int
+		unspent []*Lease
+		fails   []error
+	)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			lease, err := locker.TryAcquire(context.Background(), "k", time.Second)
+			<-start
+			lease, err := l.TryAcquire(context.Background(), "k", MinTTL)
+			mu.Lock()
+			defer mu.Unlock()
 			if err == nil {
-				mu.Lock()
 				wins++
-				mu.Unlock()
-				if rerr := lease.Release(context.Background()); rerr != nil {
-					mu.Lock()
-					unexpected = append(unexpected, rerr)
-					mu.Unlock()
-				}
+				unspent = append(unspent, lease)
 				return
 			}
 			if !errors.Is(err, ErrLocked) {
-				mu.Lock()
-				unexpected = append(unexpected, err)
-				mu.Unlock()
+				fails = append(fails, err)
 			}
 		}()
 	}
+	close(start)
 	wg.Wait()
-	require.Empty(t, unexpected)
-	require.GreaterOrEqual(t, wins, 1, "at least one caller must win")
-}
 
-// lockedMutex 是共享一个 bool 状态的极简锁，用于并发赢家测试。
-type lockedMutex struct {
-	state *sync.Mutex
-	held  *bool
-}
-
-func (m *lockedMutex) TryLock(ctx context.Context) error {
-	m.state.Lock()
-	defer m.state.Unlock()
-	if *m.held {
-		return ErrLocked
+	require.Empty(t, fails)
+	require.Equal(t, 1, wins, "同一 key 只能有一个赢家")
+	for _, lease := range unspent {
+		require.NoError(t, lease.Release(context.Background()))
 	}
-	*m.held = true
-	return nil
 }
 
-func (m *lockedMutex) Refresh(ctx context.Context) error { return nil }
-
-func (m *lockedMutex) Unlock(ctx context.Context) error {
-	m.state.Lock()
-	defer m.state.Unlock()
-	*m.held = false
-	return nil
+func TestNewRedisValidation(t *testing.T) {
+	_, err := NewRedis(nil)
+	require.ErrorIs(t, err, ErrInvalidConfig)
 }
-
-func (m *lockedMutex) Token() string { return "token" }

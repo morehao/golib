@@ -1,5 +1,5 @@
-// Package distlock 提供基于 Redis（redsync / Redlock 算法）的分布式锁，以及构建在同一套
-// 锁抽象之上的主从选举。
+// Package distlock 提供基于 Redis 的分布式锁，以及构建在同一套租约机制之上的
+// 尽力而为（best-effort）主从选举。
 //
 // # 定位与安全边界（先读这一节）
 //
@@ -13,25 +13,35 @@
 //   - Redis 用非单调时钟计算 TTL，系统时钟跳变会让 key 提前或延后过期。
 //
 // Redis 官方文档明确要求：需要正确性的场景必须由被保护资源实现 fencing token（单调递增凭证，
-// 例如数据库行版本号），而本组件**不提供**该能力（redsync 的随机 value 不是单调凭证）。因此
-// 涉及资金、库存等强一致资源时，请改用数据库租约 / etcd / k8s Lease 等方案，或让下游强制校验
-// 单调凭证。
+// 例如数据库行版本号），而本组件**不提供**该能力（随机 token 不是单调凭证；Redis 的 INCR 在
+// 异步主从切换后也会回退）。涉及资金、库存等强一致资源时，请改用数据库租约 / etcd / k8s Lease，
+// 或让下游强制校验单调凭证。
+//
+// # 两种形态
+//
+//	NewRedis(rdb)   跨进程形态（默认）：互斥范围是共享同一 Redis 的所有实例
+//	NewMemory()     进程内形态：仅用于单副本部署、CLI 与本地开发
+//
+// 进程内形态的 TTL/续期只是 API 一致性占位：持有到 Release 为止，Lost() 永不关闭，
+// 也不会产生 ErrRenewFailed。**多副本部署使用内存形态会静默失去互斥**，属于误配。
 //
 // # 分层
 //
-//	Locker   门面（进程级单例、无 per-key 状态）：TryAcquire / Acquire → *Lease
-//	Lease    一次持有：自带自动续期、丢失信号、幂等 Release
-//	Factory  后端工厂：按 key + TTL 造 Mutex
-//	Mutex    后端原语（当前仅 Redis）：TryLock / Refresh / Unlock / Token
+//	Locker  门面：参数校验、阻塞获取的退避、Hooks 派发、token 生成
+//	Lease   一次持有：唯一的时间权威（自动续期、终态判定、幂等 Release）
+//	store   存储接缝（非导出）：acquire / renew / release 三个单次尝试原语（Redis 侧委托 redsync）
+//
+// 续期恒开，没有关闭开关：持有期间按 TTL/3（±10% 抖动）续期；单次续期上限
+// min(1s, TTL/10)；从上次成功续期起算，超过 TTL*2/3 仍无法确认则判定丢失。
 //
 // # 语义约定
 //
 //   - 非可重入：同一个 key 在同一时刻只能被一个 Lease 持有（第二个 TryAcquire 返回 ErrLocked）。
-//   - 自动续期恒开：租约期间按 TTL/3 的节奏续期，没有关闭开关。
-//   - 失败三态：正常竞争（ErrLocked）、锁丢失（ErrLockLost / ErrRenewFailed）、存储故障（其他
-//     error）互相可区分，调用方用 errors.Is 判定即可，不需要靠调用位置猜。
 //   - 获取三态：成功返回 (*Lease, nil)；被占返回 (nil, ErrLocked)；存储故障返回 (nil, err)。
-//   - Release 幂等：重复调用返回 nil；释放失败（存储故障）才算错误。
+//   - 失败三态：正常竞争（ErrLocked）、锁丢失（ErrLockLost / ErrRenewFailed）、配置非法
+//     （ErrInvalidConfig）与存储故障互相可区分，调用方用 errors.Is 判定即可。
+//   - Release 幂等且结果一致：并发调用时第一个调用者执行释放，其余调用者等待并返回同一结果。
+//   - 阻塞获取超时返回 ErrAcquireTimeout（包装 ctx 错误），不会同时命中 ErrLocked。
 //
 // # ctx 契约
 //
@@ -43,9 +53,10 @@
 // 与之配套，Lease.Context() 返回「租约上下文」：Release 或锁丢失时取消，可直接作为临界区
 // work context 的父级；Lease.Lost() 只在锁丢失时关闭（正常释放不关闭）。
 //
-// # 并发契约
+// # 可观测性
 //
-// Locker 可被任意多个 goroutine 并发使用；Lease 的方法全部并发安全，Release 可并发调用。
+// Hooks 在 Locker 构造期一次性设置，覆盖获取、续期、丢失与释放四个事件。丢锁是运维事件，
+// 建议在装配层统一接日志/指标，而不是散落到各调用点。
 //
 // # 与 gcache 短占位锁的区别
 //

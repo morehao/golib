@@ -14,83 +14,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newRedisFactory(t *testing.T) (*RedisFactory, *miniredis.Miniredis) {
+func newRedisLocker(t *testing.T) (*Locker, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	f, err := NewRedisFactory(client)
+	l, err := NewRedis(client)
 	require.NoError(t, err)
-	return f, mr
-}
-
-func TestNewRedisFactoryValidation(t *testing.T) {
-	_, err := NewRedisFactory()
-	require.Error(t, err)
-
-	_, err = NewRedisFactory(nil)
-	require.Error(t, err)
-
-	f, _ := newRedisFactory(t)
-	_, err = f.NewMutex("", time.Second)
-	require.ErrorIs(t, err, ErrInvalidKey)
-
-	_, err = f.NewMutex("k", MinTTL-time.Millisecond)
-	require.ErrorIs(t, err, ErrInvalidTTL)
-
-	m, err := f.NewMutex("k", time.Second)
-	require.NoError(t, err)
-	require.NotNil(t, m)
-	require.Empty(t, m.Token(), "token must be empty before acquiring")
+	return l, mr
 }
 
 // 后端原语的归一化语义：竞争/已过期 => ErrLocked，其余才是存储故障。
-func TestRedisMutexNormalization(t *testing.T) {
-	f, mr := newRedisFactory(t)
+func TestRedisStoreSemantics(t *testing.T) {
+	l, mr := newRedisLocker(t)
 	ctx := context.Background()
 
-	a, err := f.NewMutex("k:norm", 2*time.Second)
+	a, err := l.TryAcquire(ctx, "k:norm", MinTTL)
 	require.NoError(t, err)
-	b, err := f.NewMutex("k:norm", 2*time.Second)
+	require.True(t, mr.Exists("k:norm"))
+
+	_, err = l.TryAcquire(ctx, "k:norm", MinTTL)
+	require.ErrorIs(t, err, ErrLocked, "contention must be ErrLocked")
+
+	require.NoError(t, a.Release(ctx))
+	require.False(t, mr.Exists("k:norm"))
+
+	b, err := l.TryAcquire(ctx, "k:norm", MinTTL)
+	require.NoError(t, err)
+	require.NoError(t, b.Release(ctx))
+}
+
+// 释放时 key 已过期（或已被替换）不应报错：对调用方等价于「已不持有」。
+func TestRedisReleaseAfterExpiryIsNotAnError(t *testing.T) {
+	l, mr := newRedisLocker(t)
+	ctx := context.Background()
+
+	lease, err := l.TryAcquire(ctx, "k:expired", MinTTL)
 	require.NoError(t, err)
 
-	require.NoError(t, a.TryLock(ctx))
-	require.NotEmpty(t, a.Token())
-
-	require.ErrorIs(t, b.TryLock(ctx), ErrLocked, "contention must be ErrLocked")
-	require.ErrorIs(t, b.Refresh(ctx), ErrLocked, "refresh without holding must be ErrLocked")
-
-	require.NoError(t, a.Refresh(ctx), "refresh while holding must succeed")
-
-	require.NoError(t, a.Unlock(ctx))
-	require.NoError(t, b.TryLock(ctx))
-	require.NoError(t, b.Unlock(ctx))
-
-	// 锁过期后的 Unlock 归一化为 ErrLocked（对上层等价于「已不持有」）。
-	c, err := f.NewMutex("k:expired", 200*time.Millisecond)
-	require.NoError(t, err)
-	require.NoError(t, c.TryLock(ctx))
-	mr.FastForward(time.Second)
-	require.ErrorIs(t, c.Unlock(ctx), ErrLocked)
+	mr.FastForward(MinTTL + time.Second) // 直接让 key 过期
+	require.NoError(t, lease.Release(ctx), "已不持有的释放视为成功")
+	require.False(t, mr.Exists("k:expired"))
 }
 
 // 门面端到端：自动续期在 miniredis 上确实刷新 TTL，正常释放不产生丢失信号。
 func TestRedisLeaseAutoRenewal(t *testing.T) {
-	mr := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-
-	locker, err := NewRedis(client)
-	require.NoError(t, err)
+	l, mr := newRedisLocker(t)
 	ctx := context.Background()
 	const key = "k:renew"
 
-	lease, err := locker.TryAcquire(ctx, key, 900*time.Millisecond)
+	lease, err := l.TryAcquire(ctx, key, MinTTL)
 	require.NoError(t, err)
 	require.True(t, mr.Exists(key))
 
 	// 超过一个 TTL，若无续期 key 会消失。
-	time.Sleep(1200 * time.Millisecond)
+	time.Sleep(MinTTL + 300*time.Millisecond)
 	require.True(t, mr.Exists(key), "auto renewal must keep the key alive")
 	select {
 	case <-lease.Lost():
@@ -102,7 +80,27 @@ func TestRedisLeaseAutoRenewal(t *testing.T) {
 	require.False(t, mr.Exists(key))
 }
 
-// evalFailHook 对 EVAL（redsync 的续期/释放脚本）注入一次瞬时错误。
+// key 被外部删除（模拟被抢占/过期）→ 续期发现不持有 → ErrLockLost。
+func TestRedisKeyStolenLosesLease(t *testing.T) {
+	l, mr := newRedisLocker(t)
+	ctx := context.Background()
+	const key = "k:stolen"
+
+	lease, err := l.TryAcquire(ctx, key, MinTTL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lease.Release(context.Background()) })
+
+	mr.Del(key)
+
+	select {
+	case <-lease.Lost():
+	case <-time.After(3 * time.Second):
+		t.Fatal("lease did not report loss after the key was removed")
+	}
+	require.ErrorIs(t, lease.Cause(), ErrLockLost)
+}
+
+// evalFailHook 对 EVAL（续期/释放脚本）注入一次瞬时错误。
 type evalFailHook struct {
 	failOnce atomic.Bool
 	failed   atomic.Int32
@@ -124,7 +122,7 @@ func (h *evalFailHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis
 	return next
 }
 
-// review 的 P0 回归：单次瞬时续期错误不得宣告丢锁（旧实现会误杀健康临界区）。
+// 单次瞬时续期错误不得宣告丢锁。
 func TestRedisTransientEvalErrorDoesNotLoseLease(t *testing.T) {
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
@@ -132,12 +130,12 @@ func TestRedisTransientEvalErrorDoesNotLoseLease(t *testing.T) {
 	hook := &evalFailHook{}
 	client.AddHook(hook)
 
-	locker, err := NewRedis(client)
+	l, err := NewRedis(client)
 	require.NoError(t, err)
 	ctx := context.Background()
 	const key = "k:blip"
 
-	lease, err := locker.TryAcquire(ctx, key, 900*time.Millisecond)
+	lease, err := l.TryAcquire(ctx, key, MinTTL)
 	require.NoError(t, err)
 
 	hook.failOnce.Store(true)
@@ -151,42 +149,6 @@ func TestRedisTransientEvalErrorDoesNotLoseLease(t *testing.T) {
 	require.True(t, mr.Exists(key), "lock is still held, key must exist")
 
 	require.NoError(t, lease.Release(ctx))
-}
-
-// 多节点 quorum：3 个独立实例，2 活 1 死仍可用；只剩 1 活时是存储故障而非 ErrLocked。
-func TestRedisMultiNodeQuorum(t *testing.T) {
-	ctx := context.Background()
-
-	mr1, mr2, mr3 := miniredis.RunT(t), miniredis.RunT(t), miniredis.RunT(t)
-	c1 := redis.NewClient(&redis.Options{Addr: mr1.Addr()})
-	c2 := redis.NewClient(&redis.Options{Addr: mr2.Addr()})
-	c3 := redis.NewClient(&redis.Options{Addr: mr3.Addr()})
-	t.Cleanup(func() {
-		_ = c1.Close()
-		_ = c2.Close()
-		_ = c3.Close()
-	})
-
-	locker, err := NewRedis(c1, c2, c3)
-	require.NoError(t, err)
-
-	// 全部在线。
-	lease, err := locker.TryAcquire(ctx, "k:quorum-3", 2*time.Second)
-	require.NoError(t, err)
-	require.NoError(t, lease.Release(ctx))
-
-	// 挂 1 个，仍有 quorum。
-	mr3.Close()
-	lease, err = locker.TryAcquire(ctx, "k:quorum-2", 2*time.Second)
-	require.NoError(t, err)
-	require.NoError(t, lease.Release(ctx))
-
-	// 只活 1 个：拿不到 quorum，应报存储故障而不是「被别人占用」。
-	mr2.Close()
-	lease, err = locker.TryAcquire(ctx, "k:quorum-1", 2*time.Second)
-	require.Nil(t, lease)
-	require.Error(t, err)
-	require.NotErrorIs(t, err, ErrLocked, "quorum failure is a storage error, not contention")
 }
 
 // 真实 Redis 端到端（无可用实例时 Skip）：验证续期确实把 TTL 刷回去、释放后 key 被清理。
@@ -207,17 +169,17 @@ func TestRedisIntegrationRealServer(t *testing.T) {
 		t.Skipf("redis not available at %s: %v", addr, err)
 	}
 
-	locker, err := NewRedis(client)
+	l, err := NewRedis(client)
 	require.NoError(t, err)
 	ctx := context.Background()
 	key := fmt.Sprintf("distlock:test:%d", time.Now().UnixNano())
 	t.Cleanup(func() { _ = client.Del(context.Background(), key).Err() })
 
-	lease, err := locker.TryAcquire(ctx, key, time.Second)
+	lease, err := l.TryAcquire(ctx, key, MinTTL)
 	require.NoError(t, err)
 
 	// 超过一个 TTL；续期失效则 key 会消失。
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(MinTTL + 500*time.Millisecond)
 	ttl, err := client.TTL(ctx, key).Result()
 	require.NoError(t, err)
 	require.Greater(t, ttl, time.Duration(0), "auto renewal should keep the key alive")

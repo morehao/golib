@@ -7,131 +7,105 @@ import (
 	"time"
 
 	"github.com/go-redsync/redsync/v4"
-	"github.com/go-redsync/redsync/v4/redis"
-	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
-	goredislib "github.com/redis/go-redis/v9"
+	redispool "github.com/go-redsync/redsync/v4/redis/goredis/v9"
+	goredis "github.com/redis/go-redis/v9"
 )
 
-// redisAcquireTimeoutFactor 决定单次获取/续期 RPC 的预算：TTL * factor。
+// redisAcquireTimeoutFactor 决定 redsync 单次获取/续期 RPC 的预算：TTL * factor。
 //
-// redsync 默认 0.05。这里抬到 0.1：TTL 较小时 5% 会小于一次正常 RTT（例如 TTL=1s 时只有
-// 50ms），会让「获取」本身变成偶发失败。factor 越大越抗抖动，但获取耗时也会更多地从租约
-// 有效期里扣除（redsync 会相应地缩短有效期并在必要时放弃本次获取）。
+// redsync 默认 0.05。这里抬到 0.1：TTL=1s 时 5% 只有 50ms，小于一次正常 RTT；10% 仍远小于
+// 续期确认窗口（TTL*2/3），不会把获取本身变成租约的主要消耗。
 const redisAcquireTimeoutFactor = 0.1
 
-// RedisFactory 是基于 Redis（redsync / Redlock 算法）的后端工厂，满足 Factory 接口。
+// redisUnlockExpiry 仅用于给 Unlock 路径构造一个合法的 redsync.Mutex；
+// expiry 在 Unlock 中不参与计算（只用到 value 与连接池）。
+const redisUnlockExpiry = time.Second
+
+// redisStore 是 Redis 后端。三个原语委托给 redsync（Redlock 的单节点退化）：
+// 获取是 SET NX PX，续期/释放是带 value 守卫的 Lua CAS。协议由 redsync 维护，
+// 本包只负责租约状态机与三态错误归一化。
 //
-// 多节点：传入多个 client 即构成 quorum（N/2+1）。**这些 client 必须指向相互独立的 Redis
-// master**；指向同一个实例的多个 client 不会提高任何安全性，只会让每次操作多几倍开销。
-//
-// 单节点：只有一个 client 时等价于 SET NX PX + Lua 校验 value，这是绝大多数内部场景的正确选择。
-type RedisFactory struct {
+// 多节点 quorum 能力不对外暴露：NewRedis 只接受一个 client。
+type redisStore struct {
 	rs *redsync.Redsync
 }
 
-// NewRedisFactory 创建 Redis 后端，至少需要一个非 nil client。
-func NewRedisFactory(clients ...goredislib.UniversalClient) (*RedisFactory, error) {
-	if len(clients) == 0 {
-		return nil, errors.New("distlock: at least one redis client required")
-	}
-	pools := make([]redis.Pool, 0, len(clients))
-	for i, c := range clients {
-		if c == nil {
-			return nil, fmt.Errorf("distlock: nil redis client (index %d)", i)
-		}
-		pools = append(pools, goredis.NewPool(c))
-	}
-	return &RedisFactory{rs: redsync.New(pools...)}, nil
-}
-
-// NewRedis 是最常用的构造方式：Redis 后端 + 门面一步到位。
+// NewRedis 用 go-redis 客户端构造锁门面（跨进程形态）。进程内一个门面即可，可并发使用。
 //
-// 需要自定义 Hook 时用 NewRedisFactory + New + WithHooks（Hooks 是 per-acquire 选项）。
-func NewRedis(clients ...goredislib.UniversalClient) (*Locker, error) {
-	f, err := NewRedisFactory(clients...)
-	if err != nil {
-		return nil, err
+// 这是唯一需要外部依赖的构造方式：distlock 不负责客户端的构造、连接池、日志与鉴权，
+// 由装配层（通常经 dbaccess/dbredis）准备 client 后传入。
+func NewRedis(rdb goredis.UniversalClient, opts ...Option) (*Locker, error) {
+	if rdb == nil {
+		return nil, fmt.Errorf("%w: nil redis client", ErrInvalidConfig)
 	}
-	return New(f)
+	return newLocker(&redisStore{rs: redsync.New(redispool.NewPool(rdb))}, opts), nil
 }
 
-// NewMutex 按 key + TTL 创建一把 Redis 锁。
-func (f *RedisFactory) NewMutex(key string, ttl time.Duration) (Mutex, error) {
-	if key == "" {
-		return nil, ErrInvalidKey
-	}
-	if ttl < MinTTL {
-		return nil, fmt.Errorf("%w: %s < %s", ErrInvalidTTL, ttl, MinTTL)
-	}
-	mutex := f.rs.NewMutex(key,
+// newMutex 构造一个绑定本次 token 的 redsync.Mutex：
+//   - WithTries(1)：重试由 Lease 的续期循环负责，redsync 只做单次尝试；
+//   - WithGenValueFunc + WithValue：持有者凭证由 Locker 统一生成（UUID v7）。
+//     前者作用于获取（redsync 会重新生成 value），后者作用于续期/释放（直接使用 value）。
+func (s *redisStore) newMutex(key, token string, ttl time.Duration) *redsync.Mutex {
+	return s.rs.NewMutex(key,
 		redsync.WithExpiry(ttl),
-		// 门面层负责等待与重试，后端只做单次尝试。
 		redsync.WithTries(1),
+		redsync.WithValue(token),
+		redsync.WithGenValueFunc(func() (string, error) { return token, nil }),
 		redsync.WithTimeoutFactor(redisAcquireTimeoutFactor),
 	)
-	return &redisMutex{mutex: mutex}, nil
 }
 
-// redisMutex 是 redsync.Mutex 的适配：把 bool/错误对收敛成哨兵错误三态。
-type redisMutex struct {
-	mutex *redsync.Mutex
+func (s *redisStore) acquire(ctx context.Context, key, token string, ttl time.Duration) error {
+	return normalizeRedisOutcome(true, s.newMutex(key, token, ttl).TryLockContext(ctx))
 }
 
-func (m *redisMutex) TryLock(ctx context.Context) error {
-	if err := m.mutex.TryLockContext(ctx); err != nil {
-		return normalizeRedisErr(err)
-	}
-	return nil
+func (s *redisStore) renew(ctx context.Context, key, token string, ttl time.Duration) error {
+	ok, err := s.newMutex(key, token, ttl).ExtendContext(ctx)
+	return normalizeRedisOutcome(ok, err)
 }
 
-func (m *redisMutex) Refresh(ctx context.Context) error {
-	ok, err := m.mutex.ExtendContext(ctx)
-	if err != nil {
-		return normalizeRedisErr(err)
-	}
-	if !ok {
+func (s *redisStore) release(ctx context.Context, key, token string) error {
+	ok, err := s.newMutex(key, token, redisUnlockExpiry).UnlockContext(ctx)
+	return normalizeRedisOutcome(ok, err)
+}
+
+// normalizeRedisOutcome 把 redsync 的 (ok, err) 收敛成 store 契约的三态：
+//   - 竞争类错误或 ok=false（值不匹配 / 已过期）→ ErrLocked；
+//   - 其他错误保持原样，由上层当作瞬时存储故障重试；
+//   - 成功 → nil。
+func normalizeRedisOutcome(ok bool, err error) error {
+	switch {
+	case err != nil && isHeldErr(err):
 		return ErrLocked
-	}
-	return nil
-}
-
-func (m *redisMutex) Unlock(ctx context.Context) error {
-	ok, err := m.mutex.UnlockContext(ctx)
-	if err != nil {
-		return normalizeRedisErr(err)
-	}
-	if !ok {
-		// 没有释放掉任何 key（已过期 / value 不匹配），对调用方等价于「已不持有」。
+	case err != nil:
+		return err
+	case !ok:
 		return ErrLocked
-	}
-	return nil
-}
-
-func (m *redisMutex) Token() string { return m.mutex.Value() }
-
-// normalizeRedisErr 把 redsync 的「竞争类」错误归一化成 ErrLocked，其余保持原样（存储故障）。
-//
-// 这条归一化是续期状态机的前提：上层只靠 ErrLocked 判断「明确不持有」，任何其他错误都按
-// 瞬时故障处理并在 renewDeadline 内重试。
-//
-// 注意多节点下的一个已知取舍：若部分节点返回 ErrNodeTaken、部分节点返回连接错误，
-// multierror 会同时包含两者，这里优先判为 ErrLocked（保守地认为锁已不属于自己）。
-func normalizeRedisErr(err error) error {
-	if err == nil {
+	default:
 		return nil
+	}
+}
+
+// isHeldErr 判断 redsync 的错误是否属于「明确不持有」。
+//
+// single-node 下错误来源是单节点的，不存在 quorum 混合错误；仍同时匹配 ErrNodeTaken 与
+// ErrTaken，是因为 redsync 在「节点返回 0」与「多节点多数派被占」两种路径下给出不同错误类型。
+func isHeldErr(err error) bool {
+	if err == nil {
+		return false
 	}
 	if errors.Is(err, redsync.ErrFailed) ||
 		errors.Is(err, redsync.ErrLockAlreadyExpired) ||
 		errors.Is(err, redsync.ErrExtendFailed) {
-		return ErrLocked
+		return true
 	}
 	var taken *redsync.ErrTaken
 	if errors.As(err, &taken) {
-		return ErrLocked
+		return true
 	}
 	var nodeTaken *redsync.ErrNodeTaken
 	if errors.As(err, &nodeTaken) {
-		return ErrLocked
+		return true
 	}
-	return err
+	return false
 }

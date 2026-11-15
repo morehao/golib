@@ -1,10 +1,6 @@
 package gcron
 
-import (
-	"time"
-
-	"github.com/morehao/golib/distlock"
-)
+import "time"
 
 // 内置兜底/清理循环的默认参数。
 const (
@@ -20,11 +16,10 @@ type Config struct {
 	EnableLock  bool
 	// LockTTL 分布式锁租约时长（可被 Task.LockTTL 覆盖）。租约由 distlock 自动续期，
 	// 因此 handler 执行超过该值也不会导致锁过期；它同时决定「实例静默宕机后被接管」的上限。
+	// 必须 >= distlock.MinTTL（1s），否则 Register 返回 ErrInvalidLockTTL。
 	LockTTL time.Duration
 	// Timeout 默认单次执行超时（可被 Task.Timeout 覆盖），<=0 表示不限制。
 	Timeout time.Duration
-	// Locker 分布式锁门面（推荐通过 WithLocker 配置；New 的位置参数为兼容旧签名）。
-	Locker *distlock.Locker
 
 	// StaleRunningCutoff >0 时启用崩溃兜底：Start 后立即执行一次，并按 RunCleanupInterval
 	// 周期把 start_at 早于 now-cutoff 仍处于 running 的执行记录标记为 failed。

@@ -2,7 +2,6 @@ package distlock
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -24,6 +23,8 @@ import (
 //
 // 安全边界与包级文档一致：这是 best-effort 的选主，不提供 fencing token。旧 Leader 长时间
 // 停顿后恢复的窗口内可能出现两个进程同时自认 Leader，需要严格互斥时请在资源侧实现 fencing。
+//
+// 用 NewMemory 构造的门面下，选举恒为本进程当选（等价于没有选举），只适合单副本部署。
 type LeaderElector struct {
 	locker *Locker
 	cfg    LeaderConfig
@@ -58,23 +59,23 @@ type Callbacks struct {
 // NewLeaderElector 创建选举器；创建后尚未参与选举，需调用 Run。
 func NewLeaderElector(locker *Locker, cfg LeaderConfig) (*LeaderElector, error) {
 	if locker == nil {
-		return nil, errors.New("distlock: nil locker")
+		return nil, fmt.Errorf("%w: nil locker", ErrInvalidConfig)
 	}
 	if cfg.Key == "" {
-		return nil, ErrInvalidKey
+		return nil, fmt.Errorf("%w: key is empty", ErrInvalidConfig)
 	}
 	if cfg.TTL < MinTTL {
-		return nil, fmt.Errorf("%w: %s < %s", ErrInvalidTTL, cfg.TTL, MinTTL)
+		return nil, fmt.Errorf("%w: ttl %s < %s", ErrInvalidConfig, cfg.TTL, MinTTL)
 	}
 	if cfg.RetryInterval <= 0 {
 		cfg.RetryInterval = cfg.TTL / 6
-		if cfg.RetryInterval < minRenewRetryInterval {
-			cfg.RetryInterval = minRenewRetryInterval
+		if cfg.RetryInterval < retryFloor {
+			cfg.RetryInterval = retryFloor
 		}
 	}
 	if cfg.RetryInterval >= cfg.TTL {
 		return nil, fmt.Errorf("%w: retry interval %s must be < ttl %s",
-			ErrInvalidOption, cfg.RetryInterval, cfg.TTL)
+			ErrInvalidConfig, cfg.RetryInterval, cfg.TTL)
 	}
 	return &LeaderElector{locker: locker, cfg: cfg}, nil
 }
@@ -151,15 +152,3 @@ func (e *LeaderElector) becomeLeader() {
 }
 
 func (e *LeaderElector) becomeFollower() { e.isLeader.Store(false) }
-
-// sleepCtx 在 ctx 取消前休眠 d；返回 false 表示 ctx 已取消。
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}

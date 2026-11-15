@@ -74,7 +74,7 @@ type skipStat struct {
 	suppressed int
 }
 
-func New(db *gorm.DB, cfg *Config, locker *distlock.Locker, opts ...Option) (*Scheduler, error) {
+func New(db *gorm.DB, cfg *Config, opts ...Option) (*Scheduler, error) {
 	if cfg == nil {
 		cfg = defaultConfig()
 	}
@@ -97,10 +97,8 @@ func New(db *gorm.DB, cfg *Config, locker *distlock.Locker, opts ...Option) (*Sc
 			return nil, err
 		}
 	}
-	// 位置参数优先；未传时使用 WithLocker 配置的锁门面。
-	if locker == nil {
-		locker = cfg.Locker
-	}
+	// 锁门面是依赖而非配置：只从构造选项（WithLocker）取，Config 保持纯数据。
+	locker := o.Locker
 
 	var cronOpts []cron.Option
 	if cfg.WithSeconds {
