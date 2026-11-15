@@ -176,8 +176,8 @@ err = elector.Run(ctx, distlock.Callbacks{
 ## 与其他组件的关系
 
 - **`task/gcron`**：唯一内置消费者。每次 run 前 `TryAcquire("cron:lock:"+taskID, LockTTL)`，用 `lease.Context()` 把丢锁接到 handler 的 ctx 上，并把该次执行记为 `lock_lost`；锁门面经 `gcron.WithLocker` 注入。
-- **`gcache/redis`**：其中用裸 `SET NX PX` 做**防缓存击穿**的短占位，与 distlock 的「互斥临界区」是不同语义（短 TTL / fail-open / 无持有者校验 / 无续期），二者并存、不复用。
-- **`dbaccess/dbredis`**：`driver/redis` 用它按 `RedisConfig` 建连接（日志 / 超时 / PING），因此使用 redis 后端需要 `glog` 驱动已注册（与 `gcache/redis` 相同）。
+- **`gcache/driver/redis`**：其中用裸 `SET NX PX` 做**防缓存击穿**的短占位，与 distlock 的「互斥临界区」是不同语义（短 TTL / fail-open / 无持有者校验 / 无续期），二者并存、不复用。
+- **`dbaccess/dbredis`**：`driver/redis` 用它按 `RedisConfig` 建连接（日志 / 超时 / PING），因此使用 redis 后端需要 `glog` 驱动已注册（与 `gcache/driver/redis` 相同）。
 
 ## 测试
 

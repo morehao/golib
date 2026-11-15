@@ -21,7 +21,7 @@ const defaultSourceCachePrefix = "gprompt:"
 // 刻意只声明 GetOrLoad / Delete 两个方法，签名与 gcache.Cache 完全一致，
 // 使 *gcache.Cache（含 memory / redis 后端）可结构化满足，而 gprompt 生产代码
 // 不必 import gcache，避免核心读取抽象对缓存后端产生硬依赖。
-// 测试可注入 gcache/memory 的真实实现，也可注入自定义实现。
+// 测试可注入 gcache/driver/memory 的真实实现，也可注入自定义实现。
 type cachePort interface {
 	// GetOrLoad 命中直接写入 dst；未命中调用 load 回源、写回后返回。
 	GetOrLoad(ctx context.Context, key string, dst any, ttl time.Duration, load func(context.Context) (any, error)) error

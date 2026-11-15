@@ -15,16 +15,16 @@ import (
     "time"
 
     "github.com/morehao/golib/gcache"
-    _ "github.com/morehao/golib/gcache/memory" // blank import 注册 "memory" 后端
+    _ "github.com/morehao/golib/gcache/driver/memory" // blank import 注册 "memory" driver
 )
 
 ctx := context.Background()
 c, err := gcache.New(gcache.Config{
-    Backend:    "memory",
+    Driver:     "memory",
     KeyPrefix:  "demo:",
     DefaultTTL: 5 * time.Minute,
 })
-if err != nil { /* 未注册后端 = 漏了 blank import */ }
+if err != nil { /* 未注册 driver = 漏了 blank import */ }
 defer c.Close()
 
 // 写 / 读
@@ -53,21 +53,21 @@ type User struct{ Name string }
 u, ok, err := gcache.GetAs[User](ctx, c, "user:1")
 ```
 
-## 后端
+## 驱动
 
-| 后端 | 注册名 | blank import | 说明 |
+| Driver | 注册名 | blank import | 说明 |
 |---|---|---|---|
-| 内存 | `memory` | `_ "github.com/morehao/golib/gcache/memory"` | map+RWMutex，惰性过期 + 周期清理，`MaxEntries` LRU，GetOrLoad single-flight |
-| Redis | `redis` | `_ "github.com/morehao/golib/gcache/redis"` | 复用 `dbaccess/dbredis`；建 key 前缀；GetOrLoad 用 `SET NX PX` 短占位 + fail-open |
+| 内存 | `memory` | `_ "github.com/morehao/golib/gcache/driver/memory"` | map+RWMutex，惰性过期 + 周期清理，`MaxEntries` LRU，GetOrLoad single-flight |
+| Redis | `redis` | `_ "github.com/morehao/golib/gcache/driver/redis"` | 复用 `dbaccess/dbredis`；建 key 前缀；GetOrLoad 用 `SET NX PX` 短占位 + fail-open |
 
 ```go
-// redis 后端
+// redis driver
 _ = gcache.WithRedis(gcache.RedisConfig{
     Addr:     "127.0.0.1:6379",
     Password: "123456",
     DB:       0,
 })
-c, _ := gcache.New(gcache.Config{Backend: "redis", DefaultTTL: time.Minute},
+c, _ := gcache.New(gcache.Config{Driver: "redis", DefaultTTL: time.Minute},
     gcache.WithRedis(gcache.RedisConfig{Addr: "127.0.0.1:6379"}))
 ```
 
@@ -93,7 +93,7 @@ c, _ := gcache.New(gcache.Config{Backend: "redis", DefaultTTL: time.Minute},
 
 ## 错误分层
 
-`gcache:` 前缀：`ErrMiss`（未命中）、`ErrInvalidConfig`、`ErrBackendNotRegistered`、`ErrClosed`。
+`gcache:` 前缀：`ErrMiss`（未命中）、`ErrInvalidConfig`、`ErrDriverNotRegistered`、`ErrClosed`。
 
 ## 与 dict / gprompt 集成
 

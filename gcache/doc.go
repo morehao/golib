@@ -4,7 +4,7 @@
 // 另开 PR），本身不依赖任何业务包。
 //
 // 设计要点：
-//   - 接口 + 后端驱动注册（对齐 storage/gllm）：gcache/memory、gcache/redis
+//   - 接口 + 后端驱动注册（对齐 storage/gllm）：gcache/driver/memory、gcache/driver/redis
 //     各自在 init() 里注册，必须 blank import 才能用。
 //   - 无全局单例：所有实例经显式构造注入，不提供 Std()。
 //   - 值统一经 Codec 序列化为 []byte，内存与 redis 行为一致。
@@ -14,11 +14,11 @@
 //
 //	import (
 //		"github.com/morehao/golib/gcache"
-//		_ "github.com/morehao/golib/gcache/memory"
+//		_ "github.com/morehao/golib/gcache/driver/memory"
 //	)
 //
 //	c, err := gcache.New(gcache.Config{
-//		Backend:    "memory",
+//		Driver:     gcache.DriverMemory,
 //		DefaultTTL: 5 * time.Minute,
 //	})
 //	if err != nil {
@@ -33,10 +33,10 @@
 //
 // redis 后端：
 //
-//	import _ "github.com/morehao/golib/gcache/redis"
+//	import _ "github.com/morehao/golib/gcache/driver/redis"
 //
 //	c, err := gcache.New(gcache.Config{
-//		Backend: "redis",
+//		Driver: gcache.DriverRedis,
 //		Redis:   &gcache.RedisConfig{Service: "cache", Addr: "127.0.0.1:6379"},
 //	})
 package gcache

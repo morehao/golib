@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/gcache"
-	_ "github.com/morehao/golib/gcache/memory"
+	_ "github.com/morehao/golib/gcache/driver/memory"
 )
 
 // countingSource 是一个包装 MemorySource 的假 Source，统计回源次数。
@@ -48,7 +48,7 @@ func (c *countingSource) counts() (code, ver int) {
 // newMemoryCache 用真实 gcache memory 后端构造一个 Cache（供 cachePort 结构化满足）。
 func newMemoryCache(t *testing.T) gcache.Cache {
 	t.Helper()
-	c, err := gcache.New(gcache.Config{Backend: "memory"})
+	c, err := gcache.New(gcache.Config{Driver: "memory"})
 	if err != nil {
 		t.Fatalf("new memory cache: %v", err)
 	}

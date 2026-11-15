@@ -2,7 +2,7 @@ package gcache
 
 import "time"
 
-// RedisConfig 是 Backend="redis" 时使用的连接配置。
+// RedisConfig 是 Driver=DriverRedis 时使用的连接配置。
 //
 // 刻意保持为纯数据（可放进配置文件 / YAML），不引入 dbaccess/dbredis 类型，
 // 避免 gcache 根包对具体后端的编译期依赖；redis 子包按字段构造底层客户端。
@@ -16,18 +16,26 @@ type RedisConfig struct {
 	WriteTimeout time.Duration // 写入超时
 }
 
+// DriverType 标识选用哪个 driver 实现。
+type DriverType string
+
+const (
+	DriverMemory DriverType = "memory"
+	DriverRedis  DriverType = "redis"
+)
+
 // Config 是 gcache 的值对象配置：把批量、可序列化、可放进配置文件的参数收在一处。
 //
 // 既可作为 New 的第一个参数整体传入，也可通过 WithConfig 选项作为底值，
 // 再用细粒度 WithXxx 覆盖。New 内部会归一化（补默认值、校验合法性）。
 type Config struct {
-	Backend         string        // 后端名："memory" | "redis"，为空时默认 "memory"
+	Driver          DriverType    // 驱动名：DriverMemory | DriverRedis，为空时默认 DriverMemory
 	KeyPrefix       string        // 键前缀，默认 "gcache:"
 	DefaultTTL      time.Duration // 默认 TTL，0=不过期
 	CleanupInterval time.Duration // memory 清理周期，默认 1m
 	MaxEntries      int           // memory 条目上限，0=不限
 	Codec           Codec         // 默认 JSONCodec
-	Redis           *RedisConfig  // Backend="redis" 时使用
+	Redis           *RedisConfig  // Driver=DriverRedis 时使用
 }
 
 // options 是 New 内部真正使用的可选项集合，与 Config 一一对应。
@@ -42,7 +50,7 @@ type Option func(*options)
 func defaultOptions() *options {
 	return &options{
 		config: Config{
-			Backend:         "memory",
+			Driver:          DriverMemory,
 			KeyPrefix:       "gcache:",
 			CleanupInterval: time.Minute,
 			Codec:           JSONCodec{},
@@ -87,11 +95,11 @@ func WithMaxEntries(n int) Option {
 	return func(o *options) { o.config.MaxEntries = n }
 }
 
-// WithRedis 设置 redis 连接配置（同时把 Backend 设为 "redis"）。
+// WithRedis 设置 redis 连接配置（同时把 Driver 设为 DriverRedis）。
 func WithRedis(cfg RedisConfig) Option {
 	return func(o *options) {
 		rc := cfg
 		o.config.Redis = &rc
-		o.config.Backend = "redis"
+		o.config.Driver = DriverRedis
 	}
 }

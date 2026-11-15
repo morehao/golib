@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/morehao/golib/gcache"
-	_ "github.com/morehao/golib/gcache/memory"
+	_ "github.com/morehao/golib/gcache/driver/memory"
 )
 
 // Example 演示 memory 后端的基本读写与 GetOrLoad。
 func Example() {
 	ctx := context.Background()
-	c, err := gcache.New(gcache.Config{Backend: "memory", KeyPrefix: "ex:"})
+	c, err := gcache.New(gcache.Config{Driver: "memory", KeyPrefix: "ex:"})
 	if err != nil {
 		fmt.Println("new:", err)
 		return
@@ -46,7 +46,7 @@ func Example() {
 // ExampleGetAs 演示泛型便捷读。
 func ExampleGetAs() {
 	ctx := context.Background()
-	c, _ := gcache.New(gcache.Config{Backend: "memory"})
+	c, _ := gcache.New(gcache.Config{Driver: "memory"})
 	defer c.Close()
 
 	type User struct{ Name string }

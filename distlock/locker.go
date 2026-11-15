@@ -12,7 +12,7 @@ import (
 
 // Locker 是分布式锁门面（接口）：进程内构造一个即可，可被任意多个 goroutine 并发使用。
 //
-// 锁的形态由 Config.Driver 决定（"memory" 进程内 / "redis" 跨进程），由对应 driver 子包
+// 锁的形态由 Config.Driver 决定（DriverMemory 进程内 / DriverRedis 跨进程），由对应 driver 子包
 // 注册后经 New 选出；续期恒开：获取成功后自动按 TTL/3 续期，调用方必须 Release，
 // 进程退出时调用 Close。
 type Locker interface {
@@ -59,7 +59,7 @@ func New(cfg Config, opts ...Option) (Locker, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
-	f, ok := lookup(cfg.Driver)
+	f, ok := lookup(string(cfg.Driver))
 	if !ok {
 		// 不拼"看起来应该存在"的子包路径（名字拼错时那条路径不存在），而是列出已注册
 		// 后端 + blank import 提示，与 gcache 的拼接式文案有意不同。

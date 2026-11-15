@@ -55,21 +55,21 @@ func (f *fakeCache) GetOrLoad(ctx context.Context, key string, dst any, ttl time
 }
 func (f *fakeCache) Close() error { return nil }
 
-func TestNewBackendNotRegistered(t *testing.T) {
-	_, err := New(Config{Backend: "does-not-exist"})
-	assert.ErrorIs(t, err, ErrBackendNotRegistered)
+func TestNewDriverNotRegistered(t *testing.T) {
+	_, err := New(Config{Driver: "does-not-exist"})
+	assert.ErrorIs(t, err, ErrDriverNotRegistered)
 }
 
 func TestNewRedisRequiresConfig(t *testing.T) {
-	_, err := New(Config{Backend: "redis"})
+	_, err := New(Config{Driver: "redis"})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 }
 
 func TestNewInvalidConfig(t *testing.T) {
-	_, err := New(Config{Backend: "memory", DefaultTTL: -time.Second})
+	_, err := New(Config{Driver: "memory", DefaultTTL: -time.Second})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 
-	_, err = New(Config{Backend: "memory", MaxEntries: -1})
+	_, err = New(Config{Driver: "memory", MaxEntries: -1})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 }
 
@@ -77,15 +77,15 @@ func TestRegisterPanics(t *testing.T) {
 	assert.Panics(t, func() { Register("", func(Config) (Cache, error) { return nil, nil }) })
 	assert.Panics(t, func() { Register("ok-nil", nil) })
 
-	// 注册一个临时后端并验证重复注册 panic + New 可用。
-	Register("test-backend", func(cfg Config) (Cache, error) {
+	// 注册一个临时 driver 并验证重复注册 panic + New 可用。
+	Register("test-driver", func(cfg Config) (Cache, error) {
 		return &fakeCache{store: map[string][]byte{}, codec: cfg.Codec}, nil
 	})
 	assert.Panics(t, func() {
-		Register("test-backend", func(Config) (Cache, error) { return nil, nil })
+		Register("test-driver", func(Config) (Cache, error) { return nil, nil })
 	})
 
-	c, err := New(Config{Backend: "test-backend"})
+	c, err := New(Config{Driver: "test-driver"})
 	require.NoError(t, err)
 	ctx := context.Background()
 	require.NoError(t, c.Set(ctx, "k", 42, time.Minute))
@@ -103,10 +103,10 @@ func TestGetAsMiss(t *testing.T) {
 	assert.Equal(t, 0, v)
 }
 
-func TestWithRedisSetsBackend(t *testing.T) {
+func TestWithRedisSetsDriver(t *testing.T) {
 	o := defaultOptions()
 	WithRedis(RedisConfig{Addr: "x"})(o)
-	assert.Equal(t, "redis", o.config.Backend)
+	assert.Equal(t, DriverRedis, o.config.Driver)
 	require.NotNil(t, o.config.Redis)
 	assert.Equal(t, "x", o.config.Redis.Addr)
 }
@@ -114,7 +114,7 @@ func TestWithRedisSetsBackend(t *testing.T) {
 func TestNormalizeDefaults(t *testing.T) {
 	cfg := Config{}
 	normalize(&cfg)
-	assert.Equal(t, "memory", cfg.Backend)
+	assert.Equal(t, DriverMemory, cfg.Driver)
 	assert.Equal(t, "gcache:", cfg.KeyPrefix)
 	assert.Equal(t, time.Minute, cfg.CleanupInterval)
 	assert.NotNil(t, cfg.Codec)

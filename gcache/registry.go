@@ -18,31 +18,31 @@ var (
 //
 // 空名、nil factory、重复注册都会 panic：它们是编程错误，
 // 应在进程启动期立刻暴露（对齐 gllm/storage 的注册表写法）。
-func Register(backend string, f Factory) {
-	if backend == "" {
-		panic("gcache: register backend with empty name")
+func Register(name string, f Factory) {
+	if name == "" {
+		panic("gcache: register driver with empty name")
 	}
 	if f == nil {
-		panic("gcache: register nil backend factory for " + backend)
+		panic("gcache: register nil driver factory for " + name)
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	if _, exists := registry[backend]; exists {
-		panic(fmt.Sprintf("gcache: backend %q already registered", backend))
+	if _, exists := registry[name]; exists {
+		panic(fmt.Sprintf("gcache: driver %q already registered", name))
 	}
-	registry[backend] = f
+	registry[name] = f
 }
 
 // lookup 按后端名查工厂。
-func lookup(backend string) (Factory, bool) {
+func lookup(name string) (Factory, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
-	f, ok := registry[backend]
+	f, ok := registry[name]
 	return f, ok
 }
 
-// Backends 返回已注册的后端名，按字典序排序。
-func Backends() []string {
+// Drivers 返回已注册的 driver 名，按字典序排序。
+func Drivers() []string {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	out := make([]string, 0, len(registry))
@@ -56,7 +56,7 @@ func Backends() []string {
 // New 构造一个 Cache。
 //
 // cfg 作为底值，随后依次应用 opts 覆盖；最终配置会归一化（补默认值）并校验。
-// 未注册后端返回 [ErrBackendNotRegistered]（最常见原因是漏了 blank import）。
+// 未注册 driver 返回 [ErrDriverNotRegistered]（最常见原因是漏了 blank import）。
 func New(cfg Config, opts ...Option) (Cache, error) {
 	o := defaultOptions()
 	// cfg 作为底值：仅覆盖其非零字段，其余保留默认。
@@ -72,18 +72,18 @@ func New(cfg Config, opts ...Option) (Cache, error) {
 		return nil, err
 	}
 
-	f, ok := lookup(o.config.Backend)
+	f, ok := lookup(string(o.config.Driver))
 	if !ok {
-		return nil, fmt.Errorf("%w: backend %q; please blank import _ \"github.com/morehao/golib/gcache/%s\"",
-			ErrBackendNotRegistered, o.config.Backend, o.config.Backend)
+		return nil, fmt.Errorf("%w: driver %q; please blank import _ \"github.com/morehao/golib/gcache/driver/%s\"",
+			ErrDriverNotRegistered, o.config.Driver, o.config.Driver)
 	}
 	return f(o.config)
 }
 
 // mergeConfig 把 src 的非零字段合并进 dst（dst 已有默认值）。
 func mergeConfig(dst *Config, src Config) {
-	if src.Backend != "" {
-		dst.Backend = src.Backend
+	if src.Driver != "" {
+		dst.Driver = src.Driver
 	}
 	if src.KeyPrefix != "" {
 		dst.KeyPrefix = src.KeyPrefix
@@ -107,8 +107,8 @@ func mergeConfig(dst *Config, src Config) {
 
 // normalize 补齐归一化后仍为空的默认值。
 func normalize(cfg *Config) {
-	if cfg.Backend == "" {
-		cfg.Backend = "memory"
+	if cfg.Driver == "" {
+		cfg.Driver = DriverMemory
 	}
 	if cfg.KeyPrefix == "" {
 		cfg.KeyPrefix = "gcache:"
@@ -129,8 +129,8 @@ func validate(cfg *Config) error {
 	if cfg.MaxEntries < 0 {
 		return fmt.Errorf("%w: MaxEntries must be >= 0", ErrInvalidConfig)
 	}
-	if cfg.Backend == "redis" && cfg.Redis == nil {
-		return fmt.Errorf("%w: backend redis requires Redis config", ErrInvalidConfig)
+	if cfg.Driver == DriverRedis && cfg.Redis == nil {
+		return fmt.Errorf("%w: driver redis requires Redis config", ErrInvalidConfig)
 	}
 	return nil
 }

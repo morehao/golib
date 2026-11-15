@@ -8,7 +8,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
-	// dbredis.New 会用 glog 建 logger，测试里必须注册一个 glog driver（与 gcache/redis 的测试一致）。
+	// dbredis.New 会用 glog 建 logger，测试里必须注册一个 glog driver（与 gcache/driver/redis 的测试一致）。
 	_ "github.com/morehao/golib/glog/driver/zap"
 
 	"github.com/morehao/golib/distlock"
