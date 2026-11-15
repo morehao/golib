@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 修复：gnotify/lark post 消息缺 "post" 包裹层
+
+- 飞书自定义机器人 `post` 富文本消息要求 `{"content":{"post":{"zh_cn":...}}}`。此前
+  `buildBody` 把内层 `zh_cn` 结构直接赋给 `content`，丢掉最外 `post` 包裹层，飞书返回
+  `code 10208 "'post' field required"`。改为赋整体 `larkPost`（其最外层 json tag 即 `post`）。
+  经真实飞书 webhook 验证 `post` 已可送达。
+
 ### 破坏性重构：distlock（v1.37）
 
 - **后端改为注册表 + driver 子包**：核心包不再 import 任何后端实现，后端在
