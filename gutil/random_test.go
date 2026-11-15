@@ -53,7 +53,7 @@ func TestRandomFromSet(t *testing.T) {
 		t.Fatalf("want len 20, got %d", len(s))
 	}
 	allowed := func(b byte) bool {
-		for i := 0; i < len(RandomCharsetAlphanumeric); i++ {
+		for i := range len(RandomCharsetAlphanumeric) {
 			if RandomCharsetAlphanumeric[i] == b {
 				return true
 			}

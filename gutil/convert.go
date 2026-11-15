@@ -46,7 +46,7 @@ func ToJsonString(v any) string {
 
 func LinkedListToArray(l *list.List, dest any) error {
 	destValue := reflect.ValueOf(dest)
-	if destValue.Kind() != reflect.Ptr || destValue.Elem().Kind() != reflect.Slice {
+	if destValue.Kind() != reflect.Pointer || destValue.Elem().Kind() != reflect.Slice {
 		return fmt.Errorf("destination must be a pointer to a slice")
 	}
 

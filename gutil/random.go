@@ -66,7 +66,7 @@ func RandomFromSet(length int, set string) (string, error) {
 	}
 	out := make([]byte, length)
 	n := len(set)
-	for i := 0; i < length; i++ {
+	for i := range length {
 		v, err := randInt(n)
 		if err != nil {
 			return "", fmt.Errorf("random from set: %w", err)

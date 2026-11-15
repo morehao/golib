@@ -189,9 +189,9 @@ func (n *notifier) Send(ctx context.Context, msg gnotify.Message) error {
 	paramSet := templateParams(msg.Params)
 	req := &sms.SendSmsRequest{
 		PhoneNumberSet:   stringPtrSlice(phones),
-		SmsSdkAppId:      strPtr(n.cfg.SdkAppID),
-		SignName:         strPtr(n.cfg.SignName),
-		TemplateId:       strPtr(n.cfg.TemplateID),
+		SmsSdkAppId:      new(n.cfg.SdkAppID),
+		SignName:         new(n.cfg.SignName),
+		TemplateId:       new(n.cfg.TemplateID),
 		TemplateParamSet: stringPtrSlice(paramSet),
 	}
 
@@ -249,8 +249,7 @@ func templateParams(params map[string]string) []string {
 	return []string{}
 }
 
-// strPtr / strVal 是 *string 的便捷转换。
-func strPtr(s string) *string { return &s }
+// strVal 是 *string 的安全解引用（nil 返回空串）。
 func strVal(p *string) string {
 	if p == nil {
 		return ""

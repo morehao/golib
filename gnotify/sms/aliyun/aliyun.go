@@ -154,11 +154,11 @@ func (n *notifier) Channel() string { return "aliyun" }
 func (n *notifier) buildClient() (sdkSender, error) {
 	host, protocol := n.cfg.endpointHost()
 	sdkCfg := &openapi.Config{
-		AccessKeyId:     dara.String(n.cfg.AccessKeyID),
-		AccessKeySecret: dara.String(n.cfg.AccessKeySecret),
-		RegionId:        dara.String(n.cfg.region()),
-		Endpoint:        dara.String(host),
-		Protocol:        dara.String(protocol),
+		AccessKeyId:     new(n.cfg.AccessKeyID),
+		AccessKeySecret: new(n.cfg.AccessKeySecret),
+		RegionId:        new(n.cfg.region()),
+		Endpoint:        new(host),
+		Protocol:        new(protocol),
 	}
 	if n.httpClient != nil {
 		sdkCfg.HttpClient = n.httpClient

@@ -60,10 +60,7 @@ func SliceGroup[T any](slice []T, groupSize int) [][]T {
 	groupCount := (length + groupSize - 1) / groupSize
 	groups := make([][]T, 0, groupCount)
 	for i := 0; i < length; i += groupSize {
-		end := i + groupSize
-		if end > length {
-			end = length
-		}
+		end := min(i+groupSize, length)
 		chunk := make([]T, end-i)
 		copy(chunk, slice[i:end])
 		groups = append(groups, chunk)
