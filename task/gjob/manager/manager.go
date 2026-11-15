@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"time"
 
 	"github.com/morehao/golib/task/gjob"
 	"gorm.io/gorm"
@@ -89,41 +88,6 @@ const (
 	// ModePollNotify 轮询 + 通知器。
 	ModePollNotify Mode = "poll+notify"
 )
-
-// Config 任务中心配置。S0 占位：T-M1 会把它与默认值表迁到 config.go 并补全字段。
-type Config struct {
-	PollInterval         time.Duration // 默认 500ms；< 100ms 报 ErrInvalidConfig
-	FallbackPollInterval time.Duration // 默认 30s（通知器形态）
-	BatchSize            int           // 默认 50
-	LeaseTTL             time.Duration // 默认 60s
-	ReaperInterval       time.Duration // 默认 30s
-	CleanupInterval      time.Duration // 默认 1h；0 关闭
-	DefaultMaxAttempts   int           // 默认 3
-	DefaultTimeout       time.Duration // 默认 30s
-	MaxPayloadBytes      int           // 默认 4096
-	Retention            time.Duration // 默认 30 天；0 不清理
-	NotifierQueuePrefix  string        // 默认 gjob
-}
-
-// Option 是 New 的构造选项。封闭接口（apply 未导出）：签名变更不影响调用方。
-type Option interface {
-	apply(*newOptions)
-}
-
-// newOptions 是构造期选项载体。S0 占位：T-M1 会迁到 option.go 并扩展。
-type newOptions struct {
-	*Config
-	autoMigrate bool
-}
-
-type optionFunc func(*newOptions)
-
-func (f optionFunc) apply(o *newOptions) { f(o) }
-
-// WithoutAutoMigrate 关闭构造函数里的自动建表。
-func WithoutAutoMigrate() Option {
-	return optionFunc(func(o *newOptions) { o.autoMigrate = false })
-}
 
 // Stats 任务统计。
 type Stats struct {
