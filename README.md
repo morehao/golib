@@ -259,62 +259,47 @@ For usage examples, refer to [dict usage](dict/README.md)
 ## distlock
 
 ### Overview
-`distlock` is a distributed lock component based on Redis, using redsync algorithm, supporting automatic renewal. It also provides a **leader election** built on the same lock abstraction.
+`distlock` is a distributed lock component on Redis (redsync / Redlock) with always-on auto-renewal, lease-level loss notification, and a best-effort leader election built on the same lease core. It is an **efficiency lock**, not a correctness lock (no fencing token) — see [distlock README](distlock/README.md) for the exact safety boundaries.
 
 ### Features
-- Redis-based distributed lock (single or multi-node quorum)
-- Automatic renewal (lock keepalive) with jitter, lock-loss notification via `Lost()`
-- Non-reentrant
-- **Leader election** (`LeaderElector`): at most one leader across the cluster, claim + renewal model, automatic step-down when the lease is lost
-  - Built on `Lock`/`LockFactory`, so it works with any storage backend without extra dependencies
-  - `IsLeader()` / `Epoch()` (term counter) / `LeaderID()` for querying state; `Run(ctx)` drives the loop
-  - Non-leaders retry on `RetryInterval` and take over once the current leader releases or its lease expires
+- Redis backend: single node, or multi-node quorum (multiple independent Redis masters)
+- `Lease` handle with always-on auto-renewal; `Lost()` / `Context()` / `Cause()` for loss notification
+- Three distinguishable outcomes via sentinel errors: busy (`ErrLocked`), lease lost (`ErrLockLost` / `ErrRenewFailed`), storage failure
+- Transient renewal errors are retried within a renew deadline instead of being reported as lock loss
+- Blocking `Acquire` (jittered retry) and non-blocking `TryAcquire`; idempotent, bounded `Release`
+- **Leader election** on the same lease core: k8s-style `OnStartedLeading` / `OnStoppedLeading` callbacks, step-down only on a real lease loss
 
 ### Usage
 ```go
-// 1. Create a lock factory (one per process; pass multiple clients for multi-node quorum)
-factory := distlock.NewRedisStorage(redisClient)
+// One locker per process; pass multiple clients for multi-node quorum
+locker, err := distlock.NewRedis(redisClient)
 
-// 2. Create a lock instance per key/TTL
-lock, err := distlock.NewDistLock(factory, &distlock.Config{
-	Key:         "order:pay:10086",
-	TTL:         30 * time.Second,
-	AutoRenewal: true,
-})
-if err != nil {
-	// invalid config: empty Key or TTL <= 0
-}
-
-// 3. Acquire (non-blocking) -> critical section -> release
-if ok, err := lock.Lock(ctx); err != nil {
+lease, err := locker.TryAcquire(ctx, "order:pay:10086", 30*time.Second)
+switch {
+case errors.Is(err, distlock.ErrLocked):
+	// busy (normal contention, not an error)
+case err != nil:
 	// storage failure
-} else if !ok {
-	// lock not acquired (normal contention, retry later)
-} else {
-	defer lock.Unlock(context.Background())
-	// critical section...
-	// when auto-renewal fails (lock lost), Lost() is closed — abort ASAP:
-	// <-lock.Lost()
 }
+defer lease.Release(context.Background())
+
+// Wire lease end to the work context so the critical section aborts on lock loss
+workCtx, cancel := context.WithCancel(ctx)
+defer cancel()
+stop := context.AfterFunc(lease.Context(), cancel)
+defer stop()
 ```
 
 ### Leader election
 ```go
-elector, err := distlock.NewLeaderElector(factory, &distlock.LeaderConfig{
-	Key:           "svc:leader",     // election lock key (required)
-	TTL:           15 * time.Second, // lease duration (required)
-	RetryInterval: 2 * time.Second,  // retry interval for non-leaders (optional, default 2s)
+elector, err := distlock.NewLeaderElector(locker, distlock.LeaderConfig{
+	Key: "svc:leader", // required, identical across the cluster
+	TTL: 15 * time.Second,
 })
-if err != nil {
-	// invalid config
-}
-
-go elector.Run(ctx) // blocks until ctx is done; releases the lease on exit
-
-if elector.IsLeader() {
-	// do leader-only work: scheduled job, singleton consumer, cache refresh, ...
-}
-// optional: elector.Epoch() to detect a new term, elector.LeaderID() to observe the current leader
+err = elector.Run(ctx, distlock.Callbacks{
+	OnStartedLeading: func(ctx context.Context) { runSingletonWork(ctx) },
+	OnStoppedLeading: func(cause error) { /* nil: normal; non-nil: lease lost */ },
+})
 ```
 
 ## filestore

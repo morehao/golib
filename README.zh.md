@@ -215,62 +215,47 @@ go get github.com/morehao/golib
 ## distlock
 
 ### 简介
-`distlock` 是分布式锁组件，基于 Redis 实现，使用 redsync 算法，支持自动续期。并在同一套锁抽象之上提供**主从选举**能力。
+`distlock` 是基于 Redis（redsync / Redlock）的分布式锁：恒开的自动续期、租约级锁丢失通知，以及构建在同一租约核心之上的**尽力而为（best-effort）主从选举**。它是 **efficiency 锁**，不是 correctness 锁（不提供 fencing token）——确切的安全边界见 [distlock README](distlock/README.md)。
 
 ### 特性
-- 基于 Redis 的分布式锁（支持单节点或多节点 quorum）
-- 支持自动续期（锁续命，带随机抖动），通过 `Lost()` 提供锁丢失通知
-- 不支持可重入
-- **主从选举**（`LeaderElector`）：集群内至多一个主节点，抢占 + 续期模型，租约丢失自动让位
-  - 构建在 `Lock`/`LockFactory` 之上，任意存储后端可用，不引入额外依赖
-  - `IsLeader()` / `Epoch()`（任期号）/ `LeaderID()` 查询状态；`Run(ctx)` 驱动选举循环
-  - 非主节点按 `RetryInterval` 重试，现任主节点释放或租约过期后自动接管
+- Redis 后端：单节点，或多节点 quorum（多个相互独立的 Redis master）
+- `Lease` 句柄：自动续期恒开；`Lost()` / `Context()` / `Cause()` 提供锁丢失通知
+- 哨兵错误区分三种结果：竞争失败（`ErrLocked`）、锁丢失（`ErrLockLost` / `ErrRenewFailed`）、存储故障
+- 瞬时续期故障在续期窗口内重试，不再被误报成锁丢失
+- 阻塞式 `Acquire`（带抖动重试）与非阻塞 `TryAcquire`；`Release` 幂等且有界
+- **主从选举**复用同一租约核心：k8s 风格的 `OnStartedLeading` / `OnStoppedLeading` 回调，只有真丢失才让位
 
 ### 使用示例
 ```go
-// 1. 创建锁工厂（进程内一个即可；传入多个 client 可组成多节点 quorum）
-factory := distlock.NewRedisStorage(redisClient)
+// 进程内一个门面即可；多节点 quorum 传多个 client
+locker, err := distlock.NewRedis(redisClient)
 
-// 2. 按 key/TTL 创建锁实例
-lock, err := distlock.NewDistLock(factory, &distlock.Config{
-	Key:         "order:pay:10086",
-	TTL:         30 * time.Second,
-	AutoRenewal: true,
-})
-if err != nil {
-	// 配置错误：Key 为空 / TTL <= 0 等
-}
-
-// 3. 加锁（非阻塞）→ 临界区 → 解锁
-if ok, err := lock.Lock(ctx); err != nil {
+lease, err := locker.TryAcquire(ctx, "order:pay:10086", 30*time.Second)
+switch {
+case errors.Is(err, distlock.ErrLocked):
+	// 被其他实例持有（正常竞争，不是错误）
+case err != nil:
 	// 存储故障
-} else if !ok {
-	// 未抢到锁（正常竞争，可稍后重试）
-} else {
-	defer lock.Unlock(context.Background())
-	// 临界区...
-	// 续期失败（锁丢失）时 Lost() 会关闭，应尽快终止临界区：
-	// <-lock.Lost()
 }
+defer lease.Release(context.Background())
+
+// 把「租约结束」接到工作 ctx 上：丢锁时自动中止临界区
+workCtx, cancel := context.WithCancel(ctx)
+defer cancel()
+stop := context.AfterFunc(lease.Context(), cancel)
+defer stop()
 ```
 
 ### 主从选举
 ```go
-elector, err := distlock.NewLeaderElector(factory, &distlock.LeaderConfig{
-	Key:           "svc:leader",     // 选举用的锁 key（必填）
-	TTL:           15 * time.Second, // 租约时长（必填）
-	RetryInterval: 2 * time.Second,  // 非主节点重试间隔（可选，默认 2s）
+elector, err := distlock.NewLeaderElector(locker, distlock.LeaderConfig{
+	Key: "svc:leader", // 必填，同集群一致
+	TTL: 15 * time.Second,
 })
-if err != nil {
-	// 配置错误
-}
-
-go elector.Run(ctx) // 阻塞直到 ctx 取消；退出时尽力释放租约
-
-if elector.IsLeader() {
-	// 执行仅主节点应做的事：定时任务、单例消费、缓存刷新等
-}
-// 可选：elector.Epoch() 识别新任期，elector.LeaderID() 观测当前主节点
+err = elector.Run(ctx, distlock.Callbacks{
+	OnStartedLeading: func(ctx context.Context) { runSingletonWork(ctx) },
+	OnStoppedLeading: func(cause error) { /* nil：正常让位；非 nil：锁丢失 */ },
+})
 ```
 
 ## filestore

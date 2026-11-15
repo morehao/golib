@@ -35,9 +35,11 @@ func WithoutAutoMigrate() Option {
 	return optionFunc(func(o *newOptions) { o.autoMigrate = false })
 }
 
-// WithLockFactory 配置分布式锁工厂（推荐用法；New 的位置参数为兼容旧签名，位置参数优先）。
-func WithLockFactory(f distlock.LockFactory) Option {
-	return optionFunc(func(o *newOptions) { o.LockFactory = f })
+// WithLocker 配置分布式锁门面（推荐用法；New 的位置参数优先）。
+//
+// 装配层用 distlock.NewRedis(rdb) 或 distlock.New(customFactory) 构造一次，全进程复用。
+func WithLocker(l *distlock.Locker) Option {
+	return optionFunc(func(o *newOptions) { o.Locker = l })
 }
 
 func WithSeconds(v bool) Option {
@@ -54,10 +56,6 @@ func WithEnableLock(v bool) Option {
 
 func WithLockTTL(ttl time.Duration) Option {
 	return optionFunc(func(o *newOptions) { o.LockTTL = ttl })
-}
-
-func WithAutoRenewal(v bool) Option {
-	return optionFunc(func(o *newOptions) { o.AutoRenewal = v })
 }
 
 func WithTimeout(d time.Duration) Option {
@@ -86,12 +84,6 @@ func WithRunCleanupBatchSize(n int) Option {
 	return optionFunc(func(o *newOptions) { o.RunCleanupBatchSize = n })
 }
 
-// WithStrictLockTTL 打开严格锁 TTL 校验：开启互斥且未自动续期时，
-// Timeout > LockTTL 的任务注册直接失败（默认 false 时仅告警）。
-func WithStrictLockTTL(v bool) Option {
-	return optionFunc(func(o *newOptions) { o.StrictLockTTL = v })
-}
-
 // WithLifecycleTimeout 配置生命周期 DB 操作超时（<=0 时取默认值 5s）。
 func WithLifecycleTimeout(d time.Duration) Option {
 	return optionFunc(func(o *newOptions) { o.LifecycleTimeout = d })
@@ -104,7 +96,7 @@ func WithRecordSkippedRuns(v bool) Option {
 }
 
 // WithSkipRunMinInterval 配置同一任务同一跳过原因的落库最小间隔
-//（默认 0：每次跳过都落库；>0 时窗口内只落一行）。
+// （默认 0：每次跳过都落库；>0 时窗口内只落一行）。
 func WithSkipRunMinInterval(d time.Duration) Option {
 	return optionFunc(func(o *newOptions) { o.SkipRunMinInterval = d })
 }

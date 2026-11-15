@@ -2,6 +2,7 @@ package gcron
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -15,8 +16,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// 落库字段长度上限，避免超长错误信息撑大执行记录表。
-const maxErrorMsgLen = 1024
+const (
+	// maxErrorMsgLen 落库字段长度上限，避免超长错误信息撑大执行记录表。
+	maxErrorMsgLen = 1024
+	// lockReleaseTimeout 释放分布式锁的超时：锁已丢失/存储抖动时不能让收尾流程挂住。
+	lockReleaseTimeout = 5 * time.Second
+)
 
 type TaskFunc func(ctx context.Context) error
 
@@ -35,7 +40,6 @@ type Task struct {
 	Handler     TaskFunc
 	EnableLock  bool
 	LockTTL     time.Duration
-	AutoRenewal bool
 	// Timeout 单次执行超时，<=0 表示不限制。
 	Timeout time.Duration
 }
@@ -47,11 +51,11 @@ type registeredTask struct {
 }
 
 type Scheduler struct {
-	cron        *cron.Cron
-	logger      glog.Logger
-	store       *store
-	lockFactory distlock.LockFactory
-	cfg         *Config
+	cron   *cron.Cron
+	logger glog.Logger
+	store  *store
+	locker *distlock.Locker
+	cfg    *Config
 
 	mu    sync.Mutex
 	tasks map[string]registeredTask
@@ -70,7 +74,7 @@ type skipStat struct {
 	suppressed int
 }
 
-func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Option) (*Scheduler, error) {
+func New(db *gorm.DB, cfg *Config, locker *distlock.Locker, opts ...Option) (*Scheduler, error) {
 	if cfg == nil {
 		cfg = defaultConfig()
 	}
@@ -93,9 +97,9 @@ func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Opt
 			return nil, err
 		}
 	}
-	// 兼容旧签名：位置参数 lockFactory 优先；未传时使用 WithLockFactory 配置的工厂。
-	if lockFactory == nil {
-		lockFactory = cfg.LockFactory
+	// 位置参数优先；未传时使用 WithLocker 配置的锁门面。
+	if locker == nil {
+		locker = cfg.Locker
 	}
 
 	var cronOpts []cron.Option
@@ -116,13 +120,13 @@ func New(db *gorm.DB, cfg *Config, lockFactory distlock.LockFactory, opts ...Opt
 	}
 
 	return &Scheduler{
-		cron:        c,
-		logger:      logger,
-		store:       st,
-		lockFactory: lockFactory,
-		cfg:         cfg,
-		tasks:       make(map[string]registeredTask),
-		skipAt:      make(map[string]skipStat),
+		cron:   c,
+		logger: logger,
+		store:  st,
+		locker: locker,
+		cfg:    cfg,
+		tasks:  make(map[string]registeredTask),
+		skipAt: make(map[string]skipStat),
 	}, nil
 }
 
@@ -207,7 +211,7 @@ func (s *Scheduler) Remove(taskID string) error {
 // 避免进程重启把运营侧的 Disable 抹掉。
 func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 	enableLock := t.EnableLock || s.cfg.EnableLock
-	if enableLock && s.lockFactory == nil {
+	if enableLock && s.locker == nil {
 		return ErrLockNotSet
 	}
 
@@ -215,28 +219,20 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 	if lockTTL <= 0 {
 		lockTTL = s.cfg.LockTTL
 	}
-	autoRenewal := t.AutoRenewal || s.cfg.AutoRenewal
+	// 租约自动续期恒开，所以 Timeout 与 LockTTL 的大小关系不再影响互斥性；
+	// 但 TTL 低于 distlock 的下限会让续期节奏失效，属于配置错误，注册期直接拒绝。
+	if enableLock && lockTTL < distlock.MinTTL {
+		return fmt.Errorf("%w: task %q lock_ttl=%s < distlock minimum %s",
+			ErrInvalidLockTTL, t.ID, lockTTL, distlock.MinTTL)
+	}
 	timeout := t.Timeout
 	if timeout <= 0 {
 		timeout = s.cfg.Timeout
 	}
 
-	if enableLock && !autoRenewal {
-		warnCtx, warnCancel := s.lifecycleCtx()
-		s.logger.Warnw(warnCtx,
-			"gcron task lock auto-renewal disabled; a handler running longer than lock TTL may execute concurrently on multiple instances",
-			gconstant.KeyTaskID, t.ID, "lock_ttl", lockTTL.String())
-		warnCancel()
-		// 未续期时执行超过 TTL 锁必然过期：严格模式下直接拒绝注册，避免"以为互斥其实没有"。
-		if s.cfg.StrictLockTTL && timeout > lockTTL {
-			return fmt.Errorf("%w: task %q timeout=%s > lock_ttl=%s",
-				ErrLockTTLTooShort, t.ID, timeout, lockTTL)
-		}
-	}
-
 	// 先注册调度（内部解析并校验 cron 表达式），失败时不落库，避免留下永远不会被调度的脏定义。
 	var entryID cron.EntryID
-	entryID, err := s.cron.AddFunc(t.Spec, s.buildRunFunc(t, &entryID, enableLock, lockTTL, timeout, autoRenewal))
+	entryID, err := s.cron.AddFunc(t.Spec, s.buildRunFunc(t, &entryID, enableLock, lockTTL, timeout))
 	if err != nil {
 		return fmt.Errorf("gcron: add cron entry for task %q with spec %q: %w", t.ID, t.Spec, err)
 	}
@@ -289,7 +285,7 @@ func (s *Scheduler) addTaskLocked(t Task, upsert bool) error {
 
 // buildRunFunc 构造单次执行逻辑。entryID 为 AddFunc 返回值所在变量（执行时已赋值），
 // 用于在运行中读取调度器已推进的下一次执行时间。
-func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool, lockTTL, timeout time.Duration, autoRenewal bool) func() {
+func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool, lockTTL, timeout time.Duration) func() {
 	// 同实例防重叠：上一轮尚未结束时跳过本轮（与分布式锁互补，覆盖 EnableLock=false 的场景）。
 	var running atomic.Bool
 
@@ -344,33 +340,29 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 		}
 		defer running.Store(false)
 
-		var taskLock *distlock.DistLock
+		// 分布式互斥：抢不到就跳过本轮。「被占用」（正常竞争）与「存储故障」分开记录，
+		// 前者是常态、后者要告警。
+		var lease *distlock.Lease
 		if enableLock {
 			var lerr error
-			taskLock, lerr = distlock.NewDistLock(s.lockFactory, &distlock.Config{
-				AutoRenewal: autoRenewal,
-				TTL:         lockTTL,
-				Key:         "cron:lock:" + t.ID,
-			})
-			if lerr != nil {
-				// 锁配置/工厂错误：与"竞争未获取"区分，记录 skipped 并带上错误信息
-				s.logger.Errorw(ctx, "cron task lock create error", gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID, "error", lerr)
-				skip("lock create error: " + lerr.Error())
+			lease, lerr = s.locker.TryAcquire(ctx, "cron:lock:"+t.ID, lockTTL)
+			switch {
+			case errors.Is(lerr, distlock.ErrLocked):
+				s.logger.Infow(ctx, "cron task skipped, lock not acquired", gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID)
+				skip("lock not acquired (another instance may be running)")
 				return
-			}
-			ok, lerr := taskLock.Lock(ctx)
-			if lerr != nil {
-				// 锁存储故障：与"竞争未获取"区分，记录 skipped 并带上错误信息
+			case lerr != nil:
 				s.logger.Errorw(ctx, "cron task lock error", gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID, "error", lerr)
 				skip("lock store error: " + lerr.Error())
 				return
 			}
-			if !ok {
-				s.logger.Infow(ctx, "cron task skipped, lock not acquired", gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID)
-				skip("lock not acquired (another instance may be running)")
-				return
-			}
-			defer taskLock.Unlock(context.Background())
+			defer func() {
+				relCtx, relCancel := context.WithTimeout(context.Background(), lockReleaseTimeout)
+				defer relCancel()
+				if rerr := lease.Release(relCtx); rerr != nil {
+					s.logger.Errorw(ctx, "cron task lock release error", gconstant.KeyTaskID, t.ID, gconstant.KeyRunID, runID, "error", rerr)
+				}
+			}()
 		}
 
 		ctx, span, _, requestID := buildTraceContext(ctx, t.ID)
@@ -410,27 +402,23 @@ func (s *Scheduler) buildRunFunc(t Task, entryID *cron.EntryID, enableLock bool,
 			defer cancelTimeout()
 		}
 
-		// 锁丢失（续期失败/锁过期）意味着临界区已不成立，其他实例可能已进入：
+		// 锁丢失（被抢占/过期/续期无法确认）意味着临界区已不成立，其他实例可能已进入：
 		// 立即取消 handler，并把本次执行记为 lock_lost，与普通失败区分。
-		var lockLost atomic.Bool
-		if taskLock != nil {
-			watchDone := make(chan struct{})
-			defer close(watchDone)
-			go func() {
-				select {
-				case <-taskLock.Lost():
-					lockLost.Store(true)
-					cancelHandler()
-				case <-watchDone:
-				}
-			}()
+		//
+		// 用 context.AfterFunc 把「租约结束」接到 cancelHandler 上，不再需要额外的监听 goroutine。
+		stopWatch := func() bool { return true }
+		if lease != nil {
+			stopWatch = context.AfterFunc(lease.Context(), cancelHandler)
 		}
+		defer stopWatch()
 
 		err := safeRun(handlerCtx, t.Handler)
 		end := time.Now()
+		// Cause 在 handler 返回后读取：非 nil 表示本次执行期间锁真的丢了。
+		lockLost := lease != nil && lease.Cause() != nil
 		status, errMsg := TaskRunSuccess, ""
 		switch {
-		case lockLost.Load():
+		case lockLost:
 			// 锁丢失：临界区已不成立，即使 handler 正常返回也按 lock_lost 记录
 			status = TaskRunLockLost
 			errMsg = "distributed lock lost during execution"
