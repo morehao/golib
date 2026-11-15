@@ -13,15 +13,15 @@ var (
 	ErrNilHandler = errors.New("gcron: task handler is nil")
 	// ErrDuplicateTask 同一进程内重复注册同一任务。
 	ErrDuplicateTask = errors.New("gcron: duplicate task id")
-	// ErrLockNotSet 任务开启分布式锁但未配置锁工厂。
-	ErrLockNotSet = errors.New("gcron: distlock factory not configured")
+	// ErrLockNotSet 任务开启分布式锁但未配置锁门面。
+	ErrLockNotSet = errors.New("gcron: distlock locker not configured")
 	// ErrNilDB 数据库连接为 nil。
 	ErrNilDB = errors.New("gcron: db is nil")
 	// ErrTaskNotFound 任务未注册（Remove/Enable/Disable 操作不存在的任务）。
 	ErrTaskNotFound = errors.New("gcron: task not registered")
 	// ErrRunNotFound 运行记录不存在（详情查询传入未知 ID）。
 	ErrRunNotFound = errors.New("gcron: run not found")
-	// ErrLockTTLTooShort 开启互斥且未自动续期时，单次执行超时大于锁 TTL
-	// （仅 Config.StrictLockTTL=true 时拒绝注册，否则只告警）。
-	ErrLockTTLTooShort = errors.New("gcron: task timeout exceeds lock ttl without auto renewal")
+	// ErrInvalidLockTTL 开启互斥时锁 TTL 低于 distlock.MinTTL。
+	// 租约续期节奏按 TTL/3 推导，过小的 TTL 会让续期失效，属于配置错误而非运行时故障。
+	ErrInvalidLockTTL = errors.New("gcron: lock ttl is below distlock minimum")
 )

@@ -24,11 +24,13 @@ import (
 // 放宽上限不削弱检测力：调度器若真的不触发，这些用例仍会失败。
 const cronWaitTimeout = 15 * time.Second
 
-// fakeLock / fakeLockFactory 用于在单测中模拟分布式锁，避免依赖真实 Redis。
+// fakeLock / fakeLockFactory 用于在单测中模拟分布式锁后端，避免依赖真实 Redis。
 //
-// 零值语义为"抢到锁、续期正常"，保持既有用例不受影响；负向场景按需设置字段：
-// notLocked 模拟竞争未获取，lockErr 模拟存储故障，renewalFailed 触发锁丢失通知
-// （经 DistLock 的自动续期循环 close(Lost())，比直接注入 channel 更贴近真实路径）。
+// 零值语义为"抢到锁、续期正常"；负向场景按需设置字段：
+//   - notLocked：TryLock 返回 distlock.ErrLocked（模拟其他实例持有）；
+//   - lockErr：返回存储故障；
+//   - renewalFailed：Refresh 返回 ErrLocked，经 Lease 的续期循环触发锁丢失
+//     （与真实路径一致：底层明确不持有才判定丢失）。
 type fakeLock struct {
 	notLocked     bool
 	lockErr       error
@@ -38,36 +40,39 @@ type fakeLock struct {
 	unlockCount atomic.Int32
 }
 
-func (f *fakeLock) Lock(ctx context.Context) (bool, error) {
+func (f *fakeLock) TryLock(ctx context.Context) error {
 	if f.lockErr != nil {
-		return false, f.lockErr
+		return f.lockErr
 	}
 	f.lockCount.Add(1)
-	return !f.notLocked, nil
-}
-
-func (f *fakeLock) Unlock(ctx context.Context) (bool, error) {
-	f.unlockCount.Add(1)
-	return true, nil
-}
-
-func (f *fakeLock) Renewal(ctx context.Context) (bool, error) {
-	if f.renewalFailed {
-		return false, nil
+	if f.notLocked {
+		return distlock.ErrLocked
 	}
-	return true, nil
+	return nil
 }
 
-func (f *fakeLock) Owner() string { return "fake" }
+func (f *fakeLock) Refresh(ctx context.Context) error {
+	if f.renewalFailed {
+		return distlock.ErrLocked
+	}
+	return nil
+}
 
-// fakeLockFactory 每次 NewLock 返回同一个替身（便于断言加解锁次数）；
-// lock 为 nil 时返回零值替身（抢到锁），newErr 用于模拟锁工厂故障。
+func (f *fakeLock) Unlock(ctx context.Context) error {
+	f.unlockCount.Add(1)
+	return nil
+}
+
+func (f *fakeLock) Token() string { return "fake" }
+
+// fakeLockFactory 每次 NewMutex 返回同一个替身（便于断言加解锁次数）；
+// lock 为 nil 时返回零值替身（抢到锁），newErr 用于模拟后端故障。
 type fakeLockFactory struct {
 	lock   *fakeLock
 	newErr error
 }
 
-func (f *fakeLockFactory) NewLock(config distlock.Config) (distlock.Lock, error) {
+func (f *fakeLockFactory) NewMutex(key string, ttl time.Duration) (distlock.Mutex, error) {
 	if f.newErr != nil {
 		return nil, f.newErr
 	}
@@ -75,6 +80,14 @@ func (f *fakeLockFactory) NewLock(config distlock.Config) (distlock.Lock, error)
 		return f.lock, nil
 	}
 	return &fakeLock{}, nil
+}
+
+// newFakeLocker 用 fake 后端构造 distlock 门面。
+func newFakeLocker(t *testing.T, f distlock.Factory) *distlock.Locker {
+	t.Helper()
+	locker, err := distlock.New(f)
+	require.NoError(t, err)
+	return locker
 }
 
 func TestRegisterValidation(t *testing.T) {
@@ -393,8 +406,8 @@ func TestTaskLifecycleDisableEnableRemove(t *testing.T) {
 	require.ErrorIs(t, s.Remove("nope"), ErrTaskNotFound)
 }
 
-// TestWithLockFactoryOption 验证 WithLockFactory 选项生效（New 的位置参数为兼容旧签名）。
-func TestWithLockFactoryOption(t *testing.T) {
+// TestWithLockerOption 验证 WithLocker 选项生效（New 的位置参数优先）。
+func TestWithLockerOption(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
@@ -407,8 +420,8 @@ func TestWithLockFactoryOption(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrLockNotSet)
 
-	// WithLockFactory 配置工厂后注册成功
-	s2, err := New(db, nil, nil, WithEnableLock(true), WithLockFactory(&fakeLockFactory{}))
+	// WithLocker 配置门面后注册成功
+	s2, err := New(db, nil, nil, WithEnableLock(true), WithLocker(newFakeLocker(t, &fakeLockFactory{})))
 	require.NoError(t, err)
 	require.NoError(t, s2.Register(Task{
 		ID: "lock2", TaskType: "report", Spec: "* * * * *", EnableLock: true,
@@ -422,7 +435,7 @@ func TestTaskWithLockExecutes(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	var count atomic.Int32
-	s, err := New(db, nil, nil, WithSeconds(true), WithLockFactory(&fakeLockFactory{}))
+	s, err := New(db, nil, nil, WithSeconds(true), WithLocker(newFakeLocker(t, &fakeLockFactory{})))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "locked-run", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -631,7 +644,7 @@ func TestOverlapCheckedBeforeLock(t *testing.T) {
 	started := make(chan struct{})
 	var once sync.Once
 
-	s, err := New(db, nil, nil, WithSeconds(true), WithLockFactory(&fakeLockFactory{lock: lock}))
+	s, err := New(db, nil, nil, WithSeconds(true), WithLocker(newFakeLocker(t, &fakeLockFactory{lock: lock})))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "overlap-lock", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -670,7 +683,7 @@ func TestLockNotAcquiredRecordsSkipped(t *testing.T) {
 
 	var count atomic.Int32
 	s, err := New(db, nil, nil, WithSeconds(true),
-		WithLockFactory(&fakeLockFactory{lock: &fakeLock{notLocked: true}}))
+		WithLocker(newFakeLocker(t, &fakeLockFactory{lock: &fakeLock{notLocked: true}})))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "lock-busy", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -693,7 +706,7 @@ func TestLockErrorRecordsSkipped(t *testing.T) {
 
 	var count atomic.Int32
 	s, err := New(db, nil, nil, WithSeconds(true),
-		WithLockFactory(&fakeLockFactory{lock: &fakeLock{lockErr: errors.New("redis unavailable")}}))
+		WithLocker(newFakeLocker(t, &fakeLockFactory{lock: &fakeLock{lockErr: errors.New("redis unavailable")}})))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "lock-err", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -709,14 +722,14 @@ func TestLockErrorRecordsSkipped(t *testing.T) {
 	require.Zero(t, count.Load())
 }
 
-// TestLockCreateErrorRecordsSkipped 验证锁工厂故障（NewLock 返回 error）记录 skipped。
+// TestLockCreateErrorRecordsSkipped 验证后端构造故障（NewMutex 返回 error）记录 skipped。
 func TestLockCreateErrorRecordsSkipped(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
 	var count atomic.Int32
 	s, err := New(db, nil, nil, WithSeconds(true),
-		WithLockFactory(&fakeLockFactory{newErr: errors.New("factory unavailable")}))
+		WithLocker(newFakeLocker(t, &fakeLockFactory{newErr: errors.New("factory unavailable")})))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "lock-new-err", TaskType: "report", Spec: "* * * * * *", EnableLock: true,
@@ -727,7 +740,7 @@ func TestLockCreateErrorRecordsSkipped(t *testing.T) {
 	t.Cleanup(func() { _ = s.Stop(context.Background()) })
 
 	require.Eventually(t, func() bool {
-		return hasRunLike(listTaskRuns(t, s, "lock-new-err"), TaskRunSkipped, "lock create error")
+		return hasRunLike(listTaskRuns(t, s, "lock-new-err"), TaskRunSkipped, "lock store error")
 	}, cronWaitTimeout, 20*time.Millisecond)
 	require.Zero(t, count.Load())
 }
@@ -739,14 +752,14 @@ func TestLockLostCancelsHandlerAndRecordsStatus(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	s, err := New(db, nil, nil, WithSeconds(true),
-		WithLockFactory(&fakeLockFactory{lock: &fakeLock{renewalFailed: true}}))
+		WithLocker(newFakeLocker(t, &fakeLockFactory{lock: &fakeLock{renewalFailed: true}})))
 	require.NoError(t, err)
 
 	handlerDone := make(chan struct{})
 	var once sync.Once
 	require.NoError(t, s.Register(Task{
 		ID: "lock-lost", TaskType: "report", Spec: "* * * * * *",
-		EnableLock: true, AutoRenewal: true, LockTTL: 300 * time.Millisecond,
+		EnableLock: true, LockTTL: 300 * time.Millisecond,
 		Handler: func(ctx context.Context) error {
 			<-ctx.Done() // 正常情况下一直阻塞，直到锁丢失取消 ctx
 			once.Do(func() { close(handlerDone) })
@@ -773,30 +786,29 @@ func TestLockLostCancelsHandlerAndRecordsStatus(t *testing.T) {
 	}, cronWaitTimeout, 20*time.Millisecond)
 }
 
-// TestStrictLockTTLRejectsRegister 验证严格模式下 Timeout > LockTTL 且未自动续期的任务
-// 注册失败（ErrLockTTLTooShort）且不落库；开启自动续期后放行。
-func TestStrictLockTTLRejectsRegister(t *testing.T) {
+// TestInvalidLockTTLRejectsRegister 验证锁 TTL 低于 distlock 下限时注册期直接拒绝且不落库；
+// 合法 TTL 下 Timeout 大于 TTL 仍然放行（租约自动续期，互斥性不依赖 TTL 大小）。
+func TestInvalidLockTTLRejectsRegister(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, AutoMigrate(db))
 
-	s, err := New(db, nil, nil, WithSeconds(true), WithLockFactory(&fakeLockFactory{}), WithStrictLockTTL(true))
+	s, err := New(db, nil, nil, WithSeconds(true), WithLocker(newFakeLocker(t, &fakeLockFactory{})))
 	require.NoError(t, err)
 
 	rerr := s.Register(Task{
-		ID: "ttl-too-short", TaskType: "report", Spec: "* * * * * *",
-		EnableLock: true, LockTTL: time.Minute, Timeout: 2 * time.Minute,
+		ID: "ttl-too-small", TaskType: "report", Spec: "* * * * * *",
+		EnableLock: true, LockTTL: 10 * time.Millisecond,
 		Handler: func(context.Context) error { return nil },
 	})
-	require.ErrorIs(t, rerr, ErrLockTTLTooShort)
+	require.ErrorIs(t, rerr, ErrInvalidLockTTL)
 
-	got, qerr := s.GetStore().GetTaskByID(context.Background(), "ttl-too-short")
+	got, qerr := s.GetStore().GetTaskByID(context.Background(), "ttl-too-small")
 	require.NoError(t, qerr)
 	require.Nil(t, got, "校验失败不应落库")
 
-	// 开启自动续期后不再受 TTL 限制
 	require.NoError(t, s.Register(Task{
 		ID: "ttl-ok", TaskType: "report", Spec: "* * * * * *",
-		EnableLock: true, AutoRenewal: true, LockTTL: time.Minute, Timeout: 2 * time.Minute,
+		EnableLock: true, LockTTL: time.Minute, Timeout: 2 * time.Minute,
 		Handler: func(context.Context) error { return nil },
 	}))
 }
@@ -809,7 +821,7 @@ func TestSkipNotRecordedWhenDisabled(t *testing.T) {
 	lock := &fakeLock{notLocked: true}
 	var count atomic.Int32
 	s, err := New(db, nil, nil, WithSeconds(true),
-		WithRecordSkippedRuns(false), WithLockFactory(&fakeLockFactory{lock: lock}))
+		WithRecordSkippedRuns(false), WithLocker(newFakeLocker(t, &fakeLockFactory{lock: lock})))
 	require.NoError(t, err)
 	require.False(t, s.cfg.recordSkippedRuns())
 
@@ -872,7 +884,7 @@ func TestSkipRecordThrottledByInterval(t *testing.T) {
 
 	s, err := New(db, nil, nil, WithSeconds(true),
 		WithSkipRunMinInterval(time.Hour),
-		WithLockFactory(&fakeLockFactory{lock: &fakeLock{notLocked: true}}))
+		WithLocker(newFakeLocker(t, &fakeLockFactory{lock: &fakeLock{notLocked: true}})))
 	require.NoError(t, err)
 	require.NoError(t, s.Register(Task{
 		ID: "throttle", TaskType: "report", Spec: "* * * * * *", EnableLock: true,

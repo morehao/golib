@@ -1,137 +1,124 @@
 # distlock
 
-`distlock` 是一个基于 Redis（redsync / Redlock 算法）的分布式锁组件，提供互斥、自动续期（续命）、锁丢失通知、多节点 quorum 支持，以及在其之上的主从选举（`LeaderElector`）。面向「临界区同一时刻最多一个持有者」的场景，典型消费者是 `task/gcron` 的跨实例任务互斥。
+`distlock` 是基于 Redis（redsync / Redlock）的分布式锁，提供**恒开的自动续期**、租约级锁丢失通知，以及构建在同一租约核心之上的**尽力而为（best-effort）主从选举**。面向「同一时刻只该有一个实例执行」的低 QPS 场景，典型消费者是 `task/gcron` 的跨实例任务互斥。
+
+> **安全边界（先读）**：这是 **efficiency 锁**，保证「绝大多数情况下不重复执行」，**不承诺 correctness**。进程长时间 STW、Redis 主从异步切换、时钟跳变等窗口内互斥性可能被破坏，且本组件**不提供 fencing token**。涉及资金/库存等强一致资源，请用数据库租约或 etcd/k8s Lease，或由被保护资源强制校验单调凭证。详见 [doc.go](doc.go)。
 
 ---
 
-## 特性
+## 分层
 
-- **Redis 分布式锁**：单节点或传多个 client 构成 quorum。
-- **自动续期**：持锁期间后台按 `TTL/3` 起、叠加随机抖动地续期，避免多实例雷群；任一续期失败即判定锁丢失。
-- **锁丢失通知**：`Lost()` 返回一个在锁丢失时被关闭的 channel，供临界区及时中止。
-- **非阻塞、非可重入**：`Lock` 立即返回，竞争失败是正常结果（`ok=false, err=nil`），不是错误。
-- **可复用实例**：`Unlock` 后可再次 `Lock`。
-- **可扩展存储**：`LockFactory` / `Lock` 接口抽象，当前内置 Redis 实现。
-- **主从选举**：`LeaderElector` 在锁之上提供「集群内至多一个主节点」的选举，抢占 + 续期模型，见下文「主从选举」。
-
----
-
-## 核心类型
-
-```go
-// 锁实例：单个 key/TTL 的具体锁
-type Lock interface {
-    Lock(ctx context.Context) (bool, error)      // 非阻塞尝试；ok=false 未获取到（正常竞争）
-    Unlock(ctx context.Context) (bool, error)    // 释放；未持锁返回 ok=false
-    Renewal(ctx context.Context) (bool, error)   // 续期；未持锁/已过期返回 ok=false
-    Owner() string                               // 持有者标识（未持锁为空）
-}
-
-// 锁工厂：按配置创建独立的锁实例（Key/TTL 在这里生效）
-type LockFactory interface {
-    NewLock(config Config) (Lock, error)
-}
-
-// 门面：在底层锁之上提供自动续期、锁丢失通知与生命周期管理
-func NewDistLock(factory LockFactory, config *Config) (*DistLock, error)
-
-type Config struct {
-    Key         string        // 锁 key（必填，非空）
-    TTL         time.Duration // 过期时间（必填，> 0）
-    AutoRenewal bool          // 是否自动续期
-}
+```
+Locker     门面（进程级单例、无 per-key 状态）：TryAcquire / Acquire → *Lease
+Lease      一次持有：自动续期 + 丢失信号 + 幂等 Release
+Factory    后端工厂：按 key + TTL 造 Mutex
+Mutex      后端原语（当前仅 Redis）：TryLock / Refresh / Unlock / Token
 ```
 
----
-
-## 用法
+## 快速开始
 
 ```go
-factory := distlock.NewRedisStorage(redisClient) // 每进程一个；多节点 quorum 传多个 client
-
-lock, err := distlock.NewDistLock(factory, &distlock.Config{
-    Key:         "order:pay:10086",
-    TTL:         30 * time.Second,
-    AutoRenewal: true,
-})
+locker, err := distlock.NewRedis(rdb)       // 每进程一个；多节点 quorum 传多个独立 client
 if err != nil {
-    // 配置非法：Key 为空或 TTL <= 0
+    // 参数错误（无 client / nil client）
 }
 
-ok, err := lock.Lock(ctx)
+lease, err := locker.TryAcquire(ctx, "order:pay:10086", 30*time.Second)
 switch {
+case errors.Is(err, distlock.ErrLocked):
+    // 被其他实例持有 —— 正常竞争，不是错误
 case err != nil:
-    // 存储故障
-case !ok:
-    // 未获取到（正常竞争，稍后重试）
-default:
-    defer lock.Unlock(context.Background())
-    // 临界区……
-    // 自动续期失败（锁丢失）时 Lost() 会被关闭，应尽快中止：
-    // select { case <-lock.Lost(): /* abort */ }
+    // 存储故障 / 参数非法
 }
+defer lease.Release(context.Background())
+
+// 把「租约结束」接到工作 ctx 上，丢锁时自动中止临界区（零额外 goroutine）
+workCtx, cancel := context.WithCancel(ctx)
+defer cancel()
+stop := context.AfterFunc(lease.Context(), cancel)
+defer stop()
+
+doWork(workCtx)
 ```
 
----
+需要等待时用阻塞版本（内部按抖动间隔重试，遇到存储故障立即返回）：
 
-## 语义约定
+```go
+lease, err := locker.Acquire(ctx, key, ttl)  // ctx 到期返回 errors.Join(ErrLocked, ctx.Err())
+```
 
-- **非阻塞**：`Lock` 立即返回。`ok=false, err=nil` 表示被他人占用（正常竞争）；`err!=nil` 表示存储故障。
-- **非可重入**：同一实例同一时刻至多持有一把锁，重复 `Lock` 返回 `ok=false`。
-- **失败归一化**：redsync 的「未获取 / 已过期 / 值不匹配」等竞争类错误统一归一化为 `ok=false, err=nil`，只有真正的存储故障才返回 `err`。
-- **Unlock 失败保持持锁态**：若底层释放失败（`err!=nil`），实例保持「持锁」，允许调用方重试 `Unlock`；同时续期已停止，锁会在 TTL 内自然过期。
-- **Owner 校验**：每次获取使用唯一持有者标识（`gutil.GenUUID`，UUID v7）作为锁 value，解锁/续期时校验，防止误释放他人持有的锁。
+## 语义
 
-### 关于 `ctx` 的契约（重要）
+| 场景 | 表现 |
+|---|---|
+| 抢到锁 | `(*Lease, nil)`，续期循环自动启动 |
+| 被他人持有 | `(nil, ErrLocked)`：正常竞争，不是错误 |
+| 存储故障（获取时） | `(nil, 其他 error)`，不带 `ErrLocked` |
+| 续期时明确不持有 | `Lost()` 关闭，`Cause() == ErrLockLost` |
+| 续期持续失败超过窗口 | `Lost()` 关闭，`Cause() == ErrRenewFailed` |
+| 主动 Release | `Context()` 取消，`Lost()` **不**关闭，`Cause() == nil` |
+| 调用方 ctx 取消 | 租约不受影响，继续续期（必须显式 Release） |
+| 重复 Release | `nil`（幂等，底层只释放一次） |
 
-- **`Lock(ctx)` 的 `ctx` 会贯穿该次持锁周期的自动续期循环**：续期 goroutine 用这个 `ctx` 派生续期超时，并在 `ctx.Done()` 时退出。
-- 因此 **`ctx` 应是长生命周期、与持锁周期一致的生命周期上下文**，不要把「只用于一次 RPC」的短超时 `ctx` 传进来，否则会在 `ctx` 到期时**静默停止续期**。
-- 注意：当续期因 `ctx` 被取消而退出时，**不会关闭 `Lost()`**（`Lost()` 仅在「续期请求本身失败 / 锁已过期」时关闭）。若你的临界区需要感知「续期已停」，请同时监听传入 `ctx` 的 `Done()`。
-- `Lost()` 应在 `Lock` 返回 `ok=true` 之后再取，代表当前这次持锁周期的丢失信号。
+**关键点**
 
----
+- **自动续期恒开**：没有关闭开关。续期节奏 `TTL/3`（±10% 抖动），单次续期 RPC 上限 `TTL/3`。
+- **瞬时故障不误判丢锁**：续期返回存储故障时按 `max(TTL/10, 20ms)` 快速重试，直到距上次成功续期超过 `renewDeadline`（默认 `TTL*2/3`）才判定丢失；只有底层**明确**报告「不持有」才立即判定 `ErrLockLost`。
+- **ctx 契约**：`TryAcquire/Acquire` 的 ctx 只约束获取过程；续期 RPC 用 `context.WithoutCancel` 派生，所以调用方 ctx 到期既不会静默停续期，也不会被误报成丢锁。
+- **Release 有界**：先判定终态 → 取消在途续期 → 有界等待（`min(TTL/3, 2s)`）→ 释放。慢存储不会让 `defer Release()` 长时间挂住。
+- **非可重入**：同一 key 同时只能有一个 Lease；重复获取返回 `ErrLocked`。
+- **可扩展后端**：实现 `Factory` + `Mutex` 即可接入其他存储，用 `distlock.New(factory)` 构造门面。
 
 ## 主从选举
 
-`LeaderElector` 在 `Lock`/`LockFactory` 之上提供「集群内至多一个主节点」的选举能力，采用抢占 + 续期模型，复用了与分布式锁一致的底层存储，无需额外依赖。
-
 ```go
-elector, err := distlock.NewLeaderElector(factory, &distlock.LeaderConfig{
-    Key:           "svc:leader",     // 选举用的锁 key（必填）
-    TTL:           15 * time.Second, // 租约时长（必填）
-    RetryInterval: 2 * time.Second,  // 非 Leader 抢占失败后的重试间隔（可选，默认 2s）
+elector, err := distlock.NewLeaderElector(locker, distlock.LeaderConfig{
+    Key: "svc:leader",       // 必填，同集群一致
+    TTL: 15 * time.Second,   // 租约时长（>= MinTTL）
+    // RetryInterval 可选，默认 TTL/6（带抖动）；必须 < TTL
 })
-if err != nil {
-    // 配置非法
-}
+if err != nil { /* 配置错误 */ }
 
-go elector.Run(ctx) // 阻塞直到 ctx 取消；退出时会尽力释放锁
-
-if elector.IsLeader() {
-    // 执行仅主节点应做的事：定时任务、单例消费、缓存刷新等
-}
-// 可选：elector.Epoch() 识别「第几任」，elector.LeaderID() 观测当前主节点标识
+err = elector.Run(ctx, distlock.Callbacks{
+    OnStartedLeading: func(ctx context.Context) {
+        // 当选：执行仅主节点做的事；ctx 在失去领导权时取消
+        runSingletonWork(ctx)
+    },
+    OnStoppedLeading: func(cause error) {
+        // cause==nil：正常让位/停机；非 nil：锁丢失（ErrLockLost / ErrRenewFailed）
+    },
+})
 ```
 
 要点：
 
-- **至多一个 Leader**：靠底层锁的互斥性保证；同一 group 内所有实例用相同 `Key`。
-- **续期即心跳**：Leader 按 `TTL/3` 续期，续期失败立即主动让位；非 Leader 按 `RetryInterval` 不断抢占。
-- **按需查询，不轮询**：`IsLeader()` 只反映当前状态；需要「任期变化」时可结合 `Epoch()`。
-- **失败即让位**：续期失败、释放失败、单次读抖动都不会长期误判；观察到锁已不属于本实例才降级。
+- **复用同一份续期实现**：选举内部就是 `Lease`，不重复实现续期；
+- **瞬时续期故障不让位**：只有真丢失才触发 `OnStoppedLeading`，避免领导权抖动；
+- **回调成对**：每个任期恰好一次 `OnStartedLeading` → 一次 `OnStoppedLeading`；
+- `IsLeader()` / `Term()` 仅作便捷查询；`Term()` 是**进程本地**任期计数（重启归零），不是集群任期号；
+- 不提供 `LeaderID()`：Redis 后端无法诚实观测「当前 Leader 是谁」（redsync 返回的是本实例自己的 token）。
 
----
+## 与旧 API 的对应（v1.36.0 破坏性变更）
+
+| 旧 | 新 |
+|---|---|
+| `Lock` 接口（`Lock/Unlock/Renewal/Owner` 返回 `(bool, error)`） | `Mutex`（`TryLock/Refresh/Unlock/Token`，哨兵错误） |
+| `LockFactory.NewLock(Config)` | `Factory.NewMutex(key, ttl)` |
+| `NewRedisStorage(...)`（panic） | `NewRedis(...) (*Locker, error)` |
+| `NewDistLock(factory, *Config)` + `Lock/Unlock/Lost` | `New(factory)` / `NewRedis(...)` + `TryAcquire` + `*Lease` |
+| `DistLock.Renewal()` | 删除（续期恒开） |
+| `Config.AutoRenewal` | 删除（续期恒开） |
+| `Lost()`（可能永不关闭） | `Lease.Lost()` + `Lease.Context()` + `Lease.Cause()` |
+| `LeaderElector.Run(ctx)` + `Epoch()`/`LeaderID()` | `Run(ctx, Callbacks)` + `Term()`；`LeaderID()` 删除 |
 
 ## 与其他组件的关系
 
-- **`task/gcron`**：唯一内置消费者。每个任务 run 前创建一个 `DistLock`（key=`cron:lock:<taskID>`），用 `Lost()` 在锁丢失时取消 handler 并把该次执行记为 `lock_lost`。
+- **`task/gcron`**：唯一内置消费者。每次 run 前 `TryAcquire("cron:lock:"+taskID, LockTTL)`，用 `lease.Context()` 把丢锁接到 handler 的 ctx 上，并把该次执行记为 `lock_lost`。
 - **`gcache/redis`**：其中用裸 `SET NX PX` 做**防缓存击穿**的短占位，与 distlock 的「互斥临界区」是不同语义（短 TTL / fail-open / 无持有者校验 / 无续期），二者并存、不复用。
-- **`dbaccess/dbredis`**：distlock 只接收外部传入的 `redis.UniversalClient`，不承担客户端构造（日志 Hook / 超时 / Ping 校验）。推荐在装配层用 `dbredis.New` 造好 client 再传给 `NewRedisStorage`。
-
----
+- **`dbaccess/dbredis`**：distlock 只接收外部传入的 `redis.UniversalClient`，不承担客户端构造（日志 Hook / 超时 / Ping 校验），保持轻依赖。
 
 ## 测试
 
-- 门面逻辑（`DistLock`）：用内存 fake 存储单元测试。
-- Redis 存储（`redisLock`）归一化路径：用 `miniredis` 进程内实例覆盖，无需真实 Redis。
-- 真实 Redis 端到端（`TestRedisLockIntegration`）：需要可用 Redis（`REDIS_ADDR`，默认 `127.0.0.1:6379`），不可用时自动 Skip。
+- `Lease` 状态机 / `Locker` 三态语义：内存 fake 后端（覆盖瞬时故障不丢锁、超过窗口才丢锁、Release 有界、幂等、并发、goroutine 不泄漏）。
+- Redis 后端：`miniredis` 覆盖归一化路径、单节点端到端续期、**多节点 quorum**，以及用 go-redis Hook 注入 `EVAL` 瞬时故障的回归用例。
+- 真实 Redis（`REDIS_ADDR`，默认 `127.0.0.1:6379`，不可用时 Skip）见 `redis_test.go` 中需要真实服务的用例。

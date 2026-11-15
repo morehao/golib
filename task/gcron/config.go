@@ -18,16 +18,13 @@ type Config struct {
 	WithSeconds bool
 	Location    *time.Location
 	EnableLock  bool
-	LockTTL     time.Duration
-	AutoRenewal bool
+	// LockTTL 分布式锁租约时长（可被 Task.LockTTL 覆盖）。租约由 distlock 自动续期，
+	// 因此 handler 执行超过该值也不会导致锁过期；它同时决定「实例静默宕机后被接管」的上限。
+	LockTTL time.Duration
 	// Timeout 默认单次执行超时（可被 Task.Timeout 覆盖），<=0 表示不限制。
 	Timeout time.Duration
-	// LockFactory 分布式锁工厂（推荐通过 WithLockFactory 配置；New 的位置参数为兼容旧签名）。
-	LockFactory distlock.LockFactory
-
-	// StrictLockTTL 为 true 时，开启互斥且未自动续期的任务若 Timeout > LockTTL，
-	// Register 直接返回 ErrLockTTLTooShort（默认 false：只输出告警，保持兼容）。
-	StrictLockTTL bool
+	// Locker 分布式锁门面（推荐通过 WithLocker 配置；New 的位置参数为兼容旧签名）。
+	Locker *distlock.Locker
 
 	// StaleRunningCutoff >0 时启用崩溃兜底：Start 后立即执行一次，并按 RunCleanupInterval
 	// 周期把 start_at 早于 now-cutoff 仍处于 running 的执行记录标记为 failed。
@@ -58,7 +55,6 @@ func defaultConfig() *Config {
 		Location:            time.Local,
 		EnableLock:          false,
 		LockTTL:             60 * time.Second,
-		AutoRenewal:         false,
 		RunCleanupInterval:  defaultRunCleanupInterval,
 		RunCleanupBatchSize: defaultRunBatchSize,
 		LifecycleTimeout:    defaultLifecycleTimeout,
