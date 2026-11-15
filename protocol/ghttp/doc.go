@@ -9,5 +9,6 @@
 //   - 流式 / SSE：Get/Post(ctx, path, opt, WithStream()) 返回未缓冲的 *Result，
 //     通过 Result.Read / io.Copy 消费；适配长期存活的 SSE、大响应体等场景。
 //
-// 这是新代码的默认客户端。若你需要的是 resty 生态的完整 API，见 protocol/gresty（学习/参考用）。
+// 这是新代码可默认使用的客户端。protocol/gresty 是基于 resty 的等价实现，二者契约/语义/日志一致，
+// 需要 resty 生态能力（SSE/multipart 等）时可用 gresty。
 package ghttp

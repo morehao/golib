@@ -475,8 +475,8 @@ For usage examples, refer to [task usage](task/README.md)
 `protocol` is a protocol-related component collection providing HTTP client encapsulation.
 
 ### Sub-components
-- **ghttp**: Enhanced HTTP client, supports struct mapping, connection pool, smart retry and other features
-- **gresty**: HTTP client wrapper based on Resty, supports SSE (Server-Sent Events)
+- **ghttp**: Enhanced HTTP client (self-built `net/http`, no third-party deps), supports struct mapping, connection pool, smart retry, response size limit and streaming
+- **gresty**: Equivalent HTTP client built on Resty (rc.4), sharing the same contract/config/log fields; drop-in interchangeable with ghttp, with embedded `*resty.Client` for native resty capabilities (SSE/multipart)
 
 ### Features
 - Struct automatic mapping support
