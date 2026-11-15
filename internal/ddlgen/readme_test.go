@@ -28,6 +28,7 @@ var readmeCases = []struct {
 	{"task/README.md", []section{
 		{"gcron", MySQL}, {"gcron", Postgres},
 		{"gasync", MySQL}, {"gasync", Postgres},
+		{"gjob", MySQL}, {"gjob", Postgres},
 	}},
 	{"gprompt/README.md", []section{{"gprompt", MySQL}, {"gprompt", Postgres}}},
 }

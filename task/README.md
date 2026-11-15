@@ -1,19 +1,36 @@
 # task 任务包
 
-`task` 是任务调度组件包，包含定时任务与异步任务两个子包，均基于 GORM 持久化执行记录，并打通 glog 日志与 gtrace 链路追踪。
+`task` 是任务调度组件包，包含定时任务、异步任务与有状态任务三个子包，均基于 GORM 持久化执行记录，并打通 glog 日志与 gtrace 链路追踪。
 
 - **gcron**: 定时任务，基于 `robfig/cron/v3`，支持秒级 cron、多实例分布式锁互斥、执行记录落库。
 - **gasync**: 异步任务，基于 `hibiken/asynq`，支持重试、超时、延迟、优先级队列、执行记录落库、跨进程 trace 传递。
+- **gjob**: 有状态任务中心，按任务类型注册 handler，单条任务可查状态 / 取消 / 重放、保留每次尝试记录、跨实例不重跑，支持轮询与「轮询 + 通知器」两种唤醒形态，并有远程 HTTP 形态。
 
-两个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
+三个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID；gjob 任务与每次尝试记录各有独立 `id`），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
+
+### 三选一判据
+
+按「需求」选子包，同一服务并存多个允许，各自按 `task.type` 日志字段区分：
+
+| 你的需求 | 选 |
+|---|---|
+| 按 cron 表达式周期触发 | `gcron` |
+| 一次性投递，只要「被执行到」，不需要单条任务的状态与撤回 | `gasync` |
+| 需要单条任务实体：查状态 / 取消 / 重放 / 保留每次尝试 / 跨实例不重跑 | `gjob` |
+| 需要管理界面与运维动作 | `gjob`（`manager` + `ginjob`） |
+| 上述需求 + 已有 Redis，要毫秒级起跑 | `gjob`（`manager` + 通知器） |
+| Worker 拿不到数据库（只有任务中心地址） | `gjob`（`worker` + `source/remote`） |
+
+组合规则：`gcron` 触发 + `gjob` 执行是推荐组合；**不要在 `gjob` 的 handler 内再投 `gasync`**（两套重试叠加）。
 
 ## 建表与迁移
 
-两个子包都在**创建实例时默认建表**（幂等 `AutoMigrate`），常规接入不需要额外步骤：
+三个子包都在**创建实例时默认建表**（幂等 `AutoMigrate`），常规接入不需要额外步骤：
 
 ```go
-s, err := gcron.New(db, cfg)         // 表不存在就建
-srv, err := gasync.NewServer(cfg, db) // 表不存在就建
+s, err := gcron.New(db, cfg)                // 表不存在就建
+srv, err := gasync.NewServer(cfg, db)       // 表不存在就建
+center, err := manager.New(&manager.Config{}, db) // 表不存在就建
 ```
 
 需要自己掌控 DDL 的部署——多个服务共库、DDL 只能有一个执行者，或运行时账号没有 `CREATE/ALTER`
@@ -27,17 +44,21 @@ if err := gcron.AutoMigrate(db); err != nil {
 if err := gasync.AutoMigrate(db); err != nil {
     return err
 }
+if err := manager.AutoMigrate(db); err != nil {
+    return err
+}
 
 // 服务侧（账号只有 DML 权限）
 s, err := gcron.New(db, cfg, gcron.WithoutAutoMigrate())
 srv, err := gasync.NewServer(cfg, db, gasync.WithoutAutoMigrate())
+center, err := manager.New(&manager.Config{}, db, manager.WithoutAutoMigrate())
 ```
 
 - `WithoutAutoMigrate()` 是**构造选项**（函数式选项模式），只关掉构造函数里的**隐式**建表；
   显式 `AutoMigrate(db)` 永远执行；
 - `gasync.NewClient` 不接触 DB，与迁移无关；
 - 要交给 DBA 手工执行，用文末[附录：手工建表 DDL](#附录手工建表-ddl)，或
-  `go run internal/ddlgen/main.go gcron`（`gasync` 同理）从 `model.go` 的 gorm tag 重新生成。
+  `go run internal/ddlgen/main.go gcron`（`gasync` / `gjob` 同理）从 `model.go` 的 gorm tag 重新生成。
 
 ### 升级注意：request_id 索引改名（旧库需手工清理）
 
@@ -314,22 +335,125 @@ server.Enable("email:send")  // 恢复：DB 标记 enabled，新投递的任务�
 - **执行记录为 at-least-once 语义下的快照**：同一任务可能被并发处理（lease 过期后重新入队），执行记录通过主键 `id`（任务实例 ID）原子 upsert，只保留一行；进程被强杀时记录会停留在 `processing`，可通过 `store.MarkStaleProcessingAsFailed(ctx, cutoff, taskType)` 兜底标记为 failed，`store.CleanupRuns(ctx, before, taskType)` 用于按保留策略清理旧记录。
 - **落库字段截断**：payload 超过 4KB、错误信息超过 1KB 时会截断存储，避免撑大执行记录表。
 
+## gjob
+
+### 简介
+
+`gjob` 是有状态任务中心。与 `gcron`（周期触发）、`gasync`（一次性投递）不同，它把**单条任务当作有状态的实体**管理：提交后落到任务中心，执行侧通过 `Source` 取任务执行，任务可查状态、取消、重放，并保留每一次尝试记录；多实例部署下靠租约（lease）保证同一条任务同一时刻只被一个执行者持有、不会重复执行。唤醒方式（纯轮询 / 轮询 + 通知器）与取任务方式（本地认领 / 远程 HTTP）都是可替换的实现，不是组件的前提。
+
+### 特性
+
+- 有状态任务实体：`pending / running / succeeded / failed / canceled / skipped` 六态，可查状态、取消、重放
+- 幂等提交：`UniqKey` 命中既有任务时不重复建任务（返回既有实体，`submitted=false`）
+- 尝试记录：每条任务保留 0..N 次尝试（按 `generation` 重放轮次分组），记录每次的起止、耗时、错误、request/trace
+- 重试与退避：失败按可配置退避策略重试，达到 `max_attempts` 进入终态；`ErrNoRetry` / `ErrSkip` 控制是否重试与跳过
+- 租约与续租：执行者持有租约并在执行中续租，进程崩溃后由回收器接管，跨实例不重跑
+- 两种唤醒形态：纯轮询（`ModePoll`）、轮询 + 通知器（`ModePollNotify`，依赖 Redis 队列，毫秒级起跑，通知丢失由兜底轮询接手）
+- 远程形态：`task/gjob/source/remote` 走 HTTP 与远端任务中心交互，Worker 侧无需直连数据库
+- 管理面：`manager` 提供 Submit/Get/List/Cancel/Replay/Stats，可接 `ginjob` 暴露 HTTP 端点
+- 自动建表（幂等 `AutoMigrate`）、自动注入 TraceID / RequestID，打通 glog 日志与 gtrace 链路追踪
+
+### 数据表
+
+`manager.New` 默认就会调用 `manager.AutoMigrate` 创建以下两张表（关闭方式见[建表与迁移](#建表与迁移)）：
+
+| 表名 | 说明 |
+|---|---|
+| `core_job` | 任务实体（id=任务 ID、task_type=任务类型、status=状态、priority=优先级、payload=入参、uniq_key=幂等键、biz_id/biz_type=业务维度、generation/attempt/max_attempts=重放与尝试计数、next_run_at/lease_until=调度与租约、各时间与 request id 等） |
+| `core_job_run` | 单次尝试记录（id=尝试 ID、job_id=所属任务、generation/attempt=轮次与第几次尝试、状态、失败分类、起止时间、耗时、错误、request id 等） |
+
+两表无物理外键（`job_id` 为逻辑关联），也无软删除。两张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
+
+### 使用示例
+
+本地形态（`manager` + `worker`）：`manager` 持有任务中心（写主库），`worker` 通过 `manager.Source()` 取任务执行。
+
+```go
+package main
+
+import (
+	"context"
+
+	"github.com/morehao/golib/task/gjob"
+	"github.com/morehao/golib/task/gjob/manager"
+	"github.com/morehao/golib/task/gjob/worker"
+	"gorm.io/gorm"
+)
+
+type InvoiceHandler struct{ db *gorm.DB }
+
+// 执行单条任务。返回 nil 表示成功；返回 worker.ErrNoRetry 表示失败但不再重试。
+func (h *InvoiceHandler) Execute(ctx context.Context, t *gjob.Job) error {
+	var p InvoicePayload
+	if err := t.Bind(&p); err != nil {
+		return worker.ErrNoRetry // 参数非法，重试无意义
+	}
+	return h.issue(ctx, p)
+}
+
+// 成功回调：本地形态下 tx 非 nil，与任务终态同事务（远程形态为 nil）。
+func (h *InvoiceHandler) OnSuccess(ctx context.Context, t *gjob.Job) error {
+	tx, ok := gjob.TxFromContext(ctx).(*gorm.DB)
+	if !ok || tx == nil {
+		return nil
+	}
+	return tx.Model(&Order{}).Where("id = ?", t.BizID).Update("invoice_status", "done").Error
+}
+
+func main() {
+	db, _ := openDB() // *gorm.DB，写主库
+
+	// 创建任务中心：New 内部已默认 AutoMigrate；不启动后台循环、不消费消息。
+	center, err := manager.New(&manager.Config{}, db)
+	if err != nil {
+		panic(err)
+	}
+	defer center.Close()
+
+	// 执行侧：按任务类型注册 handler，然后 Run。
+	w := worker.New(center.Source(), &worker.WorkerConfig{Concurrency: 10})
+	if err := w.Register("invoice:issue", &InvoiceHandler{db: db}); err != nil {
+		panic(err)
+	}
+	go func() { _ = w.Run(context.Background()) }()
+
+	// 提交一条任务（UniqKey 相同则命中幂等，不重复建）。
+	task, submitted, err := center.Submit(context.Background(), &gjob.JobSpec{
+		Type:    "invoice:issue",
+		Payload: payload,
+		BizType: "order",
+		BizID:   orderNo,
+		UniqKey: "invoice:issue:" + orderNo,
+	})
+	_, _, _ = task, submitted, err
+}
+```
+
+换成远程形态只需把取任务源从 `center.Source()` 换成 `remote.New(remoteCfg)`：`worker.New(remote.New(remoteCfg), &worker.WorkerConfig{Concurrency: 10})`。远程形态下 Worker 不直连数据库。
+
+#### 注意事项
+
+- **只提交、不执行**也合法：只 `manager.New` → `Submit` → `Close`，不引入 `worker` 包。
+- **注入写主库**：`manager.New` 传入的 `*gorm.DB` 必须是写主库；读写分离下注入从库会让认领读到延迟数据、幂等回查读不到刚插入的行。
+- **`Submit` 三值语义**：`err == nil` 写入/命中幂等成功；`err == ErrNotify` 任务已落库（`task != nil, submitted == true`）但通知没发出去——**不要重试 `Submit`**（会多建任务），兜底轮询会接手；`submitted` 区分是否新建。
+- **两表无软删除**：沿用 `gormdao` 时必须传 `WithoutSoftDelete()`，否则 Dao 会追加 `deleted_at IS NULL` 导致运行时 SQL 报列不存在。
+
 ## 日志追踪
 
 任务执行时会将以下字段写入 ctx，供 `glog`（slog/zap driver）在配置了对应 `extra_keys` 后自动打印：
 
 | 字段 | glog 常量 | 含义 |
 |---|---|---|
-| `task.type` | `glog.KeyTaskType` | 任务类型（gcron 为 `TaskType`，gasync 为任务类型名/`async`） |
-| `task.id` | `glog.KeyTaskID` | 任务唯一标识（即任务定义表主键 id，仅 gcron） |
-| `task.run.id` | `glog.KeyRunID` | 单次运行的唯一标识（即运行记录表主键 id） |
+| `task.type` | `glog.KeyTaskType` | 任务类型（gcron 为 `TaskType`，gasync 为任务类型名/`async`，gjob 为 `JobSpec.Type`） |
+| `task.id` | `glog.KeyTaskID` | 任务唯一标识（gcron 为任务定义表主键 id，gjob 为任务实体 id） |
+| `task.run.id` | `glog.KeyRunID` | 单次运行的唯一标识（即运行记录表主键 id，gjob 为尝试记录 id） |
 
 在服务启动的日志配置里将 `task.run.id` 加入 `extra_keys`，即可在任务执行日志中追踪单次运行。
 
 ## 附录：手工建表 DDL
 
-下面就是 `gcron.AutoMigrate` / `gasync.AutoMigrate` 实际执行的语句，由
-`go run internal/ddlgen/main.go gcron`（`gasync` 同理）从 `model.go` 的 gorm tag 离线生成
+下面就是 `gcron.AutoMigrate` / `gasync.AutoMigrate` / `manager.AutoMigrate` 实际执行的语句，由
+`go run internal/ddlgen/main.go gcron`（`gasync` / `gjob` 同理）从 `model.go` 的 gorm tag 离线生成
 （**不手写**，避免 DDL 与实体漂移）。改完 gorm tag 后请重新生成并同步本节。
 
 - MySQL 8.0+：`ENGINE` / `CHARSET` 取服务端默认（InnoDB + utf8mb4）。要显式指定可在迁移前
@@ -546,4 +670,210 @@ COMMENT ON COLUMN "core_async_task_run"."duration_ms" IS '耗时毫秒';
 COMMENT ON COLUMN "core_async_task_run"."error_msg" IS '错误信息';
 COMMENT ON COLUMN "core_async_task_run"."payload" IS '原始 payload 快照';
 COMMENT ON COLUMN "core_async_task_run"."request_id" IS '请求 ID';
+```
+
+### gjob - MySQL
+
+```sql
+CREATE TABLE `core_job` (
+  `id` varchar(36) COMMENT '任务 ID（UUID v4）',
+  `created_at` datetime(3) NULL,
+  `updated_at` datetime(3) NULL,
+  `task_type` varchar(128) NOT NULL COMMENT '任务类型',
+  `status` varchar(16) NOT NULL DEFAULT 'pending' COMMENT '任务状态',
+  `priority` int NOT NULL DEFAULT 0 COMMENT '优先级',
+  `payload` text COMMENT '任务入参',
+  `uniq_key` varchar(128) COMMENT '幂等键',
+  `biz_type` varchar(64) NOT NULL DEFAULT '' COMMENT '业务类型',
+  `biz_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务 ID',
+  `generation` int NOT NULL DEFAULT 1 COMMENT '重放轮次',
+  `attempt` int NOT NULL DEFAULT 0 COMMENT '本轮已尝试次数',
+  `max_attempts` int NOT NULL DEFAULT 3 COMMENT '本轮最大尝试次数',
+  `timeout_ms` bigint NOT NULL DEFAULT 0 COMMENT '单次执行超时毫秒',
+  `next_run_at` datetime(3) NOT NULL COMMENT '最早可认领时间',
+  `lease_until` datetime(3) NULL COMMENT '租约到期时间',
+  `worker_id` varchar(64) NOT NULL DEFAULT '' COMMENT '持有租约的执行者',
+  `started_at` datetime(3) NULL COMMENT '本轮首次开始时间',
+  `finished_at` datetime(3) NULL COMMENT '进入终态的时间',
+  `duration_ms` bigint NOT NULL DEFAULT 0 COMMENT '累计耗时毫秒',
+  `last_error` text COMMENT '最后一次错误',
+  `result` text COMMENT '结果快照',
+  `request_id` varchar(64) NOT NULL DEFAULT '' COMMENT '请求 ID',
+  `trace_id` varchar(64) NOT NULL DEFAULT '' COMMENT 'TraceID',
+  PRIMARY KEY (`id`),
+  INDEX `idx_core_job_task_type_status_created_at` (`task_type`,`status`,`created_at`),
+  INDEX `idx_core_job_task_type_status_next_run_at` (`task_type`,`status`,`next_run_at`),
+  INDEX `idx_core_job_status_lease_until` (`status`,`lease_until`),
+  INDEX `idx_core_job_status_finished_at` (`status`,`finished_at`),
+  UNIQUE INDEX `uk_core_job_uniq_key` (`uniq_key`),
+  INDEX `idx_core_job_biz_type_biz_id` (`biz_type`,`biz_id`)
+);
+
+CREATE TABLE `core_job_run` (
+  `id` varchar(36) COMMENT '尝试 ID（UUID v4）',
+  `created_at` datetime(3) NULL COMMENT '创建时间',
+  `job_id` varchar(36) NOT NULL COMMENT '所属任务 ID',
+  `generation` int NOT NULL DEFAULT 1 COMMENT '所属重放轮次',
+  `attempt` int NOT NULL COMMENT '本轮第几次尝试',
+  `status` varchar(16) NOT NULL COMMENT '尝试状态',
+  `failure_kind` varchar(16) NOT NULL DEFAULT '' COMMENT '失败分类',
+  `worker_id` varchar(64) NOT NULL DEFAULT '' COMMENT '执行该次尝试的执行者',
+  `started_at` datetime(3) NOT NULL COMMENT '开始时间',
+  `finished_at` datetime(3) NULL COMMENT '结束时间',
+  `duration_ms` bigint NOT NULL DEFAULT 0 COMMENT '本次耗时毫秒',
+  `result` text COMMENT '本次结果快照',
+  `error_msg` text COMMENT '本次错误',
+  `request_id` varchar(64) NOT NULL DEFAULT '' COMMENT '请求 ID',
+  `trace_id` varchar(64) NOT NULL DEFAULT '' COMMENT '本次执行的 TraceID',
+  PRIMARY KEY (`id`),
+  INDEX `idx_core_job_run_created_at` (`created_at`),
+  UNIQUE INDEX `uk_core_job_run_task_id_generation_attempt` (`job_id`,`generation`,`attempt`),
+  INDEX `idx_core_job_run_status_started_at` (`status`,`started_at`),
+  INDEX `idx_core_job_run_request_id` (`request_id`)
+);
+```
+
+### gjob - PostgreSQL
+
+```sql
+CREATE TABLE "core_job" (
+  "id" varchar(36),
+  "created_at" timestamptz,
+  "updated_at" timestamptz,
+  "task_type" varchar(128) NOT NULL,
+  "status" varchar(16) NOT NULL DEFAULT 'pending',
+  "priority" integer NOT NULL DEFAULT 0,
+  "payload" text,
+  "uniq_key" varchar(128),
+  "biz_type" varchar(64) NOT NULL DEFAULT '',
+  "biz_id" varchar(64) NOT NULL DEFAULT '',
+  "generation" integer NOT NULL DEFAULT 1,
+  "attempt" integer NOT NULL DEFAULT 0,
+  "max_attempts" integer NOT NULL DEFAULT 3,
+  "timeout_ms" bigint NOT NULL DEFAULT 0,
+  "next_run_at" timestamptz NOT NULL,
+  "lease_until" timestamptz,
+  "worker_id" varchar(64) NOT NULL DEFAULT '',
+  "started_at" timestamptz,
+  "finished_at" timestamptz,
+  "duration_ms" bigint NOT NULL DEFAULT 0,
+  "last_error" text,
+  "result" text,
+  "request_id" varchar(64) NOT NULL DEFAULT '',
+  "trace_id" varchar(64) NOT NULL DEFAULT '',
+  PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_biz_type_biz_id" ON "core_job" ("biz_type","biz_id");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_job_uniq_key" ON "core_job" ("uniq_key");
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_status_finished_at" ON "core_job" ("status","finished_at");
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_status_lease_until" ON "core_job" ("status","lease_until");
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_task_type_status_next_run_at" ON "core_job" ("task_type","status","next_run_at");
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_task_type_status_created_at" ON "core_job" ("task_type","status","created_at");
+
+COMMENT ON COLUMN "core_job"."id" IS '任务 ID（UUID v4）';
+
+COMMENT ON COLUMN "core_job"."task_type" IS '任务类型';
+
+COMMENT ON COLUMN "core_job"."status" IS '任务状态';
+
+COMMENT ON COLUMN "core_job"."priority" IS '优先级';
+
+COMMENT ON COLUMN "core_job"."payload" IS '任务入参';
+
+COMMENT ON COLUMN "core_job"."uniq_key" IS '幂等键';
+
+COMMENT ON COLUMN "core_job"."biz_type" IS '业务类型';
+
+COMMENT ON COLUMN "core_job"."biz_id" IS '业务 ID';
+
+COMMENT ON COLUMN "core_job"."generation" IS '重放轮次';
+
+COMMENT ON COLUMN "core_job"."attempt" IS '本轮已尝试次数';
+
+COMMENT ON COLUMN "core_job"."max_attempts" IS '本轮最大尝试次数';
+
+COMMENT ON COLUMN "core_job"."timeout_ms" IS '单次执行超时毫秒';
+
+COMMENT ON COLUMN "core_job"."next_run_at" IS '最早可认领时间';
+
+COMMENT ON COLUMN "core_job"."lease_until" IS '租约到期时间';
+
+COMMENT ON COLUMN "core_job"."worker_id" IS '持有租约的执行者';
+
+COMMENT ON COLUMN "core_job"."started_at" IS '本轮首次开始时间';
+
+COMMENT ON COLUMN "core_job"."finished_at" IS '进入终态的时间';
+
+COMMENT ON COLUMN "core_job"."duration_ms" IS '累计耗时毫秒';
+
+COMMENT ON COLUMN "core_job"."last_error" IS '最后一次错误';
+
+COMMENT ON COLUMN "core_job"."result" IS '结果快照';
+
+COMMENT ON COLUMN "core_job"."request_id" IS '请求 ID';
+
+COMMENT ON COLUMN "core_job"."trace_id" IS 'TraceID';
+
+CREATE TABLE "core_job_run" (
+  "id" varchar(36),
+  "created_at" timestamptz,
+  "job_id" varchar(36) NOT NULL,
+  "generation" integer NOT NULL DEFAULT 1,
+  "attempt" integer NOT NULL,
+  "status" varchar(16) NOT NULL,
+  "failure_kind" varchar(16) NOT NULL DEFAULT '',
+  "worker_id" varchar(64) NOT NULL DEFAULT '',
+  "started_at" timestamptz NOT NULL,
+  "finished_at" timestamptz,
+  "duration_ms" bigint NOT NULL DEFAULT 0,
+  "result" text,
+  "error_msg" text,
+  "request_id" varchar(64) NOT NULL DEFAULT '',
+  "trace_id" varchar(64) NOT NULL DEFAULT '',
+  PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_run_request_id" ON "core_job_run" ("request_id");
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_run_status_started_at" ON "core_job_run" ("status","started_at");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_job_run_task_id_generation_attempt" ON "core_job_run" ("job_id","generation","attempt");
+
+CREATE INDEX IF NOT EXISTS "idx_core_job_run_created_at" ON "core_job_run" ("created_at");
+
+COMMENT ON COLUMN "core_job_run"."id" IS '尝试 ID（UUID v4）';
+
+COMMENT ON COLUMN "core_job_run"."created_at" IS '创建时间';
+
+COMMENT ON COLUMN "core_job_run"."job_id" IS '所属任务 ID';
+
+COMMENT ON COLUMN "core_job_run"."generation" IS '所属重放轮次';
+
+COMMENT ON COLUMN "core_job_run"."attempt" IS '本轮第几次尝试';
+
+COMMENT ON COLUMN "core_job_run"."status" IS '尝试状态';
+
+COMMENT ON COLUMN "core_job_run"."failure_kind" IS '失败分类';
+
+COMMENT ON COLUMN "core_job_run"."worker_id" IS '执行该次尝试的执行者';
+
+COMMENT ON COLUMN "core_job_run"."started_at" IS '开始时间';
+
+COMMENT ON COLUMN "core_job_run"."finished_at" IS '结束时间';
+
+COMMENT ON COLUMN "core_job_run"."duration_ms" IS '本次耗时毫秒';
+
+COMMENT ON COLUMN "core_job_run"."result" IS '本次结果快照';
+
+COMMENT ON COLUMN "core_job_run"."error_msg" IS '本次错误';
+
+COMMENT ON COLUMN "core_job_run"."request_id" IS '请求 ID';
+
+COMMENT ON COLUMN "core_job_run"."trace_id" IS '本次执行的 TraceID';
 ```
