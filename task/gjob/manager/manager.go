@@ -195,7 +195,7 @@ func (c *Manager) Submit(ctx context.Context, spec *gjob.JobSpec) (*gjob.Job, bo
 
 	// 通知器形态：Notify 失败返回 ErrNotify（任务已落库，勿重试 Submit）。
 	if c.notifier != nil && submitted {
-		if nerr := c.notifier.Notify(spec.Type); nerr != nil {
+		if nerr := c.notifier.Notify(ctx, spec.Type); nerr != nil {
 			return job, true, gjob.ErrNotify
 		}
 	}

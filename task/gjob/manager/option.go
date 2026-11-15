@@ -1,14 +1,30 @@
 package manager
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
-// Notifier 是通知器形态下唤醒执行侧的最小接口（发布「有新任务」）。
+// Notifier 是通知器形态下「发布唤醒信号 + 消费唤醒信号」的接口（poll+notify 形态）。
 //
-// 具体实现（队列/消息）在后续任务卡落地；本卡只保住构造选项与字段占位，
-// 因此这里只声明最小能力集合，避免过早冻结实现细节。
+// 语义（见 internals 设计「通知器」节）：
+//   - 通知器只负责「尽快叫醒执行侧去 Fetch 一次」，不承载业务数据、不参与正确性：
+//     信号丢了，Worker 的兜底轮询会补上；Redis 挂了，Notify 失败 Submit 返回
+//     ErrNotify（任务已落库），整体退回纯轮询形态。
+//   - 队列名 <prefix>:<task_type>（默认 gjob:invoice:issue），message 只带 task_type。
+//
+// 依赖边界（A10）：asynq 等具体队列实现只在子包 manager/notifier/asynq 中出现；
+// manager 主包只持有本接口与空实现，不 import 任何队列库。
 type Notifier interface {
 	// Notify 发布一条唤醒信号；taskType 决定队列 <prefix>:<task_type>。
-	Notify(taskType string) error
+	// 失败（如 Redis 不可用）返回错误；调用方（Submit）据此返回 gjob.ErrNotify，
+	// 任务已落库、勿重试提交，兜底轮询会接手。
+	Notify(ctx context.Context, taskType string) error
+	// Consume 消费 types 各类型的唤醒信号，收到某类型的信号时调用 wake(taskType)，
+	// 让执行侧去 Fetch 一次。通常起一个后台消费者（asynq server）。阻塞或非阻塞由实现决定。
+	Consume(ctx context.Context, types []string, wake func(ctx context.Context, taskType string)) error
+	// Close 停止消费并释放连接。
+	Close() error
 }
 
 // Option 是 New 的构造选项。封闭接口（apply 未导出）：签名变更不影响调用方。
