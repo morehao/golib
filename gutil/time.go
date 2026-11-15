@@ -96,11 +96,11 @@ func GetMonthRange(offset int) (string, string) {
 }
 
 func GetThisMonthRange() (string, string) {
-	return GetWeekRange(0)
+	return GetMonthRange(0)
 }
 
 func GetLastMonthRange() (string, string) {
-	return GetWeekRange(-1)
+	return GetMonthRange(-1)
 }
 
 func GetYear(offset int) string {
