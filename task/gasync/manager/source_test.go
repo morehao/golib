@@ -81,7 +81,7 @@ func terminalRunCount(t *testing.T, gdb *gorm.DB, asyncTaskID string) int64 {
 	t.Helper()
 	var n int64
 	err := gdb.Model(&db.CoreAsyncTaskRun{}).
-		Where("job_id = ? AND status IN ?", asyncTaskID,
+		Where("async_task_id = ? AND status IN ?", asyncTaskID,
 			[]string{"succeeded", "failed", "canceled", "skipped"}).
 		Count(&n).Error
 	if err != nil {
@@ -119,7 +119,7 @@ func TestSource_HookTxError_RollsBack(t *testing.T) {
 		t.Fatalf("terminal run rows = %d, want 0 (rolled back)", n)
 	}
 	var total int64
-	gdb.Model(&db.CoreAsyncTaskRun{}).Where("job_id = ?", task.ID).Count(&total)
+	gdb.Model(&db.CoreAsyncTaskRun{}).Where("async_task_id = ?", task.ID).Count(&total)
 	if total != 0 {
 		t.Fatalf("run rows = %d, want 0 (upsertRun rolled back too)", total)
 	}
@@ -265,7 +265,7 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 
 	const bizTable = "t_m6_biz"
 	if err := gdb.Exec(fmt.Sprintf(
-		`CREATE TABLE %s (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL)`, bizTable,
+		`CREATE TABLE %s (id INTEGER PRIMARY KEY AUTOINCREMENT, async_task_id TEXT NOT NULL)`, bizTable,
 	)).Error; err != nil {
 		t.Fatalf("create biz table: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 			}
 			sawTx.Store(true)
 			// 在事务句柄上写业务表：与任务终态同事务。
-			return tx.Exec(fmt.Sprintf(`INSERT INTO %s (job_id) VALUES (?)`, bizTable), task.ID).Error
+			return tx.Exec(fmt.Sprintf(`INSERT INTO %s (async_task_id) VALUES (?)`, bizTable), task.ID).Error
 		},
 	}
 
@@ -326,7 +326,7 @@ func TestSource_OnSuccessTxFromContext(t *testing.T) {
 		t.Fatal("OnSuccess did not see a non-nil *gorm.DB from gasync.TxFromContext")
 	}
 	var n int64
-	if err := gdb.Table(bizTable).Where("job_id = ?", asyncTask.ID).Count(&n).Error; err != nil {
+	if err := gdb.Table(bizTable).Where("async_task_id = ?", asyncTask.ID).Count(&n).Error; err != nil {
 		t.Fatalf("count biz rows: %v", err)
 	}
 	if n != 1 {

@@ -392,7 +392,7 @@ func TestA12_SourceReplaceable(t *testing.T) {
 		fetched := false
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
-			case strings.HasSuffix(r.URL.Path, "/GetPendingJob"):
+			case strings.HasSuffix(r.URL.Path, "/GetPendingAsyncTask"):
 				mu.Lock()
 				if !fetched {
 					fetched = true

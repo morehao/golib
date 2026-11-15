@@ -198,7 +198,7 @@ WHERE id = ? AND worker_id = ? AND status = 'running'`,
 	return nil
 }
 
-// upsertRun 写入本次尝试行（(job_id,generation,attempt) 唯一）。冲突则收尾为终态。
+// upsertRun 写入本次尝试行（(async_task_id,generation,attempt) 唯一）。冲突则收尾为终态。
 func (s *source) upsertRun(tx *gormDB, ctx context.Context, task *gasync.AsyncTask, r gasync.Result) error {
 	now := time.Now()
 	status := runStatusOf(r.Outcome)
@@ -208,10 +208,10 @@ func (s *source) upsertRun(tx *gormDB, ctx context.Context, task *gasync.AsyncTa
 	}
 	id := genUUID()
 	sql := fmt.Sprintf(`INSERT INTO %s
-(id, created_at, job_id, generation, attempt, status, failure_kind, worker_id,
+(id, created_at, async_task_id, generation, attempt, status, failure_kind, worker_id,
  started_at, finished_at, duration_ms, result, error_msg, request_id, trace_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (job_id, generation, attempt) DO UPDATE SET
+ON CONFLICT (async_task_id, generation, attempt) DO UPDATE SET
  status = excluded.status, failure_kind = excluded.failure_kind,
  finished_at = excluded.finished_at, duration_ms = excluded.duration_ms,
  result = excluded.result, error_msg = excluded.error_msg`,

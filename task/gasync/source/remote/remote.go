@@ -7,7 +7,7 @@
 //
 // 端点约定（与契约文档「Source（取任务接口）」及「远程 Source（source/remote）」一致）：
 //
-//	Fetch   → POST {base}/GetPendingJob { task_type, worker_id }
+//	Fetch   → POST {base}/GetPendingAsyncTask { task_type, worker_id }
 //	Renew   → POST {base}/Heartbeat      { task_id, worker_id }
 //	Save    → 调本地钩子 → POST {base}/Callback { task_id, worker_id, status, result, error }
 //	Close   → 关闭 HTTP 连接
@@ -65,7 +65,7 @@ var (
 // Config 是远程 Source 的配置。至少需要 BaseURL 与 WorkerID。
 type Config struct {
 	// BaseURL 是远程任务中心的根地址，如 "https://center.example.com/gasync"。
-	// 会与各端点拼接（BaseURL + "/GetPendingJob"）。
+	// 会与各端点拼接（BaseURL + "/GetPendingAsyncTask"）。
 	BaseURL string
 	// WorkerID 是本执行节点标识，随每个请求上报，用于中心侧归属与心跳判定。
 	WorkerID string
@@ -123,13 +123,13 @@ func New(cfg Config) (*Source, error) {
 	return s, nil
 }
 
-// getPendingAsyncTaskReq 是 GetPendingJob 的请求体。
+// getPendingAsyncTaskReq 是 GetPendingAsyncTask 的请求体。
 type getPendingAsyncTaskReq struct {
 	TaskType string `json:"task_type"`
 	WorkerID string `json:"worker_id"`
 }
 
-// pendingAsyncTaskResp 是 GetPendingJob 的响应体。中心「无任务」时 Available=false 或 204。
+// pendingAsyncTaskResp 是 GetPendingAsyncTask 的响应体。中心「无任务」时 Available=false 或 204。
 type pendingAsyncTaskResp struct {
 	// Available 为 false 表示当前无待执行任务，等价于「无任务」。
 	Available bool `json:"available"`
@@ -166,7 +166,7 @@ func (w *asyncTaskWire) toAsyncTask() *gasync.AsyncTask {
 	}
 }
 
-// Fetch 取一条待执行任务：POST {base}/GetPendingJob。
+// Fetch 取一条待执行任务：POST {base}/GetPendingAsyncTask。
 //
 //   - 中心返回「无任务」（available=false 或 HTTP 204）时返回 gasync.ErrNoAsyncTask（不是错误，
 //     也不是失权）。注意：本方法不 sleep、不内部重试，退避是 Worker 的责任——
@@ -179,7 +179,7 @@ func (s *Source) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTask,
 		return nil, gasync.ErrEmptyType
 	}
 	body, _ := json.Marshal(getPendingAsyncTaskReq{TaskType: taskType, WorkerID: s.cfg.WorkerID})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/GetPendingJob", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/GetPendingAsyncTask", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -198,16 +198,16 @@ func (s *Source) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTask,
 	// 5xx / 429：不可用。绝不能返回 ErrNoAsyncTask（否则 Worker 会把它当正常空转并高频重试）。
 	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 		slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("gasync: remote GetPendingJob unavailable: status=%d body=%s", resp.StatusCode, bytes.TrimSpace(slurp))
+		return nil, fmt.Errorf("gasync: remote GetPendingAsyncTask unavailable: status=%d body=%s", resp.StatusCode, bytes.TrimSpace(slurp))
 	}
 	if resp.StatusCode != http.StatusOK {
 		slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("%w: GetPendingJob status=%d body=%s", ErrBadResponse, resp.StatusCode, bytes.TrimSpace(slurp))
+		return nil, fmt.Errorf("%w: GetPendingAsyncTask status=%d body=%s", ErrBadResponse, resp.StatusCode, bytes.TrimSpace(slurp))
 	}
 
 	var out pendingAsyncTaskResp
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("%w: decode GetPendingJob: %v", ErrBadResponse, err)
+		return nil, fmt.Errorf("%w: decode GetPendingAsyncTask: %v", ErrBadResponse, err)
 	}
 	if !out.Available || out.AsyncTask == nil {
 		return nil, gasync.ErrNoAsyncTask

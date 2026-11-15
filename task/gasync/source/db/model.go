@@ -2,7 +2,7 @@ package db
 
 import "time"
 
-// 表名常量。两表都以 id 为主键；core_async_task_run.job_id 是逻辑关联，无物理外键。
+// 表名常量。两表都以 id 为主键；core_async_task_run.async_task_id 是逻辑关联，无物理外键。
 const (
 	// CoreAsyncTaskTableName 任务实体表。
 	CoreAsyncTaskTableName = "core_async_task"
@@ -64,15 +64,15 @@ func (CoreAsyncTask) TableName() string { return CoreAsyncTaskTableName }
 // CoreAsyncTaskRun 是单次尝试记录，对应表 core_async_task_run。
 //
 // 一条任务有 0..N 次尝试，按 generation（重放轮次）分组；
-// (job_id, generation, attempt) 唯一，表示同一轮次第 N 次尝试只允许一行。
+// (async_task_id, generation, attempt) 唯一，表示同一轮次第 N 次尝试只允许一行。
 type CoreAsyncTaskRun struct {
 	ID string `gorm:"column:id;primaryKey;type:varchar(36);comment:尝试 ID（UUID v4）"`
 	// created_at 单独索引：兜底清理按范围删除。
 	CreatedAt time.Time `gorm:"column:created_at;index:idx_core_async_task_run_created_at;comment:创建时间"`
 
-	AsyncTaskID      string `gorm:"column:job_id;type:varchar(36);not null;uniqueIndex:uk_core_async_task_run_task_id_generation_attempt,priority:1;comment:所属任务 ID"`
-	Generation int32  `gorm:"column:generation;not null;default:1;uniqueIndex:uk_core_async_task_run_task_id_generation_attempt,priority:2;comment:所属重放轮次"`
-	Attempt    int32  `gorm:"column:attempt;not null;uniqueIndex:uk_core_async_task_run_task_id_generation_attempt,priority:3;comment:本轮第几次尝试"`
+	AsyncTaskID      string `gorm:"column:async_task_id;type:varchar(36);not null;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:1;comment:所属任务 ID"`
+	Generation int32  `gorm:"column:generation;not null;default:1;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:2;comment:所属重放轮次"`
+	Attempt    int32  `gorm:"column:attempt;not null;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:3;comment:本轮第几次尝试"`
 
 	Status      string `gorm:"column:status;type:varchar(16);not null;index:idx_core_async_task_run_status_started_at,priority:1;comment:尝试状态"`
 	FailureKind string `gorm:"column:failure_kind;type:varchar(16);not null;default:'';comment:失败分类"`

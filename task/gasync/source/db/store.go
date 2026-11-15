@@ -40,7 +40,7 @@ func (s *store) GetAsyncTaskWithRuns(ctx context.Context, id string) (*gasync.As
 		return nil, nil, err
 	}
 	var rows []CoreAsyncTaskRun
-	if err := s.db.WithContext(ctx).Where("job_id = ?", id).
+	if err := s.db.WithContext(ctx).Where("async_task_id = ?", id).
 		Order("generation ASC, attempt ASC").Find(&rows).Error; err != nil {
 		return nil, nil, err
 	}
@@ -112,7 +112,7 @@ func (s *store) ListRun(ctx context.Context, cond *gasync.AsyncTaskRunCond) ([]*
 	page, size := normPage(cond.Page, cond.PageSize)
 	q := s.db.WithContext(ctx).Model(&CoreAsyncTaskRun{})
 	if cond.AsyncTaskID != "" {
-		q = q.Where("job_id = ?", cond.AsyncTaskID)
+		q = q.Where("async_task_id = ?", cond.AsyncTaskID)
 	}
 	if cond.Generation != 0 {
 		q = q.Where("generation = ?", cond.Generation)

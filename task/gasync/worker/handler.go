@@ -230,7 +230,7 @@ func topStackFrame(stack []byte) string {
 func (w *Worker) save(task *gasync.AsyncTask, res gasync.Result, cb gasync.EnsureFunc) {
 	if err := w.src.Save(w.baseCtx, task, res, cb); err != nil {
 		w.logger.Errorw(w.baseCtx, "gasync worker save error",
-			"task_type", task.Type, "job_id", task.ID, "outcome", res.Outcome, "error", err)
+			"task_type", task.Type, "async_task_id", task.ID, "outcome", res.Outcome, "error", err)
 	}
 }
 

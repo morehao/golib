@@ -110,7 +110,7 @@ func TestReapStaleRunReaped(t *testing.T) {
 		t.Fatalf("reap runs=%d, want 1", runs)
 	}
 	var r CoreAsyncTaskRun
-	if err := s.db.Where("job_id = ?", pid).Take(&r).Error; err != nil {
+	if err := s.db.Where("async_task_id = ?", pid).Take(&r).Error; err != nil {
 		t.Fatal(err)
 	}
 	if r.Status != "failed" || r.FailureKind != "lease_expired" {

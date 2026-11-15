@@ -153,7 +153,7 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 | 表名 | 说明 |
 |---|---|
 | `core_async_task` | 任务实体（id、task_type、status、priority、payload、uniq_key、biz_type/biz_id、chain_id/step/prev_step、labels、generation/attempt/max_attempts、next_run_at/lease_until、各时间与 request id） |
-| `core_async_task_run` | 单次尝试记录（id、job_id、generation/attempt、状态、failure_kind、起止、耗时、结果、错误、request id） |
+| `core_async_task_run` | 单次尝试记录（id、async_task_id、generation/attempt、状态、failure_kind、起止、耗时、结果、错误、request id） |
 | `core_async_task_type` | 任务类型开关（id、task_type 唯一、enabled；无行=启用） |
 
 建表方式、三方言 DDL 附录、共库/无 DDL 权限的迁移约定，见 [`task/README.md`](../README.md#建表与迁移)。索引名一律带表前缀（`idx_core_async_task_*` / `uk_core_async_task_*`），PostgreSQL 下索引名 schema 级唯一。

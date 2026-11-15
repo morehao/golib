@@ -49,7 +49,7 @@ func (f *fakeCenter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch path {
-	case "/GetPendingJob":
+	case "/GetPendingAsyncTask":
 		var m map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&m)
 		f.mu.Lock()
@@ -112,7 +112,7 @@ func newSource(t *testing.T, f *fakeCenter) *Source {
 
 func TestFetch_HasAsyncTask(t *testing.T) {
 	f := newFakeCenter(t)
-	f.on("/GetPendingJob", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("/GetPendingAsyncTask", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": true,
 			"asyncTask": map[string]any{
@@ -148,7 +148,7 @@ func TestFetch_HasAsyncTask(t *testing.T) {
 	got := f.lastGetPending
 	f.mu.Unlock()
 	if got["task_type"] != "invoice" || got["worker_id"] != "w-1" {
-		t.Errorf("GetPendingJob body = %v, want task_type=invoice worker_id=w-1", got)
+		t.Errorf("GetPendingAsyncTask body = %v, want task_type=invoice worker_id=w-1", got)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestFetch_NoAsyncTask(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFakeCenter(t)
-			f.on("/GetPendingJob", func(w http.ResponseWriter, _ *http.Request) {
+			f.on("/GetPendingAsyncTask", func(w http.ResponseWriter, _ *http.Request) {
 				if status == http.StatusNoContent {
 					w.WriteHeader(http.StatusNoContent)
 					return
@@ -182,7 +182,7 @@ func TestFetch_NoAsyncTask(t *testing.T) {
 // 5xx 必须返回一个非 ErrNoAsyncTask 的普通错误，Worker 据此走错误退避而非把 5xx 当「无任务」。
 func TestFetch_5xx_NotNoAsyncTask(t *testing.T) {
 	f := newFakeCenter(t)
-	f.on("/GetPendingJob", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("/GetPendingAsyncTask", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("center down"))
 	})

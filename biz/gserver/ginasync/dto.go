@@ -60,7 +60,7 @@ type asyncTaskResponse struct {
 // runResponse 一次尝试记录。
 type runResponse struct {
 	ID         string `json:"id"`
-	AsyncTaskID      string `json:"job_id"`
+	AsyncTaskID      string `json:"async_task_id"`
 	Generation int    `json:"generation"`
 	Attempt    int    `json:"attempt"`
 	Status     string `json:"status"`

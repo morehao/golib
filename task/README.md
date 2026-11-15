@@ -250,11 +250,11 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 | 表名 | 说明 |
 |---|---|
-| `core_job` | 任务实体（id=任务 ID、task_type=任务类型、status=状态、priority=优先级、payload=入参、uniq_key=幂等键、biz_id/biz_type=业务维度、chain_id/step/prev_step=任务链、labels=业务标签、generation/attempt/max_attempts=重放与尝试计数、next_run_at/lease_until=调度与租约、各时间与 request id 等） |
-| `core_job_run` | 单次尝试记录（id=尝试 ID、job_id=所属任务、generation/attempt=轮次与第几次尝试、状态、失败分类、起止时间、耗时、错误、request id 等） |
+| `core_async_task` | 任务实体（id=任务 ID、task_type=任务类型、status=状态、priority=优先级、payload=入参、uniq_key=幂等键、biz_id/biz_type=业务维度、chain_id/step/prev_step=任务链、labels=业务标签、generation/attempt/max_attempts=重放与尝试计数、next_run_at/lease_until=调度与租约、各时间与 request id 等） |
+| `core_async_task_run` | 单次尝试记录（id=尝试 ID、async_task_id=所属任务、generation/attempt=轮次与第几次尝试、状态、失败分类、起止时间、耗时、错误、request id 等） |
 | `core_job_type` | 任务类型开关（id、task_type 唯一、enabled；**无行 = 启用**，仅记录被 Disable 的类型，fail-open） |
 
-三表无物理外键（`job_id` 为逻辑关联），也无软删除。三张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
+三表无物理外键（`async_task_id` 为逻辑关联），也无软删除。三张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
 
 ### 使用示例
 
@@ -540,7 +540,7 @@ CREATE TABLE `core_async_task` (
 CREATE TABLE `core_async_task_run` (
   `id` varchar(36) COMMENT '尝试 ID（UUID v4）',
   `created_at` datetime(3) NULL COMMENT '创建时间',
-  `job_id` varchar(36) NOT NULL COMMENT '所属任务 ID',
+  `async_task_id` varchar(36) NOT NULL COMMENT '所属任务 ID',
   `generation` int NOT NULL DEFAULT 1 COMMENT '所属重放轮次',
   `attempt` int NOT NULL COMMENT '本轮第几次尝试',
   `status` varchar(16) NOT NULL COMMENT '尝试状态',
@@ -555,7 +555,7 @@ CREATE TABLE `core_async_task_run` (
   `trace_id` varchar(64) NOT NULL DEFAULT '' COMMENT '本次执行的 TraceID',
   PRIMARY KEY (`id`),
   INDEX `idx_core_async_task_run_created_at` (`created_at`),
-  UNIQUE INDEX `uk_core_async_task_run_task_id_generation_attempt` (`job_id`,`generation`,`attempt`),
+  UNIQUE INDEX `uk_core_async_task_run_async_task_id_generation_attempt` (`async_task_id`,`generation`,`attempt`),
   INDEX `idx_core_async_task_run_status_started_at` (`status`,`started_at`),
   INDEX `idx_core_async_task_run_request_id` (`request_id`)
 );
@@ -674,7 +674,7 @@ COMMENT ON COLUMN "core_async_task"."labels" IS '业务维度标签（JSON）';
 CREATE TABLE "core_async_task_run" (
   "id" varchar(36),
   "created_at" timestamptz,
-  "job_id" varchar(36) NOT NULL,
+  "async_task_id" varchar(36) NOT NULL,
   "generation" integer NOT NULL DEFAULT 1,
   "attempt" integer NOT NULL,
   "status" varchar(16) NOT NULL,
@@ -694,7 +694,7 @@ CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_request_id" ON "core_async_t
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_status_started_at" ON "core_async_task_run" ("status","started_at");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_async_task_run_task_id_generation_attempt" ON "core_async_task_run" ("job_id","generation","attempt");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_async_task_run_async_task_id_generation_attempt" ON "core_async_task_run" ("async_task_id","generation","attempt");
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_created_at" ON "core_async_task_run" ("created_at");
 
@@ -702,7 +702,7 @@ COMMENT ON COLUMN "core_async_task_run"."id" IS '尝试 ID（UUID v4）';
 
 COMMENT ON COLUMN "core_async_task_run"."created_at" IS '创建时间';
 
-COMMENT ON COLUMN "core_async_task_run"."job_id" IS '所属任务 ID';
+COMMENT ON COLUMN "core_async_task_run"."async_task_id" IS '所属任务 ID';
 
 COMMENT ON COLUMN "core_async_task_run"."generation" IS '所属重放轮次';
 

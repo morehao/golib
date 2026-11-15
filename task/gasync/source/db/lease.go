@@ -70,7 +70,7 @@ func (s *store) reapStaleRuns(ctx context.Context, batch int) (int64, error) {
 	// ① SELECT 候选（关联 asyncTask 表判归属）。
 	selSQL := fmt.Sprintf(`SELECT r.id AS id, j.lease_until AS lease_until
 FROM %s r JOIN %s j
-  ON j.id = r.job_id AND j.generation = r.generation
+  ON j.id = r.async_task_id AND j.generation = r.generation
 WHERE r.status = 'running'
   AND (j.status <> 'running' OR %s OR j.attempt <> r.attempt)
 LIMIT ?`,
@@ -192,7 +192,7 @@ WHERE status IN ('succeeded','failed','canceled','skipped') AND %s LIMIT ?`,
 	}
 	// ② 事务内先删 run（按 task_id），再删 asyncTask（带终态条件）。
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		r := tx.Exec(fmt.Sprintf("DELETE FROM %s WHERE job_id IN (%s)",
+		r := tx.Exec(fmt.Sprintf("DELETE FROM %s WHERE async_task_id IN (%s)",
 			CoreAsyncTaskRunTableName, wrapIDPlaceholders(len(ids))), toArgs(ids)...)
 		if r.Error != nil {
 			return r.Error
