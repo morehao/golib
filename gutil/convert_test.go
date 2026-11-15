@@ -2,8 +2,6 @@ package gutil
 
 import (
 	"container/list"
-	"encoding/json"
-	"fmt"
 	"strconv"
 	"testing"
 
@@ -36,26 +34,6 @@ func TestToJsonString(t *testing.T) {
 // 旧实现（参照 oracle）：仅用于「新旧对照」测试，验证新实现的输出语义。
 // 不得在业务代码中引用。
 // =============================================================================
-
-func oldToString(v any) string {
-	switch val := v.(type) {
-	case string:
-		return val
-	case int, int8, int16, int32, int64:
-		return fmt.Sprintf("%d", val)
-	case uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", val)
-	case float32, float64:
-		return fmt.Sprintf("%f", val)
-	case bool:
-		return strconv.FormatBool(val)
-	case []byte:
-		return string(val)
-	default:
-		b, _ := json.Marshal(v)
-		return string(b)
-	}
-}
 
 func oldVToUint64(v any) uint64 {
 	if v == nil {
@@ -150,56 +128,52 @@ func oldVToFloat64(v any) float64 {
 }
 
 // =============================================================================
-// ToString：必须与原实现**逐字节一致**（cast.ToString 语义不同，已保留手写实现）
+// ToString：现已委托 spf13/cast，断言 cast 语义（破坏性变更，调用方自行适配）。
+//   - 标量：nil→""、浮点为最简形式（10→"10"、3.14→"3.14"）、bool/数值/字符串按惯例；
+//   - 复合类型（struct/map/slice/指针）→""，需要 JSON 请用 ToJsonString。
+// 对齐 cast.ToString 的行为，不追求与旧实现逐字节一致。
 // =============================================================================
 
-func TestToString_MatchesOld(t *testing.T) {
+func TestToString_CastSemantics(t *testing.T) {
 	type sample struct {
 		Name  string
 		Score float64
 		Tags  []string
 	}
-	inputs := []struct {
+	cases := []struct {
 		name string
 		in   any
+		want string
 	}{
-		{"nil", nil},
-		{"string", "hello"},
-		{"empty-string", ""},
-		{"numeric-string", "42"},
-		{"int", 123},
-		{"int-zero", 0},
-		{"int-negative", -7},
-		{"int8", int8(-3)},
-		{"int16", int16(300)},
-		{"int32", int32(70000)},
-		{"int64", int64(1 << 40)},
-		{"uint", uint(9)},
-		{"uint8", uint8(255)},
-		{"uint16", uint16(65535)},
-		{"uint32", uint32(4000000000)},
-		{"uint64", uint64(1 << 50)},
-		{"float64-int-valued", float64(10)},
-		{"float64", 3.14},
-		{"float64-neg", -2.5},
-		{"float32", float32(1.5)},
-		{"bool-true", true},
-		{"bool-false", false},
-		{"bytes", []byte("hi")},
-		{"empty-bytes", []byte{}},
-		{"slice", []int{1, 2, 3}},
-		{"map", map[string]int{"a": 1}},
-		{"struct", sample{"x", 9.5, []string{"t"}}},
-		{"nil-pointer", (*sample)(nil)},
+		{"nil", nil, ""},
+		{"string", "hello", "hello"},
+		{"numeric-string", "42", "42"},
+		{"int", 123, "123"},
+		{"int-negative", -7, "-7"},
+		{"int64", int64(1 << 40), "1099511627776"},
+		{"uint", uint(9), "9"},
+		{"float64-int-valued", float64(10), "10"},
+		{"float64", 3.14, "3.14"},
+		{"float64-neg", -2.5, "-2.5"},
+		{"float32", float32(1.5), "1.5"},
+		{"bool-true", true, "true"},
+		{"bool-false", false, "false"},
+		{"bytes", []byte("hi"), "hi"},
+		{"slice", []int{1, 2, 3}, ""},
+		{"map", map[string]int{"a": 1}, ""},
+		{"struct", sample{"x", 9.5, []string{"t"}}, ""},
+		{"nil-pointer", (*sample)(nil), ""},
 	}
-	for _, tc := range inputs {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ToString(tc.in)
-			want := oldToString(tc.in)
-			if got != want {
-				t.Fatalf("ToString(%#v) = %q, old impl = %q (must be identical)", tc.in, got, want)
+			if got := ToString(tc.in); got != tc.want {
+				t.Fatalf("ToString(%#v) = %q, want %q (cast semantics)", tc.in, got, tc.want)
 			}
 		})
+	}
+	// 复合类型序列化请用 ToJsonString：
+	if got := ToJsonString(map[string]int{"a": 1}); got != `{"a":1}` {
+		t.Fatalf("ToJsonString = %q", got)
 	}
 }
 
@@ -245,7 +219,7 @@ func TestVToNumbers_NewVsOld(t *testing.T) {
 		{"float64", 3.14, 3, 3, 3.14}, // float64: 旧 VToFloat64 未处理 float -> 0
 		{"float32", float32(1.5), 1, 1, 1.5},
 		{"float-negative", -2.5, 0, -2, -2.5},
-		{"bool-true", true, 1, 1, 1},   // bool: 旧实现全部 -> 0
+		{"bool-true", true, 1, 1, 1}, // bool: 旧实现全部 -> 0
 		{"bool-false", false, 0, 0, 0},
 		{"string", "42", 42, 42, 42},
 		{"string-empty", "", 0, 0, 0},

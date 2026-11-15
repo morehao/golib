@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"strconv"
 
 	"github.com/spf13/cast"
 )
@@ -31,33 +30,13 @@ func VToFloat64(v any) float64 {
 	return n
 }
 
-// ToString 将任意值转换为字符串。
+// ToString 将标量值转换为字符串，内部委托 spf13/cast。
 //
-// 注意：此处**保留原手写实现**，未委托 cast.ToString。原因是 cast.ToString
-// 与原实现的输出语义存在不可调和的差异，而 ToString 在仓库内被大量调用、
-// 输出语义必须与原实现完全一致：
-//   - 浮点：原实现 "%f"（如 1.5 -> "1.500000"），cast 为 strconv 最简形式（"1.5"）；
-//   - nil：原实现走 json.Marshal -> "null"，cast 返回 ""；
-//   - 结构体/map/slice 等复合类型：原实现返回 JSON（如 {"a":1}），cast 返回 ""。
+// 语义即 cast.ToString：nil→""、浮点为最简形式（1.5→"1.5"）、bool/数值/字符串
+// 按惯例转换、复合类型（struct/map/slice）→""。需要把复合类型序列化为 JSON
+// 请用 [ToJsonString]，两者职责分离。
 func ToString(v any) string {
-	switch val := v.(type) {
-	case string:
-		return val
-	case int, int8, int16, int32, int64:
-		return fmt.Sprintf("%d", val)
-	case uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", val)
-	case float32, float64:
-		return fmt.Sprintf("%f", val)
-	case bool:
-		return strconv.FormatBool(val)
-	case []byte:
-		return string(val)
-	default:
-		b, _ := json.Marshal(v)
-		s := string(b)
-		return s
-	}
+	return cast.ToString(v)
 }
 
 func ToJsonString(v any) string {

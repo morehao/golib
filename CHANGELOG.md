@@ -14,9 +14,9 @@
 - **gcache/memory**: 自研 `container/list` LRU 换成 `hashicorp/golang-lru/v2/simplelru`（仅承载
   LRU 淘汰）；per-entry TTL 仍自判（`simplelru`/`expirable` 均不支持按 key 独立过期）；`GetOrLoad`
   用 `singleflight` 防击穿。`gcache.Cache` 接口/`Config`/注册名/`Close` 不变。
-- **gutil**: `VToUint64/VToInt64/VToFloat64` 内部委托 `spf13/cast`（`ToString` 因输出语义不兼容
-  保留原实现，逐字节一致）；`CopyMap` 用 `maps.Clone`；`SliceContain` 用 `slices.Contains`
-  （`SliceDiff/Duplicate/Group` 因标准库无等价语义保留薄实现）。
+- **gutil**: `VToUint64/VToInt64/VToFloat64` 与 `ToString` 内部委托 `spf13/cast`；`CopyMap` 用
+  `maps.Clone`；`SliceContain` 用 `slices.Contains`（`SliceDiff/Duplicate/Group` 因标准库无等价语义
+  保留薄实现）。复合类型转 JSON 请用 `ToJsonString`。
 - **gmiddleware**: `CORS` 内部改用 `gin-contrib/cors`，保留 `CORS(opts ...CorsOption)` 与全部
   `With*` 选项签名。
 
@@ -27,10 +27,14 @@
 - **gmiddleware/CORS**: 不再在 `allowAllOrigins=true` 时下发 `Access-Control-Allow-Credentials: true`
   （该组合在 CORS 规范下非法）。需要凭证时请显式开启 credentials 并配置明确来源。
 
-### 行为变化（需留意）
+### 行为变化（破坏性，调用方需自行适配）
 
 - `gutil.VTo*` 对负数→uint、bool、int16/uint16、超范围数字串等分支改为 `cast` 语义（多为修正旧实现
-  的静默 bug）。`ToString` 输出保持与原实现逐字节一致。
+  的静默 bug）。
+- `gutil.ToString` 改为 `cast.ToString` 语义：`nil→""`、浮点为最简形式（`1.5→"1.5"`，旧为
+  `"1.500000"`）、`struct/map/slice` 等复合类型返回 `""`（旧为 JSON）。需要 JSON 请显式用
+  `ToJsonString`。
+- `gmiddleware.CORS` 默认不再无条件下发 `Access-Control-Allow-Credentials: true`（见上，规范修正）。
 
 ### 说明
 
