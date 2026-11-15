@@ -53,11 +53,9 @@ func (s *fakeSMTPServer) serve() {
 		if err != nil {
 			return
 		}
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			s.handle(conn)
-		}()
+		})
 	}
 }
 
@@ -143,80 +141,112 @@ func (s *fakeSMTPServer) dialTo() dialFunc {
 	}
 }
 
-func TestSend_PlainText_ChineseSubject(t *testing.T) {
-	srv := newFakeSMTPServer(t)
-
-	n, err := NewWithDialer(EmailConfig{
-		Host: "smtp.example.com",
-		Port: 587,
-		From: "from@example.com",
-	}, srv.dialTo())
-	if err != nil {
-		t.Fatalf("New: %v", err)
+// TestSend_TableDriven 覆盖中文主题 + 多收件人 + HTML 的组合场景。
+//
+// 每个用例断言：收件人数量、主题被 RFC 2047 编码且可正确解码、正文部分存在性。
+func TestSend_TableDriven(t *testing.T) {
+	cases := []struct {
+		name        string
+		msg         gnotify.Message
+		wantRcpt    int
+		wantSubject string
+		wantHTML    bool
+		wantBody    string
+	}{
+		{
+			name: "chinese subject multi recipient plain",
+			msg: gnotify.Message{
+				To:      []string{"a@example.com", "b@example.com"},
+				Subject: "你好，世界",
+				Body:    "hello body",
+			},
+			wantRcpt:    2,
+			wantSubject: "你好，世界",
+			wantBody:    "hello body",
+		},
+		{
+			name: "single recipient html",
+			msg: gnotify.Message{
+				To:      []string{"a@example.com"},
+				Subject: "中文标题 HTML",
+				Body:    "plain fallback",
+				HTML:    "<p>你好</p>",
+			},
+			wantRcpt:    1,
+			wantSubject: "中文标题 HTML",
+			wantHTML:    true,
+			wantBody:    "plain fallback",
+		},
+		{
+			name: "multi recipient html",
+			msg: gnotify.Message{
+				To:      []string{"a@example.com", "b@example.com", "c@example.com"},
+				Subject: "群发测试",
+				Body:    "multi body",
+				HTML:    "<h1>标题</h1>",
+			},
+			wantRcpt:    3,
+			wantSubject: "群发测试",
+			wantHTML:    true,
+			wantBody:    "multi body",
+		},
 	}
 
-	err = n.Send(context.Background(), gnotify.Message{
-		To:      []string{"a@example.com", "b@example.com"},
-		Subject: "你好，世界",
-		Body:    "hello body",
-	})
-	if err != nil {
-		t.Fatalf("Send: %v", err)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newFakeSMTPServer(t)
+			n, err := NewWithDialer(EmailConfig{
+				Host: "smtp.example.com",
+				Port: 587,
+				From: "from@example.com",
+			}, srv.dialTo())
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
 
-	data, rcpt := srv.snapshot()
-	if len(data) != 2 {
-		t.Fatalf("want 2 messages (one per recipient), got %d", len(data))
-	}
-	if len(rcpt) != 2 {
-		t.Fatalf("want 2 rcpt, got %d: %v", len(rcpt), rcpt)
-	}
-	for _, d := range data {
-		// 中文标题应被 MIME Q-Encoding 编码（= 开头、含 =XX 进制或 =?utf-8?）。
-		if !strings.Contains(d, "Subject: =?utf-8?") {
-			t.Errorf("subject not encoded: %q", d)
-		}
-		if strings.Contains(d, "你好，世界") {
-			t.Errorf("subject should be encoded, not raw utf-8")
-		}
-		// 解码验证内容正确。
-		dec, err := new(mime.WordDecoder).DecodeHeader(extractHeader(d, "Subject"))
-		if err != nil {
-			t.Fatalf("decode subject: %v", err)
-		}
-		if dec != "你好，世界" {
-			t.Errorf("decoded subject = %q", dec)
-		}
-		if !strings.Contains(d, "Content-Type: text/plain; charset=UTF-8") {
-			t.Error("missing text/plain content-type")
-		}
-	}
-}
+			if err := n.Send(context.Background(), tc.msg); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
 
-func TestSend_HTML(t *testing.T) {
-	srv := newFakeSMTPServer(t)
-	n, err := NewWithDialer(EmailConfig{Host: "h", From: "f@x.com"}, srv.dialTo())
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	err = n.Send(context.Background(), gnotify.Message{
-		To:      []string{"a@x.com"},
-		Subject: "subj",
-		Body:    "plain",
-		HTML:    "<p>hi</p>",
-	})
-	if err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-	data, _ := srv.snapshot()
-	if len(data) != 1 {
-		t.Fatalf("want 1 message, got %d", len(data))
-	}
-	if !strings.Contains(data[0], "multipart/alternative") {
-		t.Error("missing multipart/alternative")
-	}
-	if !strings.Contains(data[0], "text/html") {
-		t.Error("missing text/html part")
+			data, rcpt := srv.snapshot()
+			if len(data) != tc.wantRcpt {
+				t.Fatalf("want %d messages (one per recipient), got %d", tc.wantRcpt, len(data))
+			}
+			if len(rcpt) != tc.wantRcpt {
+				t.Fatalf("want %d rcpt, got %d: %v", tc.wantRcpt, len(rcpt), rcpt)
+			}
+			for _, d := range data {
+				// 主题必须被 MIME 编码（RFC 2047：=?UTF-8?...?=），不能是原始 UTF-8。
+				rawSubj := extractHeader(d, "Subject")
+				if !strings.HasPrefix(strings.ToUpper(rawSubj), "=?UTF-8?") {
+					t.Errorf("subject not RFC2047 encoded: %q", rawSubj)
+				}
+				if strings.Contains(rawSubj, tc.wantSubject) {
+					t.Errorf("subject should be encoded, not raw utf-8: %q", rawSubj)
+				}
+				dec, err := new(mime.WordDecoder).DecodeHeader(rawSubj)
+				if err != nil {
+					t.Fatalf("decode subject: %v", err)
+				}
+				if dec != tc.wantSubject {
+					t.Errorf("decoded subject = %q, want %q", dec, tc.wantSubject)
+				}
+				// 正文存在性（quoted-printable 会保持 ASCII 可读）。
+				if !strings.Contains(d, tc.wantBody) {
+					t.Errorf("missing plain body %q in message", tc.wantBody)
+				}
+				if tc.wantHTML {
+					if !strings.Contains(d, "multipart/alternative") {
+						t.Error("missing multipart/alternative")
+					}
+					if !strings.Contains(d, "text/html") {
+						t.Error("missing text/html part")
+					}
+				} else if !strings.Contains(d, "text/plain") {
+					t.Error("missing text/plain content-type")
+				}
+			}
+		})
 	}
 }
 
@@ -332,11 +362,19 @@ func TestAddr_Defaults(t *testing.T) {
 	}
 }
 
-// extractHeader 从原始邮件中取某 header 的值（简单的单行读取）。
+// extractHeader 从原始邮件中取某 header 的值（简单的单行读取，支持折行续接）。
 func extractHeader(raw, key string) string {
-	for _, line := range strings.Split(raw, "\r\n") {
+	lines := strings.Split(raw, "\r\n")
+	for i, line := range lines {
 		if strings.HasPrefix(strings.ToLower(line), strings.ToLower(key)+":") {
-			return strings.TrimSpace(line[len(key)+1:])
+			val := strings.TrimSpace(line[len(key)+1:])
+			// 处理 RFC 2047 折行续接（以空白开头的后续行）。
+			j := i + 1
+			for j < len(lines) && (strings.HasPrefix(lines[j], " ") || strings.HasPrefix(lines[j], "\t")) {
+				val += strings.TrimSpace(lines[j])
+				j++
+			}
+			return val
 		}
 	}
 	return ""

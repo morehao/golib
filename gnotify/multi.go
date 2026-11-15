@@ -169,7 +169,6 @@ func (m *MultiSender) sendConcurrent(ctx context.Context, msg Message) (Result, 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(limit)
 	for i, notifier := range m.notifiers {
-		i, notifier := i, notifier
 		g.Go(func() error {
 			err := notifier.Send(gctx, msg)
 			results[i] = ChannelResult{Channel: notifier.Channel(), Err: err}

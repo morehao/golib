@@ -1,5 +1,56 @@
 # Changelog
 
+## [Unreleased]
+
+### 重构（换用主流依赖，减少自维护面）
+
+- **gnotify/sms（aliyun、tencent）**: 内部改用官方云 SDK（`alibabacloud-go/dysmsapi-20170525/v3`、
+  `tencentcloud-sdk-go/tencentcloud/sms`），**彻底删除手写签名**（阿里云 RPC HMAC-SHA1、腾讯云
+  TC3-HMAC-SHA256），不保留 fallback。对外 `AliyunConfig`/`TencentConfig`/`New`/`NewWithCore`/
+  注册名/`Notifier` 接口不变；签名算法与边界维护交给云厂商。
+- **gnotify/email**: 内部改用 `wneessen/go-mail`（v0.8.1），删除手写 net/smtp + MIME 编码；
+  `EmailConfig`/`New`/`NewWithDialer` 签名不变。TLS 语义：`TLS=true`→隐式 TLS，`TLS=false`→
+  opportunistic STARTTLS（与旧实现一致）。
+- **gcache/memory**: 自研 `container/list` LRU 换成 `hashicorp/golang-lru/v2/simplelru`（仅承载
+  LRU 淘汰）；per-entry TTL 仍自判（`simplelru`/`expirable` 均不支持按 key 独立过期）；`GetOrLoad`
+  用 `singleflight` 防击穿。`gcache.Cache` 接口/`Config`/注册名/`Close` 不变。
+- **gutil**: `VToUint64/VToInt64/VToFloat64` 与 `ToString` 内部委托 `spf13/cast`；`CopyMap` 用
+  `maps.Clone`；`SliceContain` 用 `slices.Contains`（`SliceDiff/Duplicate/Group` 因标准库无等价语义
+  保留薄实现）。复合类型转 JSON 请用 `ToJsonString`。
+- **gmiddleware**: `CORS` 内部改用 `gin-contrib/cors`，保留 `CORS(opts ...CorsOption)` 与全部
+  `With*` 选项签名。
+
+### 修复
+
+- **gutil/time**: `GetThisMonthRange`/`GetLastMonthRange` 原先误调 `GetWeekRange`，返回的是周边间
+  而非月区间；改为 `GetMonthRange`。
+- **gmiddleware/CORS**: 不再在 `allowAllOrigins=true` 时下发 `Access-Control-Allow-Credentials: true`
+  （该组合在 CORS 规范下非法）。需要凭证时请显式开启 credentials 并配置明确来源。
+
+### 行为变化（破坏性，调用方需自行适配）
+
+- `gutil.VTo*` 对负数→uint、bool、int16/uint16、超范围数字串等分支改为 `cast` 语义（多为修正旧实现
+  的静默 bug）。
+- `gutil.ToString` 改为 `cast.ToString` 语义：`nil→""`、浮点为最简形式（`1.5→"1.5"`，旧为
+  `"1.500000"`）、`struct/map/slice` 等复合类型返回 `""`（旧为 JSON）。需要 JSON 请显式用
+  `ToJsonString`。
+- `gmiddleware.CORS` 默认不再无条件下发 `Access-Control-Allow-Credentials: true`（见上，规范修正）。
+
+### 说明
+
+- `codegen` 经 POC 评估**保持自研内省**（`gorm.io/gen` 内省为 internal、产物与原实现 57/57 字段
+  字段差异，且需改公开语义以被 gocli 消费，成本 ≥ 自研）；详见
+  `.dsh/docs/notes/2026-11-15-codegen-poc-result.md`。
+
+### 升级 Go 版本
+
+- **go 指令 `1.26.1` → `1.27.0`**（本机 go1.27.4）。
+- **`gutil.GenUUID`** 改用 Go 1.27 标准库 `uuid.NewV7()`（RFC 9562），不再依赖
+  `github.com/google/uuid`（该依赖仍被 frozen 的 `storage/driver/local` 使用故保留）。
+- 对 `gutil`/`gcache`/`gnotify` 应用 go1.25+ 标准库现代化（`go fix` modernizers）：
+  `for i := range n`、`atomic.Int32`、`wg.Go`、`min()`、`new(x)`、`reflect.Pointer` 等，
+  零行为变化。范围严格限定在本次改造涉及的包，未触碰 frozen 的 storage/protocol 等。
+
 ## [v1.36.0] - 2026-11-15
 
 ### Breaking Changes

@@ -5,13 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // GenUUID 生成一个全局唯一的 UUID(v7) 字符串，常用于请求 ID、任务运行 ID 等。
+// 使用 Go 1.27 标准库 uuid（RFC 9562），不再依赖第三方 uuid 库。
 func GenUUID() string {
-	return uuid.Must(uuid.NewV7()).String()
+	return uuid.NewV7().String()
 }
 
 func RandomBytes(n int) ([]byte, error) {
@@ -66,7 +66,7 @@ func RandomFromSet(length int, set string) (string, error) {
 	}
 	out := make([]byte, length)
 	n := len(set)
-	for i := 0; i < length; i++ {
+	for i := range length {
 		v, err := randInt(n)
 		if err != nil {
 			return "", fmt.Errorf("random from set: %w", err)

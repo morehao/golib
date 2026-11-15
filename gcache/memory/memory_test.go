@@ -51,11 +51,11 @@ func TestKeyPrefix(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, c.Set(ctx, "k", "v", time.Minute))
-	// 底层 key 应为 app:k
+	// 底层 key 应为 app:k（默认 MaxEntries=0，存储在不限条目的 items map 中）
 	mc := c.(*Cache)
-	mc.mu.RLock()
-	_, ok := mc.items["app:k"]
-	mc.mu.RUnlock()
+	mc.mu.Lock()
+	ok := mc.lru.Contains("app:k")
+	mc.mu.Unlock()
 	assert.True(t, ok, "key should be prefixed with app:")
 }
 
@@ -193,17 +193,17 @@ func TestGetOrLoadSingleFlight(t *testing.T) {
 	c := newTestCache(t)
 	ctx := context.Background()
 
-	var calls int32
+	var calls atomic.Int32
 	const n = 20
 	var wg sync.WaitGroup
 	wg.Add(n)
 	results := make([]user, n)
 	errs := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		go func(idx int) {
 			defer wg.Done()
 			errs[idx] = c.GetOrLoad(ctx, "load", &results[idx], time.Minute, func(ctx context.Context) (any, error) {
-				atomic.AddInt32(&calls, 1)
+				calls.Add(1)
 				time.Sleep(10 * time.Millisecond) // 拉长窗口，确保并发合并
 				return user{Name: "bob", Age: 1}, nil
 			})
@@ -211,11 +211,11 @@ func TestGetOrLoadSingleFlight(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		require.NoError(t, errs[i])
 		assert.Equal(t, user{Name: "bob", Age: 1}, results[i])
 	}
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "load should be called exactly once")
+	assert.Equal(t, int32(1), calls.Load(), "load should be called exactly once")
 }
 
 func TestGetOrLoadHitSkipsLoad(t *testing.T) {
@@ -254,7 +254,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
@@ -270,4 +270,115 @@ func TestConcurrentReadWrite(t *testing.T) {
 
 	var got user
 	require.NoError(t, c.Get(ctx, "shared", &got))
+}
+
+// TestPerEntryTTL 验证每条记录独立 TTL（这是保留自研 TTL 判定的核心行为，
+// simplelru 本身无 TTL；expirable 也是整 cache 级，不满足 per-key 过期）。
+func TestPerEntryTTL(t *testing.T) {
+	c, err := gcache.New(gcache.Config{Backend: "memory"})
+	require.NoError(t, err)
+	defer c.Close()
+	mc := c.(*Cache)
+
+	base := time.Now()
+	var mu sync.Mutex
+	now := base
+	mc.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	ctx := context.Background()
+
+	// 短 TTL 与长 TTL 各自独立过期。
+	require.NoError(t, c.Set(ctx, "short", "s", time.Second))
+	require.NoError(t, c.Set(ctx, "long", "l", time.Hour))
+
+	// 推进 2s：short 过期，long 仍命中。
+	mu.Lock()
+	now = base.Add(2 * time.Second)
+	mu.Unlock()
+
+	var s string
+	assert.True(t, errors.Is(c.Get(ctx, "short", &s), gcache.ErrMiss), "short should expire")
+	require.NoError(t, c.Get(ctx, "long", &s), "long should still be valid")
+	assert.Equal(t, "l", s)
+}
+
+// TestLRUEvictionOrderOnSimpleLRUPath 在 MaxEntries>0（simplelru 承载）路径上
+// 验证淘汰顺序严格遵循 LRU：命中会刷新热度，最久未用者先淘汰。
+func TestLRUEvictionOrderOnSimpleLRUPath(t *testing.T) {
+	c, err := gcache.New(gcache.Config{Backend: "memory", MaxEntries: 3})
+	require.NoError(t, err)
+	defer c.Close()
+	mc := c.(*Cache)
+	require.NotNil(t, mc.lru, "MaxEntries>0 应走 simplelru 路径")
+	ctx := context.Background()
+
+	require.NoError(t, c.Set(ctx, "a", "1", time.Minute))
+	require.NoError(t, c.Set(ctx, "b", "2", time.Minute))
+	require.NoError(t, c.Set(ctx, "c", "3", time.Minute))
+
+	// 访问 a，使其成为最近使用，b 变为最旧。
+	var s string
+	require.NoError(t, c.Get(ctx, "a", &s))
+
+	// 插入 d，应淘汰 b（最久未用）。
+	require.NoError(t, c.Set(ctx, "d", "4", time.Minute))
+
+	assert.True(t, errors.Is(c.Get(ctx, "b", &s), gcache.ErrMiss), "b should be evicted")
+	require.NoError(t, c.Get(ctx, "a", &s), "a should survive (recently used)")
+	require.NoError(t, c.Get(ctx, "c", &s), "c should survive")
+	require.NoError(t, c.Get(ctx, "d", &s), "d should survive")
+
+	// 上面的断言 Get 已把访问顺序刷新为（新→旧）：d, c, a。
+	// 再插入 e，淘汰当前最旧的 a。
+	require.NoError(t, c.Set(ctx, "e", "5", time.Minute))
+	assert.True(t, errors.Is(c.Get(ctx, "a", &s), gcache.ErrMiss), "a should now be evicted")
+}
+
+// TestUnlimitedNoEviction 验证 MaxEntries<=0 时不做淘汰。
+func TestUnlimitedNoEviction(t *testing.T) {
+	c, err := gcache.New(gcache.Config{Backend: "memory", MaxEntries: 0})
+	require.NoError(t, err)
+	defer c.Close()
+	mc := c.(*Cache)
+	require.NotNil(t, mc.lru, "统一走 simplelru（不限条目数用超大容量）")
+	ctx := context.Background()
+
+	for i := range 100 {
+		require.NoError(t, c.Set(ctx, string(rune('a'+i%26))+string(rune('0'+i/26)), i, time.Minute))
+	}
+	var s int
+	// 早期写入的仍应存在（不限条目）。
+	require.NoError(t, c.Get(ctx, "a0", &s))
+}
+
+// TestCleanupSweepsExpiredOnSimpleLRUPath 验证周期清理在 simplelru 路径也生效。
+func TestCleanupSweepsExpiredOnSimpleLRUPath(t *testing.T) {
+	c, err := gcache.New(gcache.Config{Backend: "memory", MaxEntries: 4})
+	require.NoError(t, err)
+	defer c.Close()
+	mc := c.(*Cache)
+
+	base := time.Now()
+	var mu sync.Mutex
+	now := base
+	mc.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	ctx := context.Background()
+
+	require.NoError(t, c.Set(ctx, "k", "v", time.Second))
+	mu.Lock()
+	now = base.Add(2 * time.Second)
+	mu.Unlock()
+	mc.sweep()
+
+	mc.mu.Lock()
+	n := mc.lru.Len()
+	mc.mu.Unlock()
+	assert.Equal(t, 0, n, "expired entry should be swept on simplelru path")
 }

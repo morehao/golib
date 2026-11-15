@@ -107,17 +107,17 @@ func TestGetOrLoadSingleFlight(t *testing.T) {
 	c := newTestCache(t)
 	ctx := context.Background()
 
-	var calls int32
+	var calls atomic.Int32
 	const n = 20
 	var wg sync.WaitGroup
 	wg.Add(n)
 	results := make([]user, n)
 	errs := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		go func(idx int) {
 			defer wg.Done()
 			errs[idx] = c.GetOrLoad(ctx, "load", &results[idx], time.Minute, func(ctx context.Context) (any, error) {
-				atomic.AddInt32(&calls, 1)
+				calls.Add(1)
 				time.Sleep(10 * time.Millisecond)
 				return user{Name: "bob", Age: 1}, nil
 			})
@@ -125,11 +125,11 @@ func TestGetOrLoadSingleFlight(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		require.NoError(t, errs[i])
 		assert.Equal(t, user{Name: "bob", Age: 1}, results[i])
 	}
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "in-process singleflight should call load once")
+	assert.Equal(t, int32(1), calls.Load(), "in-process singleflight should call load once")
 }
 
 func TestGetOrLoadHitSkipsLoad(t *testing.T) {

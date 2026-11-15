@@ -116,7 +116,7 @@ func TestToken_Cached(t *testing.T) {
 	}
 	n, _ := New(validConfig(), gnotify.WithHTTPDoer(d))
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := n.Send(context.Background(), gnotify.Message{To: []string{"openid"}, Params: map[string]string{"a": "b"}}); err != nil {
 			t.Fatalf("Send #%d: %v", i, err)
 		}
