@@ -96,6 +96,68 @@ func TestSend_Post_ViaParams(t *testing.T) {
 	}
 }
 
+func TestSend_Interactive_Card(t *testing.T) {
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"code":0}`)}}
+	n, _ := New(Config{WebhookURL: "https://x/y"}, gnotify.WithHTTPDoer(d))
+	if err := n.Send(context.Background(), gnotify.Message{
+		Subject: "趋势榜",
+		Body:    "## 标题\n\n- **a**: b",
+		Params:  map[string]string{"msgtype": "interactive"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(d.req.Body, &body)
+	if body["msg_type"] != "interactive" {
+		t.Fatalf("msg_type = %v", body["msg_type"])
+	}
+	card, _ := body["card"].(map[string]any)
+	if card == nil {
+		t.Fatalf("missing card: %v", body)
+	}
+	// header 标题走 plain_text
+	header, _ := card["header"].(map[string]any)
+	if header == nil {
+		t.Fatalf("missing header: %v", card)
+	}
+	title, _ := header["title"].(map[string]any)
+	if title["tag"] != "plain_text" || title["content"] != "趋势榜" {
+		t.Errorf("header title = %v", title)
+	}
+	// elements[0] 是 div，text.tag=lark_md，content 为原始 Markdown
+	elements, _ := card["elements"].([]any)
+	if len(elements) == 0 {
+		t.Fatalf("empty elements")
+	}
+	el, _ := elements[0].(map[string]any)
+	if el["tag"] != "div" {
+		t.Errorf("element tag = %v", el["tag"])
+	}
+	text, _ := el["text"].(map[string]any)
+	if text["tag"] != "lark_md" {
+		t.Errorf("text tag = %v", text["tag"])
+	}
+	if text["content"] != "## 标题\n\n- **a**: b" {
+		t.Errorf("content = %v", text["content"])
+	}
+}
+
+func TestSend_Interactive_NoSubject_NoHeader(t *testing.T) {
+	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"code":0}`)}}
+	n, _ := New(Config{WebhookURL: "https://x/y"}, gnotify.WithHTTPDoer(d))
+	if err := n.Send(context.Background(), gnotify.Message{
+		Body: "x", Params: map[string]string{"msgtype": "interactive"},
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(d.req.Body, &body)
+	card, _ := body["card"].(map[string]any)
+	if _, ok := card["header"]; ok {
+		t.Errorf("header should be absent when Subject empty")
+	}
+}
+
 func TestSend_Sign_InBody(t *testing.T) {
 	d := &fakeDoer{resp: gnotify.HTTPResponse{StatusCode: 200, Body: []byte(`{"code":0}`)}}
 	secret := "lark-secret"

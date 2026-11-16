@@ -4,7 +4,8 @@
 //
 // 加签：若配置了 [Config.Secret]，按飞书「加签」规范计算 sign，并把 timestamp 与
 // sign 放进**请求 body 顶层**（注意与钉钉放 URL query 不同）。
-// 消息类型：默认 text；[Message.Params] 的 "msgtype" 可显式指定 "text" 或 "post"。
+// 消息类型：默认 text；[Message.Params] 的 "msgtype" 可显式指定 "text"、"post"
+// 或 "interactive"（互动卡片，正文按 Markdown 渲染）。
 package lark
 
 import (
@@ -28,8 +29,9 @@ func init() {
 
 // 支持的消息类型。
 const (
-	msgTypeText = "text"
-	msgTypePost = "post"
+	msgTypeText        = "text"
+	msgTypePost        = "post"
+	msgTypeInteractive = "interactive"
 )
 
 // Config 是飞书自定义机器人配置。
@@ -111,7 +113,7 @@ func (n *notifier) buildBody(msg gnotify.Message) (map[string]any, error) {
 	if msgType == "" {
 		msgType = msgTypeText
 	}
-	if msgType != msgTypeText && msgType != msgTypePost {
+	if msgType != msgTypeText && msgType != msgTypePost && msgType != msgTypeInteractive {
 		return nil, fmt.Errorf("%w: unsupported msgtype %q", gnotify.ErrInvalidConfig, msgType)
 	}
 	content := msg.Body
@@ -128,7 +130,7 @@ func (n *notifier) buildBody(msg gnotify.Message) (map[string]any, error) {
 		}
 		body["msg_type"] = msgTypeText
 		body["content"] = larkText{Text: text}
-	default: // post
+	case msgTypePost:
 		var p larkPost
 		p.Post.ZhCn.Title = msg.Subject
 		p.Post.ZhCn.Content = [][]map[string]any{
@@ -139,6 +141,34 @@ func (n *notifier) buildBody(msg gnotify.Message) (map[string]any, error) {
 		// larkPost 的最外层字段 tag 就是 "post"，因此赋整体 p 而非内层 p.Post
 		// （赋 p.Post 会丢掉 "post" 包裹层，飞书报 code 10208 "'post' field required"）。
 		body["content"] = p
+	case msgTypeInteractive:
+		// 互动卡片：正文整段放进一个 div 的 lark_md 节点，飞书会按 Markdown 渲染
+		// （加粗、列表、链接、行内代码、标题等），比 post 的 text 节点保真得多。
+		// 用经典卡片结构（元素数组）而非 schema 2.0，兼容所有飞书客户端。
+		element := map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": content,
+			},
+		}
+		card := map[string]any{
+			"config": map[string]any{
+				"wide_screen_mode": true,
+			},
+			"elements": []any{element},
+		}
+		if msg.Subject != "" {
+			// 标题走卡片 header（plain_text），正文里就不再重复标题。
+			card["header"] = map[string]any{
+				"title": map[string]any{
+					"tag":     "plain_text",
+					"content": msg.Subject,
+				},
+			}
+		}
+		body["msg_type"] = msgTypeInteractive
+		body["card"] = card
 	}
 	return body, nil
 }
