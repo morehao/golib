@@ -127,6 +127,17 @@ func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType V
 }
 
 func (s *store) Get(ctx context.Context, group, key string) (*SettingEntity, error) {
+	entity, err := s.getRaw(ctx, group, key)
+	if err != nil {
+		return nil, err
+	}
+	return s.decryptEntity(entity), nil
+}
+
+// getRaw 只查不解密：返回 DB 原值（加密项 Value 为带 enc: 前缀的密文），
+// 查不到时返回零值实体 + nil。它是缓存层的回源入口——缓存的就是它的返回，
+// 因此这里不解密，解密统一由 Get / decryptEntity 负责。
+func (s *store) getRaw(ctx context.Context, group, key string) (*SettingEntity, error) {
 	if group == "" || key == "" {
 		return nil, errGroupAndKeyRequired
 	}
@@ -140,7 +151,7 @@ func (s *store) Get(ctx context.Context, group, key string) (*SettingEntity, err
 		return &SettingEntity{}, nil
 	}
 
-	return s.decryptEntity(*entity), nil
+	return *entity, nil
 }
 
 // GetByID 按 ID 查询配置项；不存在（含软删除）时返回 (nil, nil)。
@@ -189,23 +200,32 @@ func (s *store) ListPage(ctx context.Context, cond *SettingCond) ([]*SettingEnti
 		return nil, 0, err
 	}
 
-	for _, entity := range list {
-		s.decryptEntity(entity)
+	for i, entity := range list {
+		list[i] = s.decryptEntity(entity)
 	}
 
 	return list, count, nil
 }
 
+// decryptEntity 返回 config 的副本并解密其中的 Value（加密项）。
+//
+// 刻意不就地修改入参：缓存层缓存的是 DB 原值（密文），若这里就地改成明文，
+// 会把缓存里的密文污染成明文（违反"redis 不出现明文"的安全约束）。返回副本
+// 既保护缓存，也避免 Get 的返回值与内部实体共享底层存储。
 func (s *store) decryptEntity(config *SettingEntity) *SettingEntity {
-	if config.EncryptionMode == EncryptionModeEncrypted {
-		if s.crypto == nil {
-			return config
-		}
-		plaintext, err := s.crypto.Decrypt(config.Value)
-		if err != nil {
-			return config
-		}
-		config.Value = plaintext
+	if config == nil {
+		return nil
 	}
-	return config
+	out := *config // 浅拷贝：字段均为值类型（Value 为 string）
+	if out.EncryptionMode == EncryptionModeEncrypted {
+		if s.crypto == nil {
+			return &out
+		}
+		plaintext, err := s.crypto.Decrypt(out.Value)
+		if err != nil {
+			return &out
+		}
+		out.Value = plaintext
+	}
+	return &out
 }

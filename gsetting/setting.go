@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -20,7 +21,9 @@ var (
 // GetInt64/GetFloat64/GetBool 等按值类型取值的方法；写侧通过 GetAdmin 返回的
 // AdminAPI 操作。
 type Setting struct {
-	store *store
+	store    *store
+	cache    cachePort     // 可选读缓存；nil 表示不缓存
+	cacheTTL time.Duration // 写缓存 TTL（仅 cache != nil 时生效）
 }
 
 // New 创建实例（推荐写法：显式注入，不使用包级全局）。
@@ -61,16 +64,41 @@ func New(db *gorm.DB, opts ...Option) (*Setting, error) {
 		return db.WithContext(ctx)
 	}
 	s := newStore(getDB, registry, c)
-	adminAPI = newAdmin(s)
-	return &Setting{store: s}, nil
+	adminAPI = newAdmin(s, cfg.cache)
+	return &Setting{store: s, cache: cfg.cache, cacheTTL: cfg.cacheTTL}, nil
 }
 
 func (k *Setting) GetStore() *store {
 	return k.store
 }
 
+// getEntity 是读路径的统一入口：有缓存走 read-through（缓存 DB 原值），
+// 无缓存直连 store.Get。返回的实体均已解密（副本），与无缓存路径语义一致。
+func (k *Setting) getEntity(ctx context.Context, group, key string) (*SettingEntity, error) {
+	if k.cache == nil {
+		return k.store.Get(ctx, group, key)
+	}
+
+	var out settingCacheValue
+	err := k.cache.GetOrLoad(ctx, cacheKey(group, key), &out, k.cacheTTL, func(ctx context.Context) (any, error) {
+		entity, err := k.store.getRaw(ctx, group, key)
+		if err != nil {
+			return nil, err
+		}
+		return settingCacheValue{Entity: entity, Found: entity.ID != ""}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !out.Found || out.Entity == nil {
+		return &SettingEntity{}, nil
+	}
+	// 解密返回副本，避免污染缓存中的密文原值（见 store.decryptEntity）。
+	return k.store.decryptEntity(out.Entity), nil
+}
+
 func (k *Setting) GetValue(ctx context.Context, group, key string, dest any) error {
-	cfg, err := k.store.Get(ctx, group, key)
+	cfg, err := k.getEntity(ctx, group, key)
 	if err != nil {
 		return err
 	}
@@ -90,7 +118,7 @@ func (k *Setting) GetValue(ctx context.Context, group, key string, dest any) err
 }
 
 func (k *Setting) GetString(ctx context.Context, group, key string) (string, error) {
-	cfg, err := k.store.Get(ctx, group, key)
+	cfg, err := k.getEntity(ctx, group, key)
 	if err != nil {
 		return "", err
 	}
@@ -98,7 +126,7 @@ func (k *Setting) GetString(ctx context.Context, group, key string) (string, err
 }
 
 func (k *Setting) GetInt64(ctx context.Context, group, key string) (int64, error) {
-	cfg, err := k.store.Get(ctx, group, key)
+	cfg, err := k.getEntity(ctx, group, key)
 	if err != nil {
 		return 0, err
 	}
@@ -106,7 +134,7 @@ func (k *Setting) GetInt64(ctx context.Context, group, key string) (int64, error
 }
 
 func (k *Setting) GetFloat64(ctx context.Context, group, key string) (float64, error) {
-	cfg, err := k.store.Get(ctx, group, key)
+	cfg, err := k.getEntity(ctx, group, key)
 	if err != nil {
 		return 0, err
 	}
@@ -114,7 +142,7 @@ func (k *Setting) GetFloat64(ctx context.Context, group, key string) (float64, e
 }
 
 func (k *Setting) GetBool(ctx context.Context, group, key string) (bool, error) {
-	cfg, err := k.store.Get(ctx, group, key)
+	cfg, err := k.getEntity(ctx, group, key)
 	if err != nil {
 		return false, err
 	}

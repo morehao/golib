@@ -18,7 +18,7 @@ func newTestAdmin(t *testing.T) (*AdminAPI, *store) {
 
 	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
 	st := newStore(getDB, nil, nil)
-	return newAdmin(st), st
+	return newAdmin(st, nil), st
 }
 
 // TestAdminCreate_InvalidStatus 创建时 status 只接受 enabled/disabled；
