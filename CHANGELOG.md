@@ -18,6 +18,12 @@
 
 ## [Unreleased]
 
+### Features
+
+- **gnotify/lark**: 新增 `interactive` 互动卡片消息类型，正文按 Markdown 渲染
+  （加粗/列表/链接/标题生效），修复 post 的 text 节点不渲染 Markdown、飞书收到 `**`、`- ` 原文的问题。
+
+
 ### 破坏性变更：gsetting 分组列 `group_name` → `group`
 
 - **列与字段同步改名**：`core_setting.group_name` → `core_setting.group`，唯一索引
