@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.38.1] - 2026-11-16
+
+### Features
+
+- **gsetting**: add read-path cache with optional gcache backend (#163)
+
+**Full Changelog**: https://github.com/morehao/golib/compare/v1.38.0...v1.38.1
+
 ## [v1.38.0] - 2026-11-16
 
 ### ⚠️ Breaking Changes
