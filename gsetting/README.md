@@ -71,6 +71,34 @@ err = admin.Delete(ctx, id)
 - `New` / `Init` 会在加密密钥不可用时返回错误（早期版本是 panic）；
 - 写入用 `clause.OnConflict` upsert 到 `(group_name, key)` 唯一键，同名键重复创建会更新而不是报错。
 
+### 3. 可选：读路径缓存
+
+配置是读多写少的数据，可注入 [gcache](../../gcache) 实例做读缓存（memory / redis 均可）。
+不传 `WithCache` 时行为与之前完全一致，无缓存开销。
+
+```go
+import (
+    "github.com/morehao/golib/gcache"
+    _ "github.com/morehao/golib/gcache/driver/memory" // 或用 driver/redis
+)
+
+c, _ := gcache.New(gcache.Config{Driver: gcache.DriverMemory, DefaultTTL: time.Minute})
+defer c.Close()
+
+k, err := gsetting.New(db, gsetting.WithCache(c, time.Minute))
+```
+
+缓存语义：
+
+- **缓存的是数据库原值**（加密项为密文），缓存层不解密——因此 redis 后端中不会出现明文；
+- 读路径 read-through：命中直接返回，未命中回源并写回；空值也会被缓存以防穿透；
+- **写路径主动失效**：`Create/Update/UpdateStatus/Delete` 成功后按 `(group, key)` 失效；
+- TTL 建议 1 分钟量级：TTL 越长命中率越高、"写后到过期前"读到旧值的窗口越长，需权衡；
+  `ttl<=0` 时由后端 `DefaultTTL` 决定，**务必配非零 DefaultTTL**，否则空值会被永久缓存；
+- `ListPage`（管理端分页）**不缓存**；
+- gsetting 对 gcache 无编译期依赖：`WithCache` 接受的是最小端口，传入任何满足
+  `GetOrLoad + Delete` 的实现即可（`gcache.Cache` 结构化满足）。
+
 ## 表与索引
 
 | 表 | 用途 | 索引 |

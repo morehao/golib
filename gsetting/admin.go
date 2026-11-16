@@ -6,10 +6,19 @@ import (
 
 type AdminAPI struct {
 	store *store
+	cache cachePort // 与 Setting 共享同一缓存实例，用于写后失效；nil 表示无缓存
 }
 
-func newAdmin(store *store) *AdminAPI {
-	return &AdminAPI{store: store}
+func newAdmin(store *store, cache cachePort) *AdminAPI {
+	return &AdminAPI{store: store, cache: cache}
+}
+
+// invalidate 写成功后按 (group,key) 失效读缓存（缓存尽力而为，失败不影响写结果）。
+func (a *AdminAPI) invalidate(ctx context.Context, group, key string) {
+	if a.cache == nil {
+		return
+	}
+	_ = a.cache.Delete(ctx, cacheKey(group, key))
 }
 
 func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
@@ -61,7 +70,11 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 		Description:    req.Description,
 	}
 
-	return a.store.Set(ctx, entity)
+	if err := a.store.Set(ctx, entity); err != nil {
+		return err
+	}
+	a.invalidate(ctx, entity.GroupName, entity.Key)
+	return nil
 }
 
 func (a *AdminAPI) Update(ctx context.Context, id string, req *UpdateReq) error {
@@ -110,7 +123,11 @@ func (a *AdminAPI) Update(ctx context.Context, id string, req *UpdateReq) error 
 		return nil
 	}
 
-	return a.store.UpdateByID(ctx, id, updateMap)
+	if err := a.store.UpdateByID(ctx, id, updateMap); err != nil {
+		return err
+	}
+	a.invalidate(ctx, entity.GroupName, entity.Key)
+	return nil
 }
 
 // UpdateStatus 只更新配置项状态（启停），不改值、描述与加密模式。
@@ -136,11 +153,28 @@ func (a *AdminAPI) UpdateStatus(ctx context.Context, id string, status Status) e
 		return ErrSettingNotFound
 	}
 
-	return a.store.UpdateByID(ctx, id, map[string]any{"status": status})
+	if err := a.store.UpdateByID(ctx, id, map[string]any{"status": status}); err != nil {
+		return err
+	}
+	a.invalidate(ctx, entity.GroupName, entity.Key)
+	return nil
 }
 
 func (a *AdminAPI) Delete(ctx context.Context, id string) error {
-	return a.store.DeleteByID(ctx, id)
+	// 缓存 key 是 (group,key)，DeleteByID 只有 id 无法反查，需先查出实体拿 group/key 才能失效（D4）。
+	entity, err := a.store.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if entity == nil {
+		// 不存在（含已删）无需删除也无需失效。
+		return nil
+	}
+	if err := a.store.DeleteByID(ctx, id); err != nil {
+		return err
+	}
+	a.invalidate(ctx, entity.GroupName, entity.Key)
+	return nil
 }
 
 func (a *AdminAPI) GetByID(ctx context.Context, id string) (*SettingInfo, error) {
