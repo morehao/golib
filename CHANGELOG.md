@@ -18,6 +18,32 @@
 
 ## [Unreleased]
 
+### 破坏性变更：gsetting 分组列 `group_name` → `group`
+
+- **列与字段同步改名**：`core_setting.group_name` → `core_setting.group`，唯一索引
+  `uk_group_key` 的列变为 `(group,key)`；Go 侧 `SettingEntity.GroupName` / `SettingInfo.GroupName`
+  一并改为 `Group`，与既有的 `CreateReq.Group` / `SettingCond.Group` 对齐。
+- **必须手工迁移**：`Migrate` 走 `AutoMigrate`，GORM 不会重命名列——直接升级只会新增
+  `group`（`DEFAULT 'default'`）并把旧数据留在 `group_name`，非 default 分组的配置会静默读不到。
+  实测 MySQL 8.4 与 PostgreSQL 18 行为一致：`Migrate` 不报错，旧行按 `group` 读回 `default`，
+  且 `uk_group_key` 仍建在 `group_name` 上——新的 `(group,key)` 唯一约束不会生效。
+  上线前先执行改名：
+
+  ```sql
+  -- MySQL 8.0+
+  ALTER TABLE core_setting RENAME COLUMN group_name TO `group`;
+  -- MySQL 5.7（RENAME COLUMN 不可用）
+  ALTER TABLE core_setting CHANGE COLUMN group_name `group` varchar(64) NOT NULL DEFAULT 'default'
+    COMMENT '配置分组，用于业务隔离，如 payment、notification，默认 default';
+  -- PostgreSQL
+  ALTER TABLE core_setting RENAME COLUMN group_name TO "group";
+  ```
+
+- **`group` 是三种方言的保留字**：库内 SQL 全部经 `gormdao` 的 `clause.Column` 按方言引用，
+  读写路径无需改动；但 `SettingCond.OrderField`、`OrCondGroup.Query` 这类自由片段不会被引用，
+  调用方写这两处时需自行加引号（PG/SQLite `"group"`、MySQL `` `group` ``）。
+- 注：本库为自用库，故该破坏性变更随下一个小版本发布，不另开 v2（沿用既有处置方式）。
+
 ### 修复：gnotify/lark post 消息缺 "post" 包裹层
 
 - 飞书自定义机器人 `post` 富文本消息要求 `{"content":{"post":{"zh_cn":...}}}`。此前

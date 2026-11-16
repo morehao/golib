@@ -1,6 +1,6 @@
 # gsetting
 
-通用配置中心组件：单表 `(group_name, key)` 存配置，支持按值类型编解码（json / toml / yaml / string / int / bool / float）
+通用配置中心组件：单表 `(group, key)` 存配置，支持按值类型编解码（json / toml / yaml / string / int / bool / float）
 与可选加密落库。
 
 与 `dict` 的分工：本组件存**配置键值**（部署/运行时开关、限流阈值这类低频、部署期确定的参数），
@@ -56,7 +56,7 @@ f, err := k.GetFloat64(ctx, "payment", "ratio")
 // ---- 写：走 AdminAPI ----
 admin := gsetting.GetAdmin()
 err = admin.Create(ctx, &gsetting.CreateReq{
-    GroupName: "payment", Key: "max_qps", ValueType: gsetting.ValueTypeInt,
+    Group: "payment", Key: "max_qps", ValueType: gsetting.ValueTypeInt,
     Value: "1000", Description: "支付域 QPS 上限",
 })
 info, err := admin.GetByID(ctx, id)
@@ -69,7 +69,7 @@ err = admin.Delete(ctx, id)
 - 包级 `gsetting.GetString(ctx, group, key)` 等便捷函数依赖 `gsetting.Init(db)` 初始化的单例，
   未初始化返回 `errNotInitialized` 对应的错误而不是 panic；新代码优先用 `New` 显式注入；
 - `New` / `Init` 会在加密密钥不可用时返回错误（早期版本是 panic）；
-- 写入用 `clause.OnConflict` upsert 到 `(group_name, key)` 唯一键，同名键重复创建会更新而不是报错。
+- 写入用 `clause.OnConflict` upsert 到 `(group, key)` 唯一键，同名键重复创建会更新而不是报错。
 
 ### 3. 可选：读路径缓存
 
@@ -103,9 +103,12 @@ k, err := gsetting.New(db, gsetting.WithCache(c, time.Minute))
 
 | 表 | 用途 | 索引 |
 |---|---|---|
-| `core_setting` | 配置键值 + 类型 + 加密模式 | `uk_group_key(group_name,key)`；另有 `idx_core_setting_deleted_at` |
+| `core_setting` | 配置键值 + 类型 + 加密模式 | `uk_group_key(group,key)`；另有 `idx_core_setting_deleted_at` |
 
-- `(group_name, key)` 是**取用作用域**：同 key 可以按分组各存一份，取值必须带上分组；
+- `(group, key)` 是**取用作用域**：同 key 可以按分组各存一份，取值必须带上分组；
+- `group` 是 MySQL / PostgreSQL / SQLite 的保留字：库内 SQL 全部经 `gormdao` 的 `clause.Column`
+  按方言引用，开箱可用；但调用方自由片段（`SettingCond.OrderField`、`OrCondGroup.Query`）
+  不会被引用，写这两处时需自行按方言引用列名（PG/SQLite `"group"`、MySQL `` `group` ``）；
 - `value` 列**刻意不写 `type:` tag**，由 GORM 按方言选类型（MySQL `longtext` / PG `text`）。
   历史上曾写死 `type:mediumtext`，在 PostgreSQL 下不存在该类型导致迁移失败，因此保持方言默认；
 - 表里带 `deleted_at`（继承 `gormdao.BaseEntity`），但本组件的删除是**物理删除 + `WithoutSoftDelete()`**，
@@ -128,7 +131,7 @@ CREATE TABLE `core_setting` (
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
   `deleted_at` datetime(3) NULL,
-  `group_name` varchar(64) NOT NULL DEFAULT 'default' COMMENT '配置分组，用于业务隔离，如 payment、notification，默认 default',
+  `group` varchar(64) NOT NULL DEFAULT 'default' COMMENT '配置分组，用于业务隔离，如 payment、notification，默认 default',
   `key` varchar(128) NOT NULL COMMENT '配置键名，同一分组内唯一',
   `value_type` varchar(32) NOT NULL DEFAULT 'string' COMMENT '值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string',
   `value` longtext NOT NULL COMMENT '配置值，明文或密文',
@@ -137,7 +140,7 @@ CREATE TABLE `core_setting` (
   `status` varchar(32) NOT NULL DEFAULT 'enabled' COMMENT '状态，可选 enabled/disabled，默认 enabled',
   PRIMARY KEY (`id`),
   INDEX `idx_core_setting_deleted_at` (`deleted_at`),
-  UNIQUE INDEX `uk_group_key` (`group_name`,`key`)
+  UNIQUE INDEX `uk_group_key` (`group`,`key`)
 );
 ```
 
@@ -149,7 +152,7 @@ CREATE TABLE "core_setting" (
   "created_at" timestamptz,
   "updated_at" timestamptz,
   "deleted_at" timestamptz,
-  "group_name" varchar(64) NOT NULL DEFAULT 'default',
+  "group" varchar(64) NOT NULL DEFAULT 'default',
   "key" varchar(128) NOT NULL,
   "value_type" varchar(32) NOT NULL DEFAULT 'string',
   "value" text NOT NULL,
@@ -159,10 +162,10 @@ CREATE TABLE "core_setting" (
   PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_group_key" ON "core_setting" ("group_name","key");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_group_key" ON "core_setting" ("group","key");
 CREATE INDEX IF NOT EXISTS "idx_core_setting_deleted_at" ON "core_setting" ("deleted_at");
 
-COMMENT ON COLUMN "core_setting"."group_name" IS '配置分组，用于业务隔离，如 payment、notification，默认 default';
+COMMENT ON COLUMN "core_setting"."group" IS '配置分组，用于业务隔离，如 payment、notification，默认 default';
 COMMENT ON COLUMN "core_setting"."key" IS '配置键名，同一分组内唯一';
 COMMENT ON COLUMN "core_setting"."value_type" IS '值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string';
 COMMENT ON COLUMN "core_setting"."value" IS '配置值，明文或密文';
