@@ -74,17 +74,17 @@ func (s *store) marshalValue(valueType ValueType, val any) (string, error) {
 }
 
 func (s *store) Set(ctx context.Context, entity *SettingEntity) error {
-	if entity.GroupName == "" || entity.Key == "" {
+	if entity.Group == "" || entity.Key == "" {
 		return errGroupAndKeyRequired
 	}
 
-	// 按 (group_name, key) 原子 upsert：不存在则插入，已存在则覆盖更新。
+	// 按 (group, key) 原子 upsert：不存在则插入，已存在则覆盖更新。
 	// 不能用 Save：传入的实体 ID 为空时 Save 退化为纯 INSERT，同一 (group,key)
 	// 重复 Set 会撞 uk_group_key 唯一索引（MySQL 报 Duplicate entry，PG 报
 	// duplicate key value violates unique constraint），Set 幂等性无法保证。
 	return s.dbGetter(ctx).Table(tableName).
 		Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "group_name"}, {Name: "key"}},
+			Columns: []clause.Column{{Name: "group"}, {Name: "key"}},
 			DoUpdates: clause.Assignments(map[string]any{
 				"value_type":      entity.ValueType,
 				"value":           entity.Value,
@@ -116,7 +116,7 @@ func (s *store) SetEncrypted(ctx context.Context, group, key string, valueType V
 	}
 
 	entity := &SettingEntity{
-		GroupName:      group,
+		Group:          group,
 		Key:            key,
 		ValueType:      valueType,
 		Value:          ciphertext,

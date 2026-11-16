@@ -61,7 +61,7 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 	}
 
 	entity := &SettingEntity{
-		GroupName:      req.Group,
+		Group:          req.Group,
 		Key:            req.Key,
 		ValueType:      valueType,
 		Value:          value,
@@ -73,7 +73,7 @@ func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
 	if err := a.store.Set(ctx, entity); err != nil {
 		return err
 	}
-	a.invalidate(ctx, entity.GroupName, entity.Key)
+	a.invalidate(ctx, entity.Group, entity.Key)
 	return nil
 }
 
@@ -126,7 +126,7 @@ func (a *AdminAPI) Update(ctx context.Context, id string, req *UpdateReq) error 
 	if err := a.store.UpdateByID(ctx, id, updateMap); err != nil {
 		return err
 	}
-	a.invalidate(ctx, entity.GroupName, entity.Key)
+	a.invalidate(ctx, entity.Group, entity.Key)
 	return nil
 }
 
@@ -156,7 +156,7 @@ func (a *AdminAPI) UpdateStatus(ctx context.Context, id string, status Status) e
 	if err := a.store.UpdateByID(ctx, id, map[string]any{"status": status}); err != nil {
 		return err
 	}
-	a.invalidate(ctx, entity.GroupName, entity.Key)
+	a.invalidate(ctx, entity.Group, entity.Key)
 	return nil
 }
 
@@ -173,7 +173,7 @@ func (a *AdminAPI) Delete(ctx context.Context, id string) error {
 	if err := a.store.DeleteByID(ctx, id); err != nil {
 		return err
 	}
-	a.invalidate(ctx, entity.GroupName, entity.Key)
+	a.invalidate(ctx, entity.Group, entity.Key)
 	return nil
 }
 
@@ -186,14 +186,14 @@ func (a *AdminAPI) GetByID(ctx context.Context, id string) (*SettingInfo, error)
 		return nil, ErrSettingNotFound
 	}
 
-	decrypted, err := a.store.Get(ctx, entity.GroupName, entity.Key)
+	decrypted, err := a.store.Get(ctx, entity.Group, entity.Key)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SettingInfo{
 		ID:             entity.ID,
-		GroupName:      entity.GroupName,
+		Group:          entity.Group,
 		Key:            entity.Key,
 		ValueType:      entity.ValueType,
 		Value:          decrypted.Value,
@@ -215,7 +215,7 @@ func (a *AdminAPI) ListPage(ctx context.Context, cond *SettingCond) (*SettingLis
 	for _, entity := range list {
 		items = append(items, &SettingInfo{
 			ID:             entity.ID,
-			GroupName:      entity.GroupName,
+			Group:          entity.Group,
 			Key:            entity.Key,
 			ValueType:      entity.ValueType,
 			Value:          entity.Value,

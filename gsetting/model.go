@@ -38,9 +38,9 @@ const (
 // SettingEntity 配置项
 type SettingEntity struct {
 	gormdao.BaseEntity
-	GroupName      string         `gorm:"column:group_name;type:varchar(64);not null;default:'default';uniqueIndex:uk_group_key;comment:配置分组，用于业务隔离，如 payment、notification，默认 default"`
-	Key            string         `gorm:"column:key;type:varchar(128);not null;uniqueIndex:uk_group_key;comment:配置键名，同一分组内唯一"`
-	ValueType      ValueType      `gorm:"column:value_type;type:varchar(32);not null;default:'string';comment:值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string"`
+	Group     string    `gorm:"column:group;type:varchar(64);not null;default:'default';uniqueIndex:uk_group_key;comment:配置分组，用于业务隔离，如 payment、notification，默认 default"`
+	Key       string    `gorm:"column:key;type:varchar(128);not null;uniqueIndex:uk_group_key;comment:配置键名，同一分组内唯一"`
+	ValueType ValueType `gorm:"column:value_type;type:varchar(32);not null;default:'string';comment:值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string"`
 	// Value 不指定 type，由 GORM 按方言选择列类型：
 	// MySQL 映射为 longtext（约 4GB），PostgreSQL/SQLite 映射为 text（无长度上限），
 	// 兼容两种数据库（原先的 mediumtext 为 MySQL 专属，在 PG 上无法建表）。
@@ -66,7 +66,7 @@ type SettingCond struct {
 func (c *SettingCond) BuildCondition(db *gorm.DB, tableName string) {
 	c.BaseCond.BuildCondition(db, tableName)
 	if c.Group != "" {
-		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "group_name"}, Value: c.Group})
+		db.Where(clause.Eq{Column: clause.Column{Table: tableName, Name: "group"}, Value: c.Group})
 	}
 	if c.Key != "" {
 		if c.ExactKey {

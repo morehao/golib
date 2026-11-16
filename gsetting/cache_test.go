@@ -84,7 +84,7 @@ func newSettingWithCache(t *testing.T, c cachePort) (*Setting, *store, *counting
 func TestCache_HitLoadsOnce(t *testing.T) {
 	k, _, cp := newSettingWithCache(t, newMemCache(t))
 	ctx := context.Background()
-	err := k.GetStore().Set(ctx, &SettingEntity{GroupName: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
+	err := k.GetStore().Set(ctx, &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
 	require.NoError(t, err)
 
 	s1, err := k.GetString(ctx, "g", "k")
@@ -139,7 +139,7 @@ func TestCache_NoCacheRegression(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	err = k.GetStore().Set(ctx, &SettingEntity{GroupName: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
+	err = k.GetStore().Set(ctx, &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
 	require.NoError(t, err)
 	v, err := k.GetString(ctx, "g", "k")
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestCache_WriteInvalidation(t *testing.T) {
 
 	// Update → 读为新值
 	var e SettingEntity
-	require.NoError(t, st.dbGetter(ctx).Table(tableName).Where("group_name = ? AND `key` = ?", "g", "k").First(&e).Error)
+	require.NoError(t, st.dbGetter(ctx).Table(tableName).Where(map[string]any{"group": "g", "key": "k"}).First(&e).Error)
 	require.NoError(t, admin.Update(ctx, e.ID, &UpdateReq{Value: "v2"}))
 	v, err = k.GetString(ctx, "g", "k")
 	require.NoError(t, err)
@@ -198,7 +198,7 @@ func TestCache_RedisBackend(t *testing.T) {
 	k, _, cp := newSettingWithCache(t, rc)
 	ctx := context.Background()
 
-	err := k.GetStore().Set(ctx, &SettingEntity{GroupName: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
+	err := k.GetStore().Set(ctx, &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
 	require.NoError(t, err)
 
 	for i := 0; i < 2; i++ {

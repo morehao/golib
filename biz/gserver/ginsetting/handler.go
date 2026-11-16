@@ -18,7 +18,7 @@ func admin(_ *gsetting.Setting) *gsetting.AdminAPI {
 func toResponse(info *gsetting.SettingInfo) *settingResponse {
 	return &settingResponse{
 		ID:             info.ID,
-		Group:          info.GroupName,
+		Group:          info.Group,
 		Key:            info.Key,
 		ValueType:      string(info.ValueType),
 		Value:          info.Value,

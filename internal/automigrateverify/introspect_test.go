@@ -149,7 +149,9 @@ var mysqlDialect = dialect{
 // postgresDialect 用 pg_catalog 读 PostgreSQL 18 的结构。
 // 类型用 format_type() 取规范名（text / character varying(64) / timestamp with time zone），
 // 比 information_schema 的 data_type + character_maximum_length 两列拼接更少歧义；
-// 索引列用 pg_get_indexdef(oid, n, true) 按位置取，避免手工解析 indexdef 文本。
+// 索引列按 indkey 顺序经 pg_attribute.attname 取真实列名，不用 pg_get_indexdef：
+// 后者返回的是渲染后的文本，保留字列会被加引号（`group` 渲染成 "group"），
+// 与 gorm tag 里的列名对不上，会制造假差异。
 var postgresDialect = dialect{
 	name: "postgres",
 	open: func(t testing.TB) *gorm.DB {
@@ -191,15 +193,15 @@ var postgresDialect = dialect{
 		}
 		out := map[string]indexInfo{}
 		scanRows(t, db, `
-			SELECT i.relname, ix.indisunique, ix.indisprimary,
-			       pg_get_indexdef(ix.indexrelid, k, true), k
+			SELECT i.relname, ix.indisunique, ix.indisprimary, a.attname, k.ord
 			FROM pg_index ix
 			JOIN pg_class i ON i.oid = ix.indexrelid
 			JOIN pg_class tb ON tb.oid = ix.indrelid
 			JOIN pg_namespace n ON n.oid = tb.relnamespace
-			CROSS JOIN LATERAL generate_series(1, ix.indnkeyatts) AS k
-			WHERE n.nspname = 'public' AND tb.relname = ?
-			ORDER BY i.relname, k`, []any{table},
+			CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
+			JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = k.attnum
+			WHERE n.nspname = 'public' AND tb.relname = ? AND k.ord <= ix.indnkeyatts
+			ORDER BY i.relname, k.ord`, []any{table},
 			func(r *row) {
 				idx := out[r.Name]
 				idx.Unique = r.Unique

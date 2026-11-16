@@ -2,7 +2,7 @@ package gsetting
 
 type SettingInfo struct {
 	ID             string
-	GroupName      string
+	Group          string
 	Key            string
 	ValueType      ValueType
 	Value          string
