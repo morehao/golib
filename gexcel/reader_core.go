@@ -117,7 +117,7 @@ func readRows[T any](f *excelize.File, cfg readConfig) ([]T, []RowError, error) 
 				raw = cells[binding.colIndex]
 			}
 
-			if setErr := setFieldFromString(field, raw); setErr != nil {
+			if setErr := decodeField(field, raw, defaultDecodeConfig()); setErr != nil {
 				var convErr *ConvertError
 				if errors.As(setErr, &convErr) {
 					code := convErr.Code
