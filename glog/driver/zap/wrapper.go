@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/morehao/golib/glog"
@@ -55,99 +53,55 @@ func getZapStandoutWriter() zapcore.WriteSyncer {
 	return os.Stdout
 }
 
-type dailyRotateWriter struct {
-	mu          sync.Mutex
-	wc          glog.WriterConfig
-	serviceName string
-	suffix      string // "_full" 或 "_wf"
-
-	current  *lumberjack.Logger
-	today    string
+// fileWriter 是 zap 的文件写入器：单个文件 + lumberjack 按大小/份数/天数滚动。
+// 不再按天分目录，日志统一写到 <Dir>/<name><suffix>.log，交由 lumberjack 清理旧文件。
+type fileWriter struct {
 	buffered *zapcore.BufferedWriteSyncer
 }
 
-func newDailyRotateWriter(wc glog.WriterConfig, serviceName, suffix string) (*dailyRotateWriter, error) {
-	w := &dailyRotateWriter{
-		wc:          wc,
-		serviceName: serviceName,
-		suffix:      suffix,
-	}
-	if err := w.rotate(time.Now().Format("20060102")); err != nil {
-		return nil, err
-	}
-	return w, nil
-}
-
-func (w *dailyRotateWriter) rotate(today string) error {
-	if w.buffered != nil {
-		_ = w.buffered.Stop()
-	}
-
-	dir := strings.TrimSuffix(w.wc.EffectiveDir(), "/") + "/" + today
+func newFileWriter(wc glog.WriterConfig, serviceName, suffix string) (*fileWriter, error) {
+	dir := wc.EffectiveDir()
 	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		return fmt.Errorf("glog: mkdir %s: %w", dir, err)
+		return nil, fmt.Errorf("glog: mkdir %s: %w", dir, err)
 	}
 
-	baseName := w.wc.EffectiveFileName(w.serviceName)
+	baseName := wc.EffectiveFileName(serviceName)
 	ext := path.Ext(baseName)
 	nameWithoutExt := baseName[:len(baseName)-len(ext)]
-	logFilepath := path.Join(dir, nameWithoutExt+w.suffix+ext)
+	logFilepath := path.Join(dir, nameWithoutExt+suffix+ext)
 
-	maxSize, maxBackups, maxAge := w.wc.EffectiveRotateConfig()
+	maxSize, maxBackups, maxAge := wc.EffectiveRotateConfig()
 
 	lj := &lumberjack.Logger{
 		Filename:   logFilepath,
 		MaxSize:    maxSize,
 		MaxBackups: maxBackups,
 		MaxAge:     maxAge,
-		Compress:   w.wc.Compress,
+		Compress:   wc.Compress,
 		LocalTime:  true,
 	}
 
-	w.current = lj
-	w.today = today
-	w.buffered = &zapcore.BufferedWriteSyncer{
-		WS:            zapcore.AddSync(lj),
-		Size:          256 * 1024,
-		FlushInterval: 5 * time.Second,
-	}
-	return nil
+	return &fileWriter{
+		buffered: &zapcore.BufferedWriteSyncer{
+			WS:            zapcore.AddSync(lj),
+			Size:          256 * 1024,
+			FlushInterval: 5 * time.Second,
+		},
+	}, nil
 }
 
-func (w *dailyRotateWriter) Write(p []byte) (n int, err error) {
-	today := time.Now().Format("20060102")
-
-	w.mu.Lock()
-	if today != w.today {
-		if rotateErr := w.rotate(today); rotateErr != nil {
-			w.mu.Unlock()
-			return 0, rotateErr
-		}
-	}
-	buf := w.buffered
-	w.mu.Unlock()
-
-	return buf.Write(p)
+func (w *fileWriter) Write(p []byte) (n int, err error) {
+	return w.buffered.Write(p)
 }
 
-func (w *dailyRotateWriter) Sync() error {
-	w.mu.Lock()
-	buf := w.buffered
-	w.mu.Unlock()
-	if buf != nil {
-		return buf.Sync()
-	}
-	return nil
+func (w *fileWriter) Sync() error {
+	return w.buffered.Sync()
 }
 
 // Close 停止并刷出缓冲写，释放后台 goroutine 与底层文件资源。
-func (w *dailyRotateWriter) Close() error {
-	w.mu.Lock()
-	buf := w.buffered
-	w.buffered = nil
-	w.mu.Unlock()
-	if buf != nil {
-		return buf.Stop()
+func (w *fileWriter) Close() error {
+	if w.buffered != nil {
+		return w.buffered.Stop()
 	}
 	return nil
 }

@@ -33,7 +33,7 @@ func bizCallForCalib(db *gorm.DB) int {
 
 func collectCallers(t *testing.T, dir string) []string {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, time.Now().Format("20060102"), "*.log"))
+	files, err := filepath.Glob(filepath.Join(dir, "*.log"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
 	re := regexp.MustCompile(`"caller":"([^"]+)"`)

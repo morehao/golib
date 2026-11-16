@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gcontext/gincontext"
@@ -49,7 +48,7 @@ func newLogFixture(t *testing.T) *logFixture {
 
 func (f *logFixture) flushAndRead() string {
 	_ = glog.Close()
-	p := filepath.Join(f.dir, time.Now().Format("20060102"), "accesslog_full.log")
+	p := filepath.Join(f.dir, "accesslog_full.log")
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return ""

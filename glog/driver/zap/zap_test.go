@@ -38,7 +38,7 @@ func TestInit(t *testing.T) {
 		glog.Info(context.Background(), "test message")
 		glog.Close()
 
-		expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
+		expectedDir := tempDir
 		expectedFile := filepath.Join(expectedDir, "test-service_full.log")
 		if !gutil.FileExists(expectedFile) {
 			t.Errorf("Log file not created: %s", expectedFile)
@@ -105,8 +105,7 @@ func TestHook(t *testing.T) {
 	logger.Info(ctx, "test message with password=123456")
 	logger.Close()
 
-	dateStr := time.Now().Format("20060102")
-	b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "test_full.log"))
+	b, readErr := os.ReadFile(filepath.Join(tempDir, "test_full.log"))
 	assert.Nil(t, readErr)
 	content := string(b)
 	assert.Contains(t, content, "138****5678")
@@ -173,7 +172,7 @@ func TestLogRotation(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
+	expectedDir := tempDir
 	baseFile := filepath.Join(expectedDir, "rotation-test_full.log")
 
 	assert.True(t, gutil.FileExists(baseFile), "Current log file should exist")
@@ -216,7 +215,7 @@ func TestOTELTraceFieldsInjected(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-test_full.log")
+	logFile := filepath.Join(tempDir, "otel-test_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -248,7 +247,7 @@ func TestOTELTraceFieldsDisabled(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-disabled_full.log")
+	logFile := filepath.Join(tempDir, "otel-disabled_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -280,7 +279,7 @@ func TestOTELTraceOptionOverridesConfig(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-option_full.log")
+	logFile := filepath.Join(tempDir, "otel-option_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -309,7 +308,7 @@ func TestOTELTraceWithoutSpanContext(t *testing.T) {
 	logger.Infow(context.Background(), "without span context", "key", "value")
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "otel-nospan_full.log")
+	logFile := filepath.Join(tempDir, "otel-nospan_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -336,8 +335,7 @@ func TestZapMultiWritersFileAndConsole(t *testing.T) {
 	ctx := context.Background()
 	logger.Info(ctx, "multi writer test")
 	logger.Close()
-	dateStr := time.Now().Format("20060102")
-	expectedFile := filepath.Join(tempDir, dateStr, "zap-multi_full.log")
+	expectedFile := filepath.Join(tempDir, "zap-multi_full.log")
 	assert.True(t, gutil.FileExists(expectedFile), expectedFile)
 }
 
@@ -360,13 +358,12 @@ func TestZapMultiWritersLevelSplit(t *testing.T) {
 	logger.Info(ctx, "info message")
 	logger.Error(ctx, "error message")
 	logger.Close()
-	dateStr := time.Now().Format("20060102")
-	fullFile := filepath.Join(tempDir, dateStr, "zap-split_full.log")
+	fullFile := filepath.Join(tempDir, "zap-split_full.log")
 	b, _ := os.ReadFile(fullFile)
 	content := string(b)
 	assert.Contains(t, content, "info message")
 	assert.Contains(t, content, "error message")
-	errorFile := filepath.Join(tempDir, dateStr, "error_wf.log")
+	errorFile := filepath.Join(tempDir, "error_wf.log")
 	b2, _ := os.ReadFile(errorFile)
 	content2 := string(b2)
 	assert.NotContains(t, content2, "info message")
@@ -386,8 +383,7 @@ func TestZapCloseFlushesBuffer(t *testing.T) {
 	assert.Nil(t, err)
 	logger.Info(context.Background(), "buffered message")
 	logger.Close()
-	dateStr := time.Now().Format("20060102")
-	b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "zap-flush_full.log"))
+	b, readErr := os.ReadFile(filepath.Join(tempDir, "zap-flush_full.log"))
 	assert.Nil(t, readErr)
 	assert.Contains(t, string(b), "buffered message")
 }
@@ -421,8 +417,7 @@ func TestZapKVFieldExpansion(t *testing.T) {
 	logger.Infow(context.Background(), "kv message", glog.KV("user_id", 1001), "module", "order")
 	logger.Close()
 
-	dateStr := time.Now().Format("20060102")
-	b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "zap-kv_full.log"))
+	b, readErr := os.ReadFile(filepath.Join(tempDir, "zap-kv_full.log"))
 	assert.Nil(t, readErr)
 	content := string(b)
 	assert.Contains(t, content, `"user_id":1001`)

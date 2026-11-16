@@ -39,7 +39,7 @@ func TestSlogLoggerInit(t *testing.T) {
 
 		glog.Info(context.Background(), "slog test message")
 
-		expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
+		expectedDir := tempDir
 		expectedFile := filepath.Join(expectedDir, "slog-service_full.log")
 		if !gutil.FileExists(expectedFile) {
 			t.Errorf("Log file not created: %s", expectedFile)
@@ -165,8 +165,7 @@ func TestSlogLoggerHook(t *testing.T) {
 	logger.Info(ctx, "test message with password=123456")
 	logger.Close()
 
-	dateStr := time.Now().Format("20060102")
-	b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-hook_full.log"))
+	b, readErr := os.ReadFile(filepath.Join(tempDir, "slog-hook_full.log"))
 	assert.Nil(t, readErr)
 	content := string(b)
 	assert.Contains(t, content, "138****5678")
@@ -227,7 +226,7 @@ func TestSlogLoggerOTELTrace(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "slog-otel_full.log")
+	logFile := filepath.Join(tempDir, "slog-otel_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -259,7 +258,7 @@ func TestSlogLoggerOTELTraceDisabled(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "slog-otel-disabled_full.log")
+	logFile := filepath.Join(tempDir, "slog-otel-disabled_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -291,7 +290,7 @@ func TestSlogLoggerOTELTraceOptionOverridesConfig(t *testing.T) {
 	span.End()
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "slog-otel-option_full.log")
+	logFile := filepath.Join(tempDir, "slog-otel-option_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -320,7 +319,7 @@ func TestSlogLoggerOTELTraceWithoutSpanContext(t *testing.T) {
 	logger.Infow(context.Background(), "without span context", "key", "value")
 	logger.Close()
 
-	logFile := filepath.Join(tempDir, time.Now().Format("20060102"), "slog-otel-nospan_full.log")
+	logFile := filepath.Join(tempDir, "slog-otel-nospan_full.log")
 	b, readErr := os.ReadFile(logFile)
 	assert.Nil(t, readErr)
 	content := string(b)
@@ -353,7 +352,7 @@ func TestSlogLoggerRotation(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
+	expectedDir := tempDir
 	baseFile := filepath.Join(expectedDir, "slog-rotation-test_full.log")
 
 	assert.True(t, gutil.FileExists(baseFile), "Current log file should exist")
@@ -391,7 +390,7 @@ func TestSlogMultiWritersFileAndConsole(t *testing.T) {
 	defer logger.Close()
 	ctx := context.Background()
 	logger.Info(ctx, "multi writer test")
-	expectedDir := filepath.Join(tempDir, time.Now().Format("20060102"))
+	expectedDir := tempDir
 	expectedFile := filepath.Join(expectedDir, "slog-multi_full.log")
 	assert.True(t, gutil.FileExists(expectedFile), expectedFile)
 }
@@ -415,13 +414,12 @@ func TestSlogMultiWritersLevelSplit(t *testing.T) {
 	logger.Info(ctx, "info message")
 	logger.Error(ctx, "error message")
 	logger.Close()
-	dateStr := time.Now().Format("20060102")
-	fullFile := filepath.Join(tempDir, dateStr, "slog-split_full.log")
+	fullFile := filepath.Join(tempDir, "slog-split_full.log")
 	b, _ := os.ReadFile(fullFile)
 	content := string(b)
 	assert.Contains(t, content, "info message")
 	assert.Contains(t, content, "error message")
-	errorFile := filepath.Join(tempDir, dateStr, "error_wf.log")
+	errorFile := filepath.Join(tempDir, "error_wf.log")
 	b2, _ := os.ReadFile(errorFile)
 	content2 := string(b2)
 	assert.NotContains(t, content2, "info message")
@@ -444,10 +442,9 @@ func TestSlogWfOnlyNoExtraFullFile(t *testing.T) {
 	logger.Info(context.Background(), "info msg")
 	logger.Error(context.Background(), "error msg")
 	logger.Close()
-	dateStr := time.Now().Format("20060102")
-	assert.True(t, gutil.FileExists(filepath.Join(tempDir, dateStr, "slog-wfonly_wf.log")))
-	assert.False(t, gutil.FileExists(filepath.Join(tempDir, dateStr, "slog-wfonly_full.log")))
-	wf, _ := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-wfonly_wf.log"))
+	assert.True(t, gutil.FileExists(filepath.Join(tempDir, "slog-wfonly_wf.log")))
+	assert.False(t, gutil.FileExists(filepath.Join(tempDir, "slog-wfonly_full.log")))
+	wf, _ := os.ReadFile(filepath.Join(tempDir, "slog-wfonly_wf.log"))
 	assert.NotContains(t, string(wf), "info msg")
 	assert.Contains(t, string(wf), "error msg")
 }
@@ -470,7 +467,6 @@ func TestSlogWriterConfigDefaults(t *testing.T) {
 // 只修其中一条是最容易漏的写法：快路径不经过 kvsToFields，slog 原生 Add 会把
 // glog.Field 输出成 !BADKEY，字段名消失后脱敏 Hook 也就无从下手。
 func TestSlogKVFieldExpansion(t *testing.T) {
-	dateStr := time.Now().Format("20060102")
 
 	t.Run("hook path", func(t *testing.T) {
 		tempDir := t.TempDir()
@@ -493,7 +489,7 @@ func TestSlogKVFieldExpansion(t *testing.T) {
 		logger.Infow(context.Background(), "kv message", glog.KV("user_id", 1001), "module", "order")
 		logger.Close()
 
-		b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-kv-hook_full.log"))
+		b, readErr := os.ReadFile(filepath.Join(tempDir, "slog-kv-hook_full.log"))
 		assert.Nil(t, readErr)
 		content := string(b)
 		assert.Contains(t, content, `"user_id":1001`)
@@ -517,7 +513,7 @@ func TestSlogKVFieldExpansion(t *testing.T) {
 		logger.Infow(context.Background(), "kv message", glog.KV("user_id", 1001), "module", "order")
 		logger.Close()
 
-		b, readErr := os.ReadFile(filepath.Join(tempDir, dateStr, "slog-kv-fast_full.log"))
+		b, readErr := os.ReadFile(filepath.Join(tempDir, "slog-kv-fast_full.log"))
 		assert.Nil(t, readErr)
 		content := string(b)
 		assert.Contains(t, content, `"user_id":1001`)

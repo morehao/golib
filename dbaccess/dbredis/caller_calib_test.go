@@ -26,7 +26,7 @@ func bizRedisCall(db *redis.Client, ctx context.Context) int {
 
 func redisCallers(t *testing.T, dir string) []string {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, time.Now().Format("20060102"), "*.log"))
+	files, err := filepath.Glob(filepath.Join(dir, "*.log"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
 	re := regexp.MustCompile(`"caller":"([^"]+)"`)

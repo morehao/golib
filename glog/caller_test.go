@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/morehao/golib/glog"
 	_ "github.com/morehao/golib/glog/driver/slog"
@@ -42,10 +41,10 @@ func normalizeCaller(c string) (file string, line int) {
 func newCallerTestLogger(t *testing.T, dir string, lt glog.LoggerType, skip int) (glog.Logger, string) {
 	t.Helper()
 	fileName := "slog.log"
-	logPath := filepath.Join(dir, time.Now().Format("20060102"), "slog_full.log")
+	logPath := filepath.Join(dir, "slog_full.log")
 	if lt == glog.LoggerTypeZap {
 		fileName = "zap.log"
-		logPath = filepath.Join(dir, time.Now().Format("20060102"), "zap_full.log")
+		logPath = filepath.Join(dir, "zap_full.log")
 	}
 	cfg := &glog.LogConfig{
 		Service:    "caller-test",
@@ -98,10 +97,10 @@ func TestCallerPackageLevelCall(t *testing.T) {
 	dir := t.TempDir()
 	for _, lt := range []glog.LoggerType{glog.LoggerTypeZap, glog.LoggerTypeSlog} {
 		fileName := "slog.log"
-		logPath := filepath.Join(dir, time.Now().Format("20060102"), "slog_full.log")
+		logPath := filepath.Join(dir, "slog_full.log")
 		if lt == glog.LoggerTypeZap {
 			fileName = "zap.log"
-			logPath = filepath.Join(dir, time.Now().Format("20060102"), "zap_full.log")
+			logPath = filepath.Join(dir, "zap_full.log")
 		}
 		cfg := &glog.LogConfig{
 			Service:    "caller-test",

@@ -60,8 +60,7 @@ func TestLogLevelGating(t *testing.T) {
 	def := NewClient(&protocol.HttpClientConfig{Host: srv.URL, Timeout: 2 * time.Second})
 	var out map[string]any
 	require.NoError(t, def.GetJSON(context.Background(), "/a", &out, RequestOption{}))
-	day := time.Now().Format("20060102")
-	require.NoFileExists(t, filepath.Join(dir, day, "ghttplog2_full.log"), "默认 debug 级别应在 info 全局阈值下被过滤")
+	require.NoFileExists(t, filepath.Join(dir, "ghttplog2_full.log"), "默认 debug 级别应在 info 全局阈值下被过滤")
 
 	// LogLevel=info 客户端：成功日志以 info 级打出，应写入文件。
 	_ = glog.Close()
@@ -69,7 +68,7 @@ func TestLogLevelGating(t *testing.T) {
 	info := NewClient(&protocol.HttpClientConfig{Host: srv.URL, Timeout: 2 * time.Second, LogLevel: "info"})
 	require.NoError(t, info.GetJSON(context.Background(), "/b", &out, RequestOption{}))
 	require.NoError(t, glog.Close())
-	raw, err := os.ReadFile(filepath.Join(dir, day, "ghttplog2_full.log"))
+	raw, err := os.ReadFile(filepath.Join(dir, "ghttplog2_full.log"))
 	require.NoError(t, err, "LogLevel=info 时成功日志应写入文件")
 	assert.Contains(t, string(raw), "http request success")
 }
