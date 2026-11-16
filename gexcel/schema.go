@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// ColumnRule describes an explicit field->column mapping, overriding tags.
 type ColumnRule struct {
 	Field  string
 	Column string
@@ -19,41 +20,40 @@ type columnSchema struct {
 	aliases    []string
 }
 
+// buildSchemaFromType builds the column schema for a (possibly generic) type.
 func buildSchemaFromType[T any]() ([]columnSchema, error) {
 	var zero T
 	return buildSchema(reflect.TypeOf(zero), nil)
 }
 
+// buildSchema builds the column schema from struct tags, then applies explicit
+// rules (if any) and validates for conflicts. It is shared by reader and writer.
 func buildSchema(typ reflect.Type, explicit []ColumnRule) ([]columnSchema, error) {
 	for typ != nil && typ.Kind() == reflect.Ptr {
 		typ = typ.Elem()
 	}
 	if typ == nil || typ.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("schema type must be a struct")
+		return nil, ErrSchemaNotStruct
 	}
 
 	schema := make([]columnSchema, 0, typ.NumField())
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
-		if field.PkgPath != "" {
+		if field.PkgPath != "" { // unexported
 			continue
 		}
-
 		tagValue := field.Tag.Get("excel")
 		if strings.TrimSpace(tagValue) == "" {
 			continue
 		}
-
 		tagMap, err := parseExcelTag(tagValue)
 		if err != nil {
-			return nil, fmt.Errorf("field %s: %w", field.Name, err)
+			return nil, fmt.Errorf("%w: field %s: %v", ErrInvalidTag, field.Name, err)
 		}
-
 		column := strings.TrimSpace(tagMap["col"])
 		if column == "" {
 			continue
 		}
-
 		schema = append(schema, columnSchema{
 			fieldName:  field.Name,
 			fieldIndex: i,
@@ -74,7 +74,7 @@ func buildSchemaFromRules(typ reflect.Type, current []columnSchema, explicit []C
 		typ = typ.Elem()
 	}
 	if typ == nil || typ.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("schema type must be a struct")
+		return nil, ErrSchemaNotStruct
 	}
 
 	idxByField := make(map[string]int, len(current))
@@ -86,18 +86,17 @@ func buildSchemaFromRules(typ reflect.Type, current []columnSchema, explicit []C
 		fieldName := strings.TrimSpace(rule.Field)
 		column := strings.TrimSpace(rule.Column)
 		if fieldName == "" {
-			return nil, fmt.Errorf("column rule field is required")
+			return nil, fmt.Errorf("%w: column rule field is required", ErrInvalidTag)
 		}
 		if column == "" {
-			return nil, fmt.Errorf("column rule column is required for field %s", fieldName)
+			return nil, fmt.Errorf("%w: column rule column is required for field %s", ErrInvalidTag, fieldName)
 		}
-
 		field, ok := typ.FieldByName(fieldName)
 		if !ok {
-			return nil, fmt.Errorf("field %s not found", fieldName)
+			return nil, fmt.Errorf("%w: field %s not found", ErrInvalidTag, fieldName)
 		}
 		if field.PkgPath != "" {
-			return nil, fmt.Errorf("field %s is not exported", fieldName)
+			return nil, fmt.Errorf("%w: field %s is not exported", ErrInvalidTag, fieldName)
 		}
 
 		aliases := append([]string(nil), rule.Alias...)
@@ -110,7 +109,6 @@ func buildSchemaFromRules(typ reflect.Type, current []columnSchema, explicit []C
 			current[idx].aliases = aliases
 			continue
 		}
-
 		current = append(current, columnSchema{
 			fieldName:  fieldName,
 			fieldIndex: field.Index[0],
@@ -126,43 +124,74 @@ func buildSchemaFromRules(typ reflect.Type, current []columnSchema, explicit []C
 	return current, nil
 }
 
+// orderColumns reorders schema so that fields listed in `fields` come first, in
+// that order; remaining fields keep their original order. Unknown names are
+// ignored. Used by the writer to honour explicit column order.
+func orderColumns(base []columnSchema, fields []string) []columnSchema {
+	if len(fields) == 0 {
+		return base
+	}
+	idxByField := make(map[string]int, len(base))
+	for i := range base {
+		idxByField[base[i].fieldName] = i
+	}
+
+	ordered := make([]columnSchema, 0, len(base))
+	used := make(map[string]struct{}, len(base))
+	for _, field := range fields {
+		name := strings.TrimSpace(field)
+		if name == "" {
+			continue
+		}
+		idx, ok := idxByField[name]
+		if !ok {
+			continue
+		}
+		if _, exists := used[name]; exists {
+			continue
+		}
+		ordered = append(ordered, base[idx])
+		used[name] = struct{}{}
+	}
+	for i := range base {
+		if _, exists := used[base[i].fieldName]; exists {
+			continue
+		}
+		ordered = append(ordered, base[i])
+	}
+	return ordered
+}
+
 func parseExcelTag(tag string) (map[string]string, error) {
 	result := make(map[string]string)
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
 		return result, nil
 	}
-
-	parts := strings.Split(tag, ",")
-	for _, raw := range parts {
+	for _, raw := range strings.Split(tag, ",") {
 		part := strings.TrimSpace(raw)
 		if part == "" {
 			continue
 		}
-
 		kv := strings.SplitN(part, "=", 2)
 		if len(kv) != 2 {
 			return nil, fmt.Errorf("invalid excel tag segment %q", part)
 		}
-
 		key := strings.TrimSpace(kv[0])
 		value := strings.TrimSpace(kv[1])
 		if key == "" {
 			return nil, fmt.Errorf("invalid excel tag segment %q", part)
 		}
-
 		switch key {
 		case "col", "alias":
 		default:
 			return nil, fmt.Errorf("unsupported excel tag key %q", key)
 		}
-
 		if _, exists := result[key]; exists {
 			return nil, fmt.Errorf("duplicate excel tag key %q", key)
 		}
 		result[key] = value
 	}
-
 	return result, nil
 }
 
@@ -196,7 +225,6 @@ func validateSchemaConflicts(schema []columnSchema) error {
 		names := make([]string, 0, len(item.aliases)+1)
 		names = append(names, strings.TrimSpace(item.column))
 		names = append(names, item.aliases...)
-
 		for _, rawName := range names {
 			name := strings.TrimSpace(rawName)
 			if name == "" {
