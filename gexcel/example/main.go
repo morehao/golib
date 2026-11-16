@@ -25,7 +25,7 @@ type DataItem struct {
 }
 
 func read(path string) error {
-	dataList, rowErrs, err := gexcel.ReadFile[DataItem](path)
+	dataList, rowErrs, err := gexcel.ReadAll[DataItem](path)
 	if err != nil {
 		return err
 	}
@@ -51,5 +51,5 @@ func write(path string) error {
 		Age:          22,
 	}}
 
-	return gexcel.WriteFile(dataList, path)
+	return gexcel.WriteFile(path, dataList)
 }

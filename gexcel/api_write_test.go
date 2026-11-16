@@ -3,6 +3,8 @@ package gexcel
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/xuri/excelize/v2"
 )
 
 type writeAPIRow struct {
@@ -10,40 +12,69 @@ type writeAPIRow struct {
 	Age  int    `excel:"col=年龄"`
 }
 
-func TestWriteFile(t *testing.T) {
+func TestWriteFile_RoundTrip(t *testing.T) {
 	rows := []writeAPIRow{{Name: "张三", Age: 20}, {Name: "李四", Age: 30}}
 	path := filepath.Join(t.TempDir(), "write_api.xlsx")
-
-	if err := WriteFile(rows, path, WithWriteSheet("Data")); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
+	if err := WriteFile(path, rows, WithWriteSheet("Data")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
-
-	got, rowErrs, err := ReadFile[writeAPIRow](path, WithReadSheet("Data"))
+	got, rowErrs, err := ReadAll[writeAPIRow](path, WithReadSheet("Data"))
 	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
+		t.Fatalf("ReadAll: %v", err)
 	}
 	if len(rowErrs) != 0 {
-		t.Fatalf("expected 0 row errors, got %d", len(rowErrs))
+		t.Fatalf("row errors: %v", rowErrs)
 	}
-	if len(got) != len(rows) {
-		t.Fatalf("expected %d rows, got %d", len(rows), len(got))
-	}
-	if got[0].Name != rows[0].Name || got[0].Age != rows[0].Age {
-		t.Fatalf("first row mismatch: got %+v, want %+v", got[0], rows[0])
-	}
-	if got[1].Name != rows[1].Name || got[1].Age != rows[1].Age {
-		t.Fatalf("second row mismatch: got %+v, want %+v", got[1], rows[1])
+	if len(got) != len(rows) || got[0].Name != "张三" || got[1].Age != 30 {
+		t.Fatalf("roundtrip mismatch: %+v", got)
 	}
 }
 
 func TestWriteBytes(t *testing.T) {
-	rows := []writeAPIRow{{Name: "王五", Age: 18}}
-
-	b, err := WriteBytes(rows, WithWriteSheet("Data"))
+	b, err := WriteBytes([]writeAPIRow{{Name: "王五", Age: 18}}, WithWriteSheet("Data"))
 	if err != nil {
-		t.Fatalf("WriteBytes returned error: %v", err)
+		t.Fatalf("WriteBytes: %v", err)
 	}
 	if len(b) == 0 {
 		t.Fatal("expected non-empty bytes")
+	}
+}
+
+func TestWriteFile_NoResidualSheet1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sheets.xlsx")
+	if err := WriteFile(path, []writeAPIRow{{Name: "张三", Age: 1}}, WithWriteSheet("Data")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	list := f.GetSheetList()
+	if len(list) != 1 || list[0] != "Data" {
+		t.Fatalf("expected only [Data], got %v", list)
+	}
+}
+
+func TestWriteFile_NilRowError(t *testing.T) {
+	type row struct {
+		Name string `excel:"col=姓名"`
+	}
+	err := WriteFile(filepath.Join(t.TempDir(), "x.xlsx"), []*row{nil})
+	if err == nil {
+		t.Fatalf("expected nil-row error")
+	}
+}
+
+func TestWriteFile_NilRowSkip(t *testing.T) {
+	type row struct {
+		Name string `excel:"col=姓名"`
+	}
+	b, err := WriteBytes([]*row{nil, {Name: "张三"}}, WithNilRowPolicy(NilRowSkip))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(b) == 0 {
+		t.Fatal("empty bytes")
 	}
 }
