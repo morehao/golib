@@ -70,8 +70,7 @@ func TestLogFieldsAreVisibleToFieldHook(t *testing.T) {
 	assert.NotContains(t, strings.Join(seenKeys, ","), "!badKey", "字段名不得退化成 !badKeyN（说明参数不是 k/v 形式）")
 
 	// 日期只取一次：读取时再取一次的话，跨零点会去错目录而偶发失败
-	day := time.Now().Format("20060102")
-	raw, readErr := os.ReadFile(filepath.Join(dir, day, "ghttplog_full.log"))
+	raw, readErr := os.ReadFile(filepath.Join(dir, "ghttplog_full.log"))
 	require.NoError(t, readErr)
 	content := string(raw)
 	assert.Contains(t, content, "MASKED", "钩子的改写必须落到日志文件里")

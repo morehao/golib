@@ -35,7 +35,7 @@ type zapLogger struct {
 	enableOTELTrace bool
 	fieldHookFunc   glog.FieldHookFunc
 	callerSkip      int
-	writers         []*dailyRotateWriter
+	writers         []*fileWriter
 }
 
 type zapLoggerConfig struct {
@@ -68,7 +68,7 @@ func newZapLogger(cfg *glog.LogConfig, opts ...glog.Option) (glog.Logger, error)
 	}, nil
 }
 
-func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, []*dailyRotateWriter, error) {
+func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, []*fileWriter, error) {
 	zapCfg := &zapLoggerConfig{
 		messageHookFunc: o.MessageHookFunc,
 	}
@@ -86,7 +86,7 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, []*d
 
 	var (
 		cores   []zapcore.Core
-		writers []*dailyRotateWriter
+		writers []*fileWriter
 	)
 
 	for _, wc := range cfg.Writers {
@@ -102,7 +102,7 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, []*d
 			cores = append(cores, consoleCore)
 		case glog.WriterFile:
 			if wc.WfOnly {
-				dw, err := newDailyRotateWriter(wc, serviceName, "_wf")
+				dw, err := newFileWriter(wc, serviceName, "_wf")
 				if err != nil {
 					return nil, nil, err
 				}
@@ -110,7 +110,7 @@ func getZapLogger(cfg *glog.LogConfig, o *glog.LoggerOptions) (*zap.Logger, []*d
 				wfCore := zapcore.NewCore(encoder, dw, zapcore.WarnLevel)
 				cores = append(cores, wfCore)
 			} else {
-				dw, err := newDailyRotateWriter(wc, serviceName, "_full")
+				dw, err := newFileWriter(wc, serviceName, "_full")
 				if err != nil {
 					return nil, nil, err
 				}

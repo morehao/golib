@@ -8,8 +8,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/morehao/golib/glog"
@@ -119,93 +117,42 @@ func logLevelToSlog(level glog.Level) slog.Level {
 	}
 }
 
+// gSlogFileWriter 是 slog 的文件写入器：单个文件 + lumberjack 按大小/份数/天数滚动。
+// 不再按天分目录，日志统一写到 <Dir>/<name><suffix>.log，交由 lumberjack 清理旧文件。
 type gSlogFileWriter struct {
-	wc           glog.WriterConfig
-	serviceName  string
-	suffix       string // "_full" 或 "_wf"
-	rotateMu     sync.Mutex
-	current      atomic.Pointer[lumberjack.Logger]
-	today        string
-	nextRotateAt atomic.Int64
+	lj *lumberjack.Logger
 }
 
 func newSlogFileWriter(wc glog.WriterConfig, serviceName, suffix string) (*gSlogFileWriter, error) {
-	w := &gSlogFileWriter{wc: wc, serviceName: serviceName, suffix: suffix}
-	if err := w.rotate(true); err != nil {
-		return nil, err
+	dir := wc.EffectiveDir()
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return nil, fmt.Errorf("glog: mkdir %s: %w", dir, err)
 	}
-	return w, nil
-}
 
-func (w *gSlogFileWriter) filePath(now time.Time) string {
-	dateStr := now.Format("20060102")
-	dir := path.Join(w.wc.EffectiveDir(), dateStr)
-	baseName := w.wc.EffectiveFileName(w.serviceName)
+	baseName := wc.EffectiveFileName(serviceName)
 	ext := path.Ext(baseName)
 	nameWithoutExt := baseName[:len(baseName)-len(ext)]
-	return path.Join(dir, nameWithoutExt+w.suffix+ext)
-}
+	filePath := path.Join(dir, nameWithoutExt+suffix+ext)
 
-func (w *gSlogFileWriter) needsRotate(now time.Time) bool {
-	return now.Unix() >= w.nextRotateAt.Load()
-}
-
-func (w *gSlogFileWriter) rotate(force bool) error {
-	w.rotateMu.Lock()
-	defer w.rotateMu.Unlock()
-
-	now := time.Now()
-	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
-
-	if !force && !w.needsRotate(now) {
-		return nil
-	}
-	newToday := now.Format("20060102")
-	if lj := w.current.Load(); lj != nil && w.today == newToday {
-		w.nextRotateAt.Store(tomorrow.Unix())
-		return nil
-	}
-
-	filePath := w.filePath(now)
-	if err := os.MkdirAll(path.Dir(filePath), os.ModePerm); err != nil {
-		return fmt.Errorf("glog: mkdir %s: %w", path.Dir(filePath), err)
-	}
-	maxSize, maxBackups, maxAge := w.wc.EffectiveRotateConfig()
+	maxSize, maxBackups, maxAge := wc.EffectiveRotateConfig()
 	lj := &lumberjack.Logger{
 		Filename:   filePath,
 		MaxSize:    maxSize,
 		MaxBackups: maxBackups,
 		MaxAge:     maxAge,
-		Compress:   w.wc.Compress,
+		Compress:   wc.Compress,
 		LocalTime:  true,
 	}
-
-	old := w.current.Swap(lj)
-	w.today = newToday
-	w.nextRotateAt.Store(tomorrow.Unix())
-
-	if old != nil {
-		go func() { _ = old.Close() }()
-	}
-	return nil
+	return &gSlogFileWriter{lj: lj}, nil
 }
 
 func (w *gSlogFileWriter) Write(p []byte) (int, error) {
-	if w.needsRotate(time.Now()) {
-		if err := w.rotate(false); err != nil {
-			return 0, err
-		}
-	}
-	lj := w.current.Load()
-	return lj.Write(p)
+	return w.lj.Write(p)
 }
 
 func (w *gSlogFileWriter) Close() error {
-	w.rotateMu.Lock()
-	lj := w.current.Load()
-	w.rotateMu.Unlock()
-	if lj != nil {
-		return lj.Close()
+	if w.lj != nil {
+		return w.lj.Close()
 	}
 	return nil
 }

@@ -8,7 +8,7 @@
 
 - **双驱动**：`zap` / `slog`，共用同一套 API、配置与行为约定
 - **统一级别**：`debug` / `info` / `warn` / `error` / `panic` / `fatal`
-- **Console / File 输出**：文件按天建目录，按大小、份数、天数滚动（lumberjack）
+- **Console / File 输出**：单文件写入，按大小、份数、天数滚动（lumberjack），旧文件自动清理
 - **双文件模式**：每个 file writer 可同时产出 `_full`（全量）与 `_wf`（仅 warn 及以上）
 - **上下文字段自动提取**：OTEL 链路字段（trace.id / span.id / trace.flags）与自定义 `ExtraKeys`（如 `app.request.id`、`user_id`）
 - **结构化日志**：`Infow` / `Warnw` / `Errorw` / … 以 kv 形式传字段
@@ -97,8 +97,8 @@ func main() {
 | --- | --- | --- |
 | `Type` | `console` / `file` | — |
 | `Level` | 该 writer 独立级别，为空继承 `LogConfig.Level` | — |
-| `Dir` | 文件根目录，最终路径为 `<Dir>/<YYYYMMDD>/<name><suffix>.log` | `./logs` |
-| `FileName` | 文件名，为空用 `<Service>.log` | — |
+| `Dir` | 文件根目录，最终路径为 `<Dir>/<name><suffix>.log` | `./logs` |
+| `FileName` | 文件名，为空用 `<Service>.log`（多实例请带实例标识，见"部署建议"） | — |
 | `WfOnly` | `true` 时该 writer 只写 warn 及以上，文件后缀 `_wf`（`_full` 与 `_wf` 可同时配置） | `false` |
 | `MaxSize` / `MaxBackups` / `MaxAge` | 单文件大小(MB) / 保留份数 / 保留天数 | `100` / `10` / `7` |
 | `Compress` | 是否压缩历史文件 | `false` |
@@ -247,11 +247,40 @@ logger, err := glog.NewLogger(cfg,
 
   结论：不要让敏感字段以 `With()` 形式绑定；确需绑定时请在绑定前自行脱敏。
 
+- **多进程 / 多实例不要共享同一个日志文件**。文件滚动由 `lumberjack` 负责，它只保证
+  **单进程内**多 goroutine 并发写安全（内部有锁），**不保证跨进程安全**：多个进程各自持有
+  一个指向同一 `<Dir>/<FileName>` 的 writer 时，滚动会互相 `rename` / 覆盖，导致日志丢失。
+  实测 3 个进程各写 40 条、共享一个文件，盘上最终只剩约 50 条（应 120 条）。
+
+  这是 `lumberjack` 的固有限制，`glog` 不做跨进程协调（不引入文件锁）。需要多实例时请按
+  "部署建议"让每个实例写独立文件，或改走 console→采集器。
+
 - **`WithCallerSkip` 只影响 caller 定位**，与脱敏无关；封装层（如 dbaccess、ghttp）通过它把
   caller 修正到业务代码。
 - **`glog` 包级 `init()` 会尝试用默认配置建 logger**，但 driver 包依赖 `glog`，其 `init()`
   必然晚于 `glog` 的 `init()`，因此那一刻工厂尚未注册、全局 logger 仍为 nil，包级函数降级为
   nop；请显式调用 `InitLogger` 完成初始化。
+
+## 部署建议
+
+日志文件是**单实例单文件**的语义。`glog` 每个 file writer 都对应一个 `lumberjack.Logger`，
+它无法协调多个进程对同一文件的滚动。因此：
+
+- **单进程服务**：直接用默认 `<Dir>/<name><suffix>.log` 即可，无需任何额外配置。
+- **多副本 / 多实例共享同一日志目录**（如 K8s 多 Pod 挂同一 PVC、同一宿主多进程）：必须让
+  每个实例写**独立文件**，否则会丢日志（见"已知边界"）。两种做法：
+  1. **文件名带实例标识**：`FileName` 已支持任意字符串，业务侧拼入 pod 名 / hostname / pid：
+     ```go
+     Writers: []glog.WriterConfig{{
+         Type:     glog.WriterFile,
+         Dir:      "/var/log/app",
+         FileName: fmt.Sprintf("app-%s.log", os.Getenv("HOSTNAME")),
+     }}
+     ```
+  2. **每实例独立目录**：`Dir` 按实例区分，如 `/var/log/app/<pod-name>/`。
+- **云原生 / 多实例且不想管本地文件**：不要配 file writer，用 console writer 打到 stdout，
+  由容器运行时或节点 agent（Fluent Bit / Filebeat / Vector 等）统一收集、轮转、保留。
+  这是 12-Factor 推荐的"日志作为事件流"方式，天然规避多实例写同文件问题。
 
 ## 模块布局
 

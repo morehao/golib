@@ -319,8 +319,7 @@ func TestLogFieldsLandInFile(t *testing.T) {
 	_ = res.Close()
 
 	_ = logger.Close()
-	day := time.Now().Format("20060102")
-	raw, readErr := os.ReadFile(filepath.Join(dir, day, "grestylog_full.log"))
+	raw, readErr := os.ReadFile(filepath.Join(dir, "grestylog_full.log"))
 	require.NoError(t, readErr)
 	content := string(raw)
 
