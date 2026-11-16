@@ -62,10 +62,21 @@ func readSheet[T any](f *excelize.File, cfg readConfig, fn func(T) error) ([]Row
 	opts := excelize.Options{RawCellValue: cfg.rawCellValue}
 
 	rowNum := 0 // last read Excel row number (1-based).
-	var headerCells []string
 	var bindings []fieldBinding
 	var rowErrors []RowError
+	sawHeader := false
 	headerBuilt := false
+
+	buildNow := func(headerCells []string) error {
+		b, hErrs, err := buildBindings(schema, headerCells, cfg)
+		if err != nil {
+			return err
+		}
+		bindings = b
+		rowErrors = append(rowErrors, hErrs...)
+		headerBuilt = true
+		return nil
+	}
 
 	for rows.Next() {
 		cells, err := rows.Columns(opts)
@@ -78,17 +89,16 @@ func readSheet[T any](f *excelize.File, cfg readConfig, fn func(T) error) ([]Row
 			continue
 		}
 		if rowNum == cfg.headerRow {
-			headerCells = cells
+			sawHeader = true
+			if err := buildNow(cells); err != nil {
+				return rowErrors, err
+			}
 			continue
 		}
 		if !headerBuilt {
-			b, hErrs, err := buildBindings(schema, headerCells, cfg)
-			if err != nil {
-				return rowErrors, err
-			}
-			bindings = b
-			rowErrors = append(rowErrors, hErrs...)
-			headerBuilt = true
+			// No header row encountered (e.g. headerRow beyond data); treat the
+			// current cells as the header position is invalid.
+			return rowErrors, ErrHeaderOutOfRange
 		}
 		if rowNum < cfg.dataStartRow {
 			continue
@@ -135,7 +145,7 @@ func readSheet[T any](f *excelize.File, cfg readConfig, fn func(T) error) ([]Row
 	if err := rows.Error(); err != nil {
 		return rowErrors, err
 	}
-	if !headerBuilt {
+	if !sawHeader {
 		return rowErrors, ErrHeaderOutOfRange
 	}
 
