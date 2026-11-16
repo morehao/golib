@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.38.0] - 2026-11-16
+
+### ⚠️ Breaking Changes
+
+- **gexcel**: 重构为结构化编解码层并对齐 excelize v2.11.1 (#161)
+
+**Full Changelog**: https://github.com/morehao/golib/compare/v1.37.1...v1.38.0
+
 ## [Unreleased]
 
 ### 修复：gnotify/lark post 消息缺 "post" 包裹层
