@@ -1,11 +1,11 @@
 package gexcel
 
 const (
-	RowErrorCodeTypeMismatch   = "type_mismatch"
+	RowErrorCodeTypeMismatch    = "type_mismatch"
 	RowErrorCodeRequiredMissing = "required_missing"
-	// Deprecated: use RowErrorCodeRequiredMissing.
-	RowErrorCodeRequiredMiss   = RowErrorCodeRequiredMissing
-	RowErrorCodeColumnNotFound = "column_not_found"
+	RowErrorCodeColumnNotFound  = "column_not_found"
+	RowErrorCodeDuplicateColumn = "duplicate_column"
+	RowErrorCodeUnknownColumn   = "unknown_column"
 )
 
 type RowError struct {

@@ -1,20 +1,10 @@
 package gexcel
 
-type UnknownColumnPolicy string
-
-const (
-	UnknownColumnPolicyIgnore UnknownColumnPolicy = "ignore"
-	UnknownColumnPolicyError  UnknownColumnPolicy = "error"
-)
-
 type readConfig struct {
-	sheet               string
-	headerRow           int // 1-based row number in Excel.
-	dataStartRow        int // 1-based row number in Excel.
-	strictHeader        bool
-	unknownColumnPolicy UnknownColumnPolicy
-	requiredColumns     []string
-	columns             []string
+	sheet        string
+	headerRow    int // 1-based row number in Excel.
+	dataStartRow int // 1-based row number in Excel.
+	strictHeader bool
 }
 
 type writeConfig struct {
@@ -29,10 +19,9 @@ type WriteOption func(*writeConfig)
 
 func defaultReadConfig() readConfig {
 	return readConfig{
-		sheet:               "Sheet1",
-		headerRow:           1,
-		dataStartRow:        2,
-		unknownColumnPolicy: UnknownColumnPolicyIgnore,
+		sheet:        "Sheet1",
+		headerRow:    1,
+		dataStartRow: 2,
 	}
 }
 
@@ -79,24 +68,6 @@ func WithDataStartRow(row int) ReadOption {
 func WithStrictHeader(strict bool) ReadOption {
 	return func(cfg *readConfig) {
 		cfg.strictHeader = strict
-	}
-}
-
-func WithUnknownColumnPolicy(policy UnknownColumnPolicy) ReadOption {
-	return func(cfg *readConfig) {
-		cfg.unknownColumnPolicy = policy
-	}
-}
-
-func WithRequiredColumns(columns ...string) ReadOption {
-	return func(cfg *readConfig) {
-		cfg.requiredColumns = append([]string(nil), columns...)
-	}
-}
-
-func WithReadColumns(columns ...string) ReadOption {
-	return func(cfg *readConfig) {
-		cfg.columns = append([]string(nil), columns...)
 	}
 }
 
