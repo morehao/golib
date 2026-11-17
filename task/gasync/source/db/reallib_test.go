@@ -89,9 +89,10 @@ func seedAsyncTasks(t *testing.T, db *gorm.DB, taskType string, n int) {
 
 // TestRealA1ConcurrentClaim 多 goroutine / 多连接并发认领，断言无同一 asyncTask 被两次认领
 // （attempt 求和 == 认领次数 == 任务数；每行 attempt==1 且只被一个 worker 持有）。
+// 真库用例一律拆成子测试：MySQL 不可用时只跳过自己，不会连带跳过 PostgreSQL。
 func TestRealA1ConcurrentClaim(t *testing.T) {
-	runA1(t, realMySQLDB(t), DialectMySQL, "invoice")
-	runA1(t, realPGDB(t), DialectPostgres, "invoice")
+	t.Run("mysql", func(t *testing.T) { runA1(t, realMySQLDB(t), DialectMySQL, "invoice") })
+	t.Run("postgres", func(t *testing.T) { runA1(t, realPGDB(t), DialectPostgres, "invoice") })
 }
 
 func runA1(t *testing.T, db *gorm.DB, dialect Dialect, taskType string) {
@@ -158,8 +159,8 @@ func runA1(t *testing.T, db *gorm.DB, dialect Dialect, taskType string) {
 
 // TestRealA2LeaseTakeover 认领后手工把 lease_until 改到过去，另一认领能接管，attempt+1。
 func TestRealA2LeaseTakeover(t *testing.T) {
-	runA2(t, realMySQLDB(t), DialectMySQL)
-	runA2(t, realPGDB(t), DialectPostgres)
+	t.Run("mysql", func(t *testing.T) { runA2(t, realMySQLDB(t), DialectMySQL) })
+	t.Run("postgres", func(t *testing.T) { runA2(t, realPGDB(t), DialectPostgres) })
 }
 
 func runA2(t *testing.T, db *gorm.DB, dialect Dialect) {
@@ -202,8 +203,8 @@ func runA2(t *testing.T, db *gorm.DB, dialect Dialect) {
 
 // TestRealA8Explain 两支认领 SQL 的 EXPLAIN 命中预期索引、rows examined ≈ 候选数。
 func TestRealA8Explain(t *testing.T) {
-	runA8MySQL(t, realMySQLDB(t))
-	runA8PG(t, realPGDB(t))
+	t.Run("mysql", func(t *testing.T) { runA8MySQL(t, realMySQLDB(t)) })
+	t.Run("postgres", func(t *testing.T) { runA8PG(t, realPGDB(t)) })
 }
 
 func runA8MySQL(t *testing.T, db *gorm.DB) {
@@ -346,3 +347,97 @@ func seedHeavyPG(t *testing.T, db *gorm.DB, total, due int) {
 }
 
 var _ = gasync.ErrNoAsyncTask
+
+// TestRealSaveHookAndStatus 真库覆盖 Save 主路径（此前只有 SQLite 跑过 Save，
+// MySQL 的 ON CONFLICT 语法错误因此漏网）：认领 → 事务内钩子 → 终态 + 尝试行。
+func TestRealSaveHookAndStatus(t *testing.T) {
+	t.Run("mysql", func(t *testing.T) { runSavePath(t, realMySQLDB(t), DialectMySQL) })
+	t.Run("postgres", func(t *testing.T) { runSavePath(t, realPGDB(t), DialectPostgres) })
+}
+
+func runSavePath(t *testing.T, db *gorm.DB, dialect Dialect) {
+	t.Helper()
+	resetRealDB(t, db)
+	seedAsyncTasks(t, db, "savepath", 1)
+	ctx := context.Background()
+	src, err := New(Config{DB: db, WorkerID: "w-save", LeaseTTL: 60 * time.Second})
+	if err != nil {
+		t.Fatalf("[%s] new source: %v", dialect, err)
+	}
+	task, err := src.Fetch(ctx, "savepath")
+	if err != nil {
+		t.Fatalf("[%s] fetch: %v", dialect, err)
+	}
+	hookCalled := false
+	err = src.Save(ctx, task, gasync.Result{Outcome: gasync.OutcomeSucceeded, Duration: 5 * time.Millisecond},
+		func(hctx context.Context) error {
+			hookCalled = true
+			tx, ok := gasync.TxFromContext(hctx).(*gorm.DB)
+			if !ok || tx == nil {
+				t.Fatalf("[%s] 本地形态钩子应拿到事务", dialect)
+			}
+			// 用 trace_id 当「副作用标记」：result 列会被终态更新按 handler payload 覆盖。
+			return tx.Exec(`UPDATE core_async_task SET trace_id = 'hook-ok' WHERE id = ?`, task.ID).Error
+		})
+	if err != nil {
+		t.Fatalf("[%s] save: %v", dialect, err)
+	}
+	if !hookCalled {
+		t.Fatalf("[%s] hook not called", dialect)
+	}
+	var row CoreAsyncTask
+	if err := db.Where("id = ?", task.ID).Take(&row).Error; err != nil {
+		t.Fatalf("[%s] load: %v", dialect, err)
+	}
+	if row.Status != string(gasync.StatusSucceeded) {
+		t.Fatalf("[%s] status = %q, want succeeded", dialect, row.Status)
+	}
+	if row.TraceID != "hook-ok" {
+		t.Fatalf("[%s] 钩子的事务内写入应同事务提交，trace_id=%q", dialect, row.TraceID)
+	}
+	var run CoreAsyncTaskRun
+	if err := db.Where("async_task_id = ? AND generation = ? AND attempt = ?", task.ID, 1, 1).Take(&run).Error; err != nil {
+		t.Fatalf("[%s] run row: %v", dialect, err)
+	}
+	if run.Status != string(gasync.StatusSucceeded) {
+		t.Fatalf("[%s] run status = %q, want succeeded", dialect, run.Status)
+	}
+	if run.FinishedAt == nil || run.StartedAt.IsZero() {
+		t.Fatalf("[%s] run 起止时间未写全: started=%v finished=%v", dialect, run.StartedAt, run.FinishedAt)
+	}
+}
+
+// TestRealLabelsFilter 真库覆盖 labels 过滤（PostgreSQL 的 text->> 曾直接报错）。
+func TestRealLabelsFilter(t *testing.T) {
+	t.Run("mysql", func(t *testing.T) { runLabelsFilter(t, realMySQLDB(t), DialectMySQL) })
+	t.Run("postgres", func(t *testing.T) { runLabelsFilter(t, realPGDB(t), DialectPostgres) })
+}
+
+func runLabelsFilter(t *testing.T, db *gorm.DB, dialect Dialect) {
+	t.Helper()
+	resetRealDB(t, db)
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		row := &CoreAsyncTask{
+			ID: genUUID(), CreatedAt: now, UpdatedAt: now, TaskType: "labels",
+			Status: "pending", Generation: 1, MaxAttempts: 3, NextRunAt: now.Add(-time.Minute),
+			Labels: `{"app_group":"g0"}`, // 注意：列是 text，PG 侧必须 ::jsonb 才能 ->> 取值
+		}
+		if i == 2 {
+			row.Labels = `` // 空串必须被安全跳过（非法 JSON）
+		}
+		if err := db.Create(row).Error; err != nil {
+			t.Fatalf("[%s] seed: %v", dialect, err)
+		}
+	}
+	s := newStore(db, dialect, time.Minute)
+	rows, total, err := s.ListAsyncTask(context.Background(), &gasync.AsyncTaskCond{
+		Labels: map[string]string{"app_group": "g0"},
+	})
+	if err != nil {
+		t.Fatalf("[%s] ListAsyncTask(labels) err = %v", dialect, err)
+	}
+	if total != 2 || len(rows) != 2 {
+		t.Fatalf("[%s] labels 过滤 total=%d rows=%d, want 2", dialect, total, len(rows))
+	}
+}

@@ -417,17 +417,18 @@ err = elector.Run(ctx, distlock.Callbacks{
 
 ### 子组件
 - **gcron**: 定时任务，基于 `robfig/cron/v3`，支持秒级 cron、多实例分布式锁互斥、执行记录落库
-- **gasync**: 异步任务，基于 `hibiken/asynq`，支持重试、超时、延迟、优先级队列、执行记录落库、跨进程 trace 传递
+- **gasync**: 有状态任务中心：按类型注册 handler，任务可查状态 / 取消 / 重放，保留每次尝试记录，租约保证跨实例不重复执行；支持纯轮询 / 轮询+通知器两种唤醒形态与远程 HTTP Source
 
 ### 特性
 - 秒级 cron 表达式与自定义时区
 - 多实例分布式锁互斥（可自动续期；锁丢失会取消 handler 并记为 `lock_lost`）
 - 任务级执行超时与同实例防重叠（gcron）
-- 重试、超时、保留时长、多队列优先级
+- 重试、超时、保留时长、优先级
 - 执行记录自动落库（重启后重新注册幂等；重新注册**不覆盖**既有 `status`，运营侧 `Disable` 不会被重启抹掉）
 - 可选内置崩溃兜底与执行记录保留策略（`StaleRunningCutoff` / `RunRetention`，默认关闭）
 - 自动注入 TraceID、RequestID、RunID 与日志（字符串主键即任务/运行唯一标识）
 - 跨进程 trace 传递
+- gasync：执行期按 `LeaseTTL/3` 续租、停机用 `Release` 放租约，`manager.Start` 可启动维护循环（回收卡死任务 + 按 `Retention` 清理终态记录）
 
 ### 使用
 使用示例参照 [task 使用说明](task/README.md)

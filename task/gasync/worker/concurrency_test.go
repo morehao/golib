@@ -23,9 +23,9 @@ func TestWorker_PerTypeConcurrency(t *testing.T) {
 		max int32
 	}
 	peaks := map[string]*peak{
-		"typeA": {},
-		"typeB": {},
-		"typeC": {},
+		"typeA":  {},
+		"typeB":  {},
+		"typeC":  {},
 		"typeC2": {},
 	}
 	_ = peaks
@@ -114,4 +114,3 @@ func TestWithHandlerConcurrency_NonPositiveFallsBack(t *testing.T) {
 	_ = src
 	_ = w
 }
-

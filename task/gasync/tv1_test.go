@@ -475,10 +475,14 @@ func (h *txProbeHandler) OnSuccess(ctx context.Context, t *gasync.AsyncTask) err
 
 // asLifecycle 要求 Lifecycle 接口方法齐全，缺一即退化为「无钩子」，
 // 因此这里补齐其余 4 个方法（空实现）。
-func (h *txProbeHandler) BeforeExecute(ctx context.Context, t *gasync.AsyncTask) error          { return nil }
-func (h *txProbeHandler) OnRetry(ctx context.Context, t *gasync.AsyncTask, cause error) error   { return nil }
-func (h *txProbeHandler) OnFailure(ctx context.Context, t *gasync.AsyncTask, cause error) error { return nil }
-func (h *txProbeHandler) OnCanceled(ctx context.Context, t *gasync.AsyncTask) error             { return nil }
+func (h *txProbeHandler) BeforeExecute(ctx context.Context, t *gasync.AsyncTask) error { return nil }
+func (h *txProbeHandler) OnRetry(ctx context.Context, t *gasync.AsyncTask, cause error) error {
+	return nil
+}
+func (h *txProbeHandler) OnFailure(ctx context.Context, t *gasync.AsyncTask, cause error) error {
+	return nil
+}
+func (h *txProbeHandler) OnCanceled(ctx context.Context, t *gasync.AsyncTask) error { return nil }
 
 func waitExec(t *testing.T, h *txProbeHandler, want int, d time.Duration) {
 	t.Helper()

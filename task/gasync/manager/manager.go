@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/morehao/golib/task/gasync"
@@ -27,6 +28,11 @@ type Manager struct {
 	workerIDVal string
 	// gate 是本进程的类型级启停缓存适配器（TypeGate() 创建；Disable/Enable 后同步刷新）。
 	gate *TypeGateAdapter
+
+	// 后台维护循环（Start/Close 管理）：回收残留 running 行 + 清理过期终态记录。
+	maintMu     sync.Mutex
+	maintCancel context.CancelFunc
+	maintDone   chan struct{}
 }
 
 // New 构造任务中心。gormDB 必须是写主库；默认执行 AutoMigrate（WithoutAutoMigrate 关闭）。
@@ -56,10 +62,10 @@ func New(cfg *Config, gormDB *gorm.DB, opts ...Option) (*Manager, error) {
 	workerID := "manager-" + genUUID()
 
 	dbSrc, err := db.New(db.Config{
-		DB:       gormDB,
-		LeaseTTL: o.Config.LeaseTTL,
-		Backoff:  o.Config.Backoff,
-		WorkerID: workerID,
+		DB:            gormDB,
+		LeaseTTL:      o.Config.LeaseTTL,
+		Backoff:       o.Config.Backoff,
+		WorkerID:      workerID,
 		FailFastChain: o.Config.FailFastChain,
 	})
 	if err != nil {
@@ -156,6 +162,14 @@ func validateConfig(c *Config) error {
 //	submitted == true  => 新建了一条任务
 //	submitted == false => 命中既有 UniqKey，task 为既有任务（可能已是终态）
 func (c *Manager) Submit(ctx context.Context, spec *gasync.AsyncTaskSpec) (*gasync.AsyncTask, bool, error) {
+	return c.submit(ctx, spec, -1)
+}
+
+// submit 是 Submit 的内部实现；prevStep 为任务链前序步骤（-1 表示独立任务/首步）。
+//
+// prev_step 必须随 INSERT 一起落库：先插 -1 再 UPDATE 会留出「下一步绕过链守卫被提前认领」
+// 的窗口，且 UPDATE 失败时任务已投递、无法回滚。
+func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevStep int) (*gasync.AsyncTask, bool, error) {
 	if spec == nil || spec.Type == "" {
 		return nil, false, gasync.ErrEmptyType
 	}
@@ -163,7 +177,7 @@ func (c *Manager) Submit(ctx context.Context, spec *gasync.AsyncTaskSpec) (*gasy
 		return nil, false, gasync.ErrPayloadTooLarge
 	}
 
-	row, delayMs, err := c.buildSubmitRow(spec)
+	row, delayMs, err := c.buildSubmitRow(spec, prevStep)
 	if err != nil {
 		return nil, false, err
 	}
@@ -181,6 +195,10 @@ func (c *Manager) Submit(ctx context.Context, spec *gasync.AsyncTaskSpec) (*gasy
 		}
 	} else {
 		// 冲突：回查既有行；回查为空（并发提交者回滚/副本延迟）重试插入一次。
+		if row.UniqKey == nil {
+			// 没有幂等键却报冲突：只可能是主键撞车，无法回查。
+			return nil, false, gasync.ErrUniqKeyRace
+		}
 		asyncTask, err = c.findByUniqKey(ctx, *row.UniqKey)
 		if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
 			retried, rerr := c.insertAsyncTask(ctx, row, delayMs)
@@ -217,7 +235,7 @@ func (c *Manager) Submit(ctx context.Context, spec *gasync.AsyncTaskSpec) (*gasy
 }
 
 // buildSubmitRow 把 AsyncTaskSpec 转成待插入的 CoreAsyncTask 行（只写显式值，其余走列默认）。
-func (c *Manager) buildSubmitRow(spec *gasync.AsyncTaskSpec) (*db.CoreAsyncTask, int64 /*delayMs*/, error) {
+func (c *Manager) buildSubmitRow(spec *gasync.AsyncTaskSpec, prevStep int) (*db.CoreAsyncTask, int64 /*delayMs*/, error) {
 	now := timeNow()
 	row := &db.CoreAsyncTask{
 		ID:          genUUID(),
@@ -230,7 +248,7 @@ func (c *Manager) buildSubmitRow(spec *gasync.AsyncTaskSpec) (*db.CoreAsyncTask,
 		BizID:       spec.BizID,
 		ChainID:     spec.ChainID,
 		Step:        int32(spec.Step),
-		PrevStep:    -1, // 独立任务默认 -1；SubmitAfter 会覆盖
+		PrevStep:    int32(prevStep), // 默认 -1（独立任务）；SubmitAfter 传上游 step
 		Generation:  1,
 		Attempt:     0,
 		MaxAttempts: int32(c.resolveMaxAttempts(spec)),
@@ -336,19 +354,8 @@ func (c *Manager) SubmitAfter(ctx context.Context, upstreamID string, spec *gasy
 	merged.ChainID = chainID
 	merged.Step = up.Step + 1
 
-	asyncTask, submitted, err := c.Submit(ctx, &merged)
-	if err != nil {
-		return asyncTask, submitted, err
-	}
-	// Submit 已按独立任务写 prev_step=-1；这里回填本步的 prev_step=上游 step。
-	if submitted && asyncTask != nil {
-		if uerr := c.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
-			Where("id = ?", asyncTask.ID).Update("prev_step", up.Step).Error; uerr != nil {
-			return asyncTask, submitted, uerr
-		}
-		asyncTask.PrevStep = up.Step
-	}
-	return asyncTask, submitted, nil
+	// prev_step 与插入同一条语句落库：插入即可被认领，不能存在「先 -1 再改」的窗口。
+	return c.submit(ctx, &merged, up.Step)
 }
 
 // Get 按 ID 取任务。
@@ -390,7 +397,9 @@ func (c *Manager) Cancel(ctx context.Context, id string) (canceled bool, err err
 	}
 	// pending → 立即翻转 canceled；running → 同样置 canceled，执行侧靠续租发现失权。
 	now := c.dialect.NowValueExpr()
-	sql := fmt.Sprintf(`UPDATE %s SET status = 'canceled', finished_at = %s
+	// 清 worker_id/lease_until：否则执行侧晚到的 Save 仍能通过租约校验（清空后必然失权，
+	// Save 返回 ErrLeaseLost 且不跑钩子），判活查询也不会把已取消的任务算作在线。
+	sql := fmt.Sprintf(`UPDATE %s SET status = 'canceled', finished_at = %s, lease_until = NULL, worker_id = ''
 WHERE id = ? AND status IN ('pending','running')`, db.CoreAsyncTaskTableName, now)
 	res := c.db.WithContext(ctx).Exec(sql, id)
 	if res.Error != nil {
@@ -469,12 +478,100 @@ func (c *Manager) Store() Store { return c.dbSrc.Store() }
 // Mode 返回唤醒形态（poll / poll+notify），启动自检用。
 func (c *Manager) Mode() Mode { return c.mode }
 
-// Close 释放资源，可重复调用；未 Run 时安全，幂等返回 nil。
-func (c *Manager) Close() error { return nil }
+// Start 启动后台维护循环：按 Config.ReaperInterval 跑回收、按 CleanupInterval 跑清理。
+//
+// 幂等：已在运行时直接返回 nil。ctx 取消或 Close 后循环退出。
+// 不启动也能用（Submit/Fetch/... 都不依赖它），但此时回收与清理不会发生：
+// 「次数用尽后崩溃」的任务会永久停在 running，终态记录也不会按 Retention 清理。
+func (c *Manager) Start(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.maintMu.Lock()
+	defer c.maintMu.Unlock()
+	if c.maintCancel != nil {
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	c.maintCancel = cancel
+	c.maintDone = make(chan struct{})
+	go c.maintenanceLoop(runCtx, c.maintDone)
+	return nil
+}
 
-// workerID 返回本中心在认领时写入 worker_id 列的标识。默认用主机名+PID；
-// 无单独配置时用固定前缀，保证同一 manager 的续租条件能匹配自己写入的 worker_id。
-func (c *Manager) workerID() string { return c.workerIDVal }
+// maintenanceLoop 周期性回收 + 清理。启动时先跑一次回收，缩短进程重启后的卡死窗口。
+func (c *Manager) maintenanceLoop(ctx context.Context, done chan struct{}) {
+	defer close(done)
+
+	reapEvery := c.cfg.ReaperInterval
+	if reapEvery <= 0 {
+		reapEvery = 30 * time.Second
+	}
+	reapTicker := time.NewTicker(reapEvery)
+	defer reapTicker.Stop()
+
+	var cleanC <-chan time.Time
+	if c.cfg.CleanupInterval > 0 && c.cfg.Retention > 0 {
+		cleanTicker := time.NewTicker(c.cfg.CleanupInterval)
+		defer cleanTicker.Stop()
+		cleanC = cleanTicker.C
+	}
+
+	c.reapOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-reapTicker.C:
+			c.reapOnce(ctx)
+		case <-cleanC:
+			c.cleanupOnce(ctx)
+		}
+	}
+}
+
+// reapOnce 跑一次回收（收口残留尝试行 + 判死次数用尽）。
+//
+// 错误与处理行数不回传：后台循环没有调用方，处理量靠 Stats/日志观测；
+// 单次失败（如数据库抖动）下一轮自然重试。
+func (c *Manager) reapOnce(ctx context.Context) {
+	_, _, _ = c.dbSrc.Reap(ctx, c.maintenanceBatch())
+}
+
+// maintenanceBatch 返回维护循环单批行数（Config.BatchSize，<=0 取 200）。
+func (c *Manager) maintenanceBatch() int {
+	if c.cfg.BatchSize > 0 {
+		return c.cfg.BatchSize
+	}
+	return 200
+}
+
+// cleanupOnce 跑一次终态记录清理（finished_at 早于 now-Retention）。
+func (c *Manager) cleanupOnce(ctx context.Context) {
+	if c.cfg.Retention <= 0 {
+		return
+	}
+	before := timeNow().Add(-c.cfg.Retention)
+	_, _, _ = c.dbSrc.Store().Cleanup(ctx, before, c.maintenanceBatch())
+}
+
+// Close 停止后台维护循环并释放资源，可重复调用，幂等返回 nil。
+func (c *Manager) Close() error {
+	c.maintMu.Lock()
+	cancel := c.maintCancel
+	done := c.maintDone
+	c.maintCancel = nil
+	c.maintDone = nil
+	c.maintMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+	return nil
+}
 
 // isTerminal 判断状态是否为终态。
 func isTerminal(s gasync.Status) bool {

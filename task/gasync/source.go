@@ -7,16 +7,27 @@ import (
 
 // Source 决定任务从哪来、结果往哪去。Worker 只依赖它。
 //
-// 本地实现（manager）在事务内调用回调，TxFromContext 非 nil；
+// 本地实现（source/db）在事务内调用回调，TxFromContext 非 nil；
 // 远程实现（source/remote）只是回调，TxFromContext 为 nil。
+//
+// 所有权契约：Fetch 成功即表示「本次执行持有该任务的租约」，直到 Save/Release 之一被调用。
+//   - 执行期间应周期性 Renew（Worker 按 LeaseTTL/3 续租），续租失败返回 ErrLeaseLost，
+//     调用方应停止执行并放弃 Save 的业务钩子；
+//   - 主动放弃（停机、认领后无法交付）用 Release，让任务立即可被他人认领；
+//   - Save 在「已失权」时必须返回 ErrLeaseLost 且不得执行 callback（副作用与状态不可分裂）。
 type Source interface {
 	// Fetch 取一条待执行任务。无任务时返回 ErrNoAsyncTask（实现可短暂阻塞）。
 	Fetch(ctx context.Context, taskType string) (*AsyncTask, error)
-	// Renew 续租所有权。本地实现更新 lease_until；远程实现发心跳；队列实现可为空操作。
+	// Renew 续租所有权。返回 ErrLeaseLost 表示已失权（被接管/被取消/已终态），
+	// 调用方应立即取消执行 ctx；其它错误视为可重试的瞬时故障。
 	Renew(ctx context.Context, task *AsyncTask) error
+	// Release 主动放弃所有权（停机或认领后无法交付时用），之后任务应尽快可被他人认领。
+	// 语义上等价于「把租约置为已过期」；对不支持释放的实现可为空操作。
+	Release(ctx context.Context, task *AsyncTask) error
 	// Save 保存一次执行结果，并在合适的时机调用 callback
 	// （本地实现在事务内，远程实现在回传前或回传后，由其决定）。
 	// 结果如何流转（是否重试、下一次何时）由 Source 决定，不由 Worker 决定。
+	// 已失权时返回 ErrLeaseLost，且不得调用 callback。
 	Save(ctx context.Context, task *AsyncTask, r Result, callback EnsureFunc) error
 	// Close 释放连接（本地关 Store 引用，远程关 HTTP 连接）。
 	Close(ctx context.Context) error

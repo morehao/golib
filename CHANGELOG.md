@@ -18,6 +18,49 @@
 
 ## [Unreleased]
 
+### ⚠️ Breaking Changes（gasync）
+
+- **`gasync.Source` 新增 `Release(ctx, task) error`**：主动放弃所有权（停机 / 认领后无法交付时用），
+  语义是「把租约置为已过期」而不是续租。自定义 `Source` 实现需补该方法（`source/db`、`source/remote` 已实现）。
+- **移除 `worker.WithHandlerMaxAttempts` / `worker.WithHandlerBackoff`**：两者从未生效（`HandlerOption`
+  传不到 Source），保留只会让人以为配了就有用。每类型的尝试次数/退避请在 `AsyncTaskSpec`
+  或 `manager.Config` 上设置。
+- **`Manager.Start(ctx)` 成为回收/清理的开关**：以前 `ReaperInterval` / `CleanupInterval` / `Retention`
+  只存在于配置里、没有调用方。现在需要显式 `manager.Start(ctx)`（`Close` 停止）才会跑维护循环；
+  不启动的进程不会回收卡死任务、也不会清理终态记录。
+- **失权不再「静默成功」**：`Save` 在失去租约（被接管 / 被取消）时返回 `gasync.ErrLeaseLost`，
+  且**不执行业务钩子**（此前钩子照跑、事务照提交，副作用与状态分裂）。
+
+### Fixes（gasync）
+
+- **执行期续租**：worker 按 `LeaseTTL/3` 调 `Source.Renew`，续租失权立即取消执行 ctx；
+  此前完全不续租，超过 `LeaseTTL` 的任务会被第二个实例接管并双跑。
+- **停机改为放租约**：`Shutdown` 现在调 `Release`（此前调 `Renew`，等于把租约往后推一个 TTL，
+  接管反而被推迟）；停机导致的取消不再写成终态 `canceled`（那会吞掉剩余重试次数）。
+- **结果落库不再被停机打断**：`Save` 用 `context.WithoutCancel` 派生带超时的 ctx；
+  此前停机取消会让整个保存事务回滚、结果与钩子静默丢失。
+- **后台维护循环**：`manager.Start` 按 `ReaperInterval` 回收（收口残留尝试行、判死「次数用尽 + 租约过期」
+  的任务）、按 `CleanupInterval`/`Retention` 清理终态记录。此前这类任务会永久停在 `running`，
+  `uniq_key` 也永远不释放。
+- **每类型单点认领**：每类型只起 1 个 fetcher + N 个执行槽（先占槽再认领），空闲轮询不再随并发数放大。
+- **认领即建尝试行**：认领事务内写入本次 `running` 尝试行，`started_at` 是真实开始时间；
+  此前 `started_at` 与 `finished_at` 都是 Save 时刻（差值恒为 0）。
+- **方言修正**：`Save` 的尝试行写入改为「UPDATE + 缺失时 INSERT」，不再硬编码 `ON CONFLICT`（MySQL 8 不支持）；
+  PostgreSQL 的 `Labels` 过滤改为 `(labels::jsonb) ->> ?` 并跳过 NULL/空串（此前直接 `text ->>` 报错）；
+  `cancelDownstream` 改为先取 `chain_id` 再带参更新（MySQL 1093）；`Cleanup` 覆盖 `timeout` 终态并先锁行再删。
+- **守卫加强**：`finish/retry/renew` 都带上 `generation`/`attempt`，同进程共用 `worker_id` 时陈旧 goroutine
+  不能再改写别人正在跑的任务；认领翻转的 UPDATE 增加状态守卫。
+- **`SubmitAfter` 的 `prev_step` 与 INSERT 同语句落库**：消除「先写 -1 再 UPDATE」的提前执行窗口。
+- `Cancel` 一并清 `lease_until`/`worker_id`；判活查询在 SQLite 下用 `julianday` 比较；
+  Redis 心跳的 key 方案与查询侧对齐（此前上报的 key 任何查询都读不到）。
+- `AsyncTask.Bind` 对空 payload 返回 nil（此前返回 `unexpected end of JSON input`，
+  无入参任务会被当成参数非法而 `ErrNoRetry`）。
+
+### Docs
+
+- `task/README.md` / `README.zh.md` 更新 gasync 段：移除 asynq 时代描述、`Job`/`JobCond`/`ginjob`/`core_job_type`
+  等旧 API，补 `manager.Start`、续租与 `Release` 语义；`task/gasync/README.md` 同步。
+
 ### Features
 
 - **gnotify/lark**: 新增 `interactive` 互动卡片消息类型，正文按 Markdown 渲染

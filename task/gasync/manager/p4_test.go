@@ -12,7 +12,8 @@ import (
 func TestP4_TimeoutStatus(t *testing.T) {
 	m := newChainTestManager(t, nil)
 	ctx := context.Background()
-	j, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t"})
+	// MaxAttempts=1：本次失败即终态（超时应落 StatusTimeout）。
+	j, _, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "t", MaxAttempts: 1})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -22,7 +23,6 @@ func TestP4_TimeoutStatus(t *testing.T) {
 		t.Fatalf("fetch: %v", err)
 	}
 	_ = j
-	claimed.Attempt = claimed.MaxAttempts
 	if err := m.dbSrc.Save(ctx, claimed, gasync.Result{
 		Outcome: gasync.OutcomeFailed,
 		Failure: gasync.FailureTimeout,

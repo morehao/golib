@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/morehao/golib/task/gasync"
@@ -46,16 +47,12 @@ var (
 //
 // 说明：「失败是否可重试」最终由 Source 判定（次数是否用尽、ErrNoRetry 等）。worker 只能
 // 基于错误语义给出初判：ErrNoRetry / panic 视为不可重试（选 OnFailure），timeout /
-// handler_error 视为可重试（选 OnRetry）。Source 在事务内调用该回调完成状态与钩子的同步落库。
-func (w *Worker) buildCallback(task *gasync.AsyncTask, outcome gasync.Outcome, kind gasync.FailureKind, cause error) gasync.EnsureFunc {
+// handler_error 视为可重试（选 OnRetry）。Source 在事务内、且仅在仍持有时调用该回调。
+func (w *Worker) buildCallback(h Handler, task *gasync.AsyncTask, outcome gasync.Outcome, kind gasync.FailureKind, cause error) gasync.EnsureFunc {
 	if outcome == gasync.OutcomeSkipped {
 		return nil
 	}
-	entry := w.handlers[task.Type]
-	if entry == nil {
-		return nil
-	}
-	lc := asLifecycle(entry.handler)
+	lc := asLifecycle(h)
 	if lc == nil {
 		return nil
 	}
@@ -66,22 +63,14 @@ func (w *Worker) buildCallback(task *gasync.AsyncTask, outcome gasync.Outcome, k
 	case gasync.OutcomeCanceled:
 		return func(ctx context.Context) error { return lc.OnCanceled(ctx, task) }
 	case gasync.OutcomeFailed:
-		// 失败能否重试：panic / ErrNoRetry 一律不可重试；其余按「剩余次数」初判。
+		// 失败能否重试：panic / ErrNoRetry / 次数用尽一律不可重试；其余选 OnRetry。
 		// 最终是否重试仍由 Source 判定，这里只决定 worker 交给 Source 的默认回调。
-		if kind == gasync.FailurePanic || errors.Is(cause, ErrNoRetry) || !hasRemainingAttempts(task) {
+		if kind == gasync.FailurePanic || errors.Is(cause, ErrNoRetry) || !task.HasRemainingAttempts() {
 			return func(ctx context.Context) error { return lc.OnFailure(ctx, task, cause) }
 		}
 		return func(ctx context.Context) error { return lc.OnRetry(ctx, task, cause) }
 	}
 	return nil
-}
-
-// hasRemainingAttempts 判断任务是否还有剩余重试次数（MaxAttempts<=0 视为不设上限）。
-func hasRemainingAttempts(task *gasync.AsyncTask) bool {
-	if task.MaxAttempts <= 0 {
-		return true
-	}
-	return task.Attempt < task.MaxAttempts
 }
 
 // asLifecycle 把 Handler 收敛成可选钩子：未实现 Lifecycle 时返回 nil。
@@ -92,26 +81,34 @@ func asLifecycle(h Handler) Lifecycle {
 	return nil
 }
 
-// process 处理单条任务：BeforeExecute → Execute（带超时/recover）→ 分类 → Save。
+// process 处理单条任务：BeforeExecute → Execute（带超时/续租/recover）→ 分类 → Save。
 func (w *Worker) process(taskType string, task *gasync.AsyncTask) {
 	start := time.Now()
 	if task.Type == "" {
 		task.Type = taskType
 	}
-	w.emit("started", task, 0, 0, nil)
+	h := w.handlerFor(taskType, task)
+	if h == nil {
+		// 未注册类型不该被认领到；防御性放租约，避免占着不放。
+		w.logger.Errorw(w.baseCtx, "gasync worker handler missing", "task_type", taskType, "async_task_id", task.ID)
+		w.releaseTask(task)
+		return
+	}
+	attempt := task.Attempt
+	w.emit("started", task, attempt, 0, nil)
 
-	lc := asLifecycle(w.handlers[taskType].handler)
+	lc := asLifecycle(h)
 
 	// BeforeExecute 不在事务内；返回 ErrSkip 时写 skipped，无回调。
 	if lc != nil {
 		if err := lc.BeforeExecute(w.baseCtx, task); err != nil {
 			if errors.Is(err, ErrSkip) {
-				w.save(task, gasync.Result{
+				w.saveResult(task, gasync.Result{
 					Outcome:  gasync.OutcomeSkipped,
 					Failure:  gasync.FailureSkipped,
 					Duration: time.Since(start),
 				}, nil)
-				w.emit("skipped", task, 0, time.Since(start), nil)
+				w.emit("skipped", task, attempt, time.Since(start), nil)
 				return
 			}
 			// BeforeExecute 的其它错误按 handler_error 失败处理（按 outcome 走失败链路）。
@@ -121,38 +118,53 @@ func (w *Worker) process(taskType string, task *gasync.AsyncTask) {
 				Err:      err,
 				Duration: time.Since(start),
 			}
-			w.save(task, res, w.buildCallback(task, res.Outcome, res.Failure, err))
-			w.emit("failed", task, 0, time.Since(start), err)
+			w.saveResult(task, res, w.buildCallback(h, task, res.Outcome, res.Failure, err))
+			w.emit("failed", task, attempt, time.Since(start), err)
 			return
 		}
 	}
 
-	timeout := w.execTimeout(task)
-	execCtx, cancel := context.WithTimeout(w.baseCtx, timeout)
+	// execCtx 是本次执行的取消源：超时、停机、续租失权都通过它传递。
+	execCtx, cancelExec := context.WithCancel(w.baseCtx)
+	defer cancelExec()
 
-	payload, err, panicked := safeExecute(execCtx, w.handlers[taskType].handler, task)
-	cancel()
+	var leaseLost atomic.Bool
+	stopRenew := w.startRenew(execCtx, func() {
+		leaseLost.Store(true)
+		cancelExec()
+	}, task)
+	defer stopRenew()
+
+	timeout := w.execTimeout(task)
+	execCtx, cancelTimeout := context.WithTimeout(execCtx, timeout)
+
+	_, err, panicked := safeExecute(execCtx, h, task)
+	// 必须在 cancel 之前读：cancel 之后 Err() 恒为 Canceled，超时会被误判。
+	execErr := execCtx.Err()
+	cancelTimeout()
+	cancelExec()
 
 	res := gasync.Result{
-		Payload:  payload,
 		Duration: time.Since(start),
 		Err:      err,
 	}
-
 	switch {
 	case panicked:
 		res.Outcome = gasync.OutcomeFailed
 		res.Failure = gasync.FailurePanic
+	case leaseLost.Load():
+		res.Outcome = gasync.OutcomeCanceled
+		res.Failure = gasync.FailureLeaseExpired
 	case err == nil:
 		res.Outcome = gasync.OutcomeSucceeded
 	case errors.Is(err, ErrNoRetry):
 		res.Outcome = gasync.OutcomeFailed
 		res.Failure = gasync.FailureHandler
-	case execCtxErrDeadline(execCtx, err):
+	case execErr == context.DeadlineExceeded || errors.Is(err, context.DeadlineExceeded):
 		res.Outcome = gasync.OutcomeFailed
 		res.Failure = gasync.FailureTimeout
-	case w.baseCtx.Err() != nil && execCtx.Err() != context.DeadlineExceeded:
-		// 执行期间被停机/取消。
+	case w.baseCtx.Err() != nil:
+		// 执行期间被停机/调用方取消（超时已在上一支排除）。
 		res.Outcome = gasync.OutcomeCanceled
 		res.Failure = gasync.FailureCanceled
 	default:
@@ -160,25 +172,79 @@ func (w *Worker) process(taskType string, task *gasync.AsyncTask) {
 		res.Failure = gasync.FailureHandler
 	}
 
-	cb := w.buildCallback(task, res.Outcome, res.Failure, err)
-	w.save(task, res, cb)
+	// 失权：本次结果已无意义（接管者在跑），不写终态、也不跑业务钩子。
+	if leaseLost.Load() {
+		w.logger.Warnw(w.baseCtx, "gasync worker task lost lease, result dropped",
+			"task_type", task.Type, "async_task_id", task.ID, "attempt", attempt)
+		w.emit("lease_lost", task, attempt, res.Duration, err)
+		return
+	}
+
+	// 停机导致的取消：不写终态（否则吞掉剩余重试次数），放租约让别的实例重跑。
+	if res.Outcome == gasync.OutcomeCanceled && w.fetchStop.Load() {
+		w.releaseTask(task)
+		w.emit("released", task, attempt, res.Duration, err)
+		return
+	}
+
+	w.saveResult(task, res, w.buildCallback(h, task, res.Outcome, res.Failure, err))
 
 	switch res.Outcome {
 	case gasync.OutcomeSucceeded:
-		w.emit("succeeded", task, 0, res.Duration, nil)
+		w.emit("succeeded", task, attempt, res.Duration, nil)
 	case gasync.OutcomeCanceled:
-		w.emit("canceled", task, 0, res.Duration, err)
+		w.emit("canceled", task, attempt, res.Duration, err)
 	default:
-		w.emit("failed", task, 0, res.Duration, err)
+		w.emit("failed", task, attempt, res.Duration, err)
 	}
 }
 
-// execCtxErrDeadline 判断是否因 ctx 超时而失败。
-func execCtxErrDeadline(execCtx context.Context, err error) bool {
-	if err != nil && errors.Is(err, context.DeadlineExceeded) {
-		return true
+// startRenew 在任务执行期间周期性续租，返回停止函数。
+//
+// 段内任一「连续失败达阈值」或「明确失权（ErrLeaseLost）」即回调 onLost，
+// 由调用方取消执行 ctx。执行耗时短于一个续租周期时不会发起任何续租。
+func (w *Worker) startRenew(execCtx context.Context, onLost func(), task *gasync.AsyncTask) func() {
+	interval := w.cfg.LeaseTTL / 3
+	if interval <= 0 {
+		return func() {}
 	}
-	return execCtx.Err() == context.DeadlineExceeded && err != nil
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		fails := 0
+		for {
+			select {
+			case <-done:
+				return
+			case <-execCtx.Done():
+				return
+			case <-ticker.C:
+				rctx, cancel := context.WithTimeout(context.WithoutCancel(execCtx), interval)
+				err := w.src.Renew(rctx, task)
+				cancel()
+				if err == nil {
+					fails = 0
+					continue
+				}
+				if errors.Is(err, gasync.ErrLeaseLost) {
+					w.logger.Warnw(execCtx, "gasync worker renew found lease lost",
+						"task_type", task.Type, "async_task_id", task.ID)
+					onLost()
+					return
+				}
+				fails++
+				w.logger.Warnw(execCtx, "gasync worker renew failed",
+					"task_type", task.Type, "async_task_id", task.ID,
+					"consecutive_failures", fails, "error", err)
+				if fails >= renewMaxConsecutiveFailures {
+					onLost()
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // execTimeout 解析本次执行超时：任务显式 Timeout > HandlerOption > 默认 30s。
@@ -186,10 +252,30 @@ func (w *Worker) execTimeout(task *gasync.AsyncTask) time.Duration {
 	if task.Timeout > 0 {
 		return task.Timeout
 	}
-	if e := w.handlers[task.Type]; e != nil && e.opts.timeout > 0 {
+	if e := w.entryFor(task.Type); e != nil && e.opts.timeout > 0 {
 		return e.opts.timeout
 	}
 	return 30 * time.Second
+}
+
+// handlerFor 返回该任务类型的处理器（注册后不再变更，读取无需加锁）。
+func (w *Worker) handlerFor(taskType string, task *gasync.AsyncTask) Handler {
+	if e := w.entryFor(taskType); e != nil {
+		return e.handler
+	}
+	if task != nil {
+		if e := w.entryFor(task.Type); e != nil {
+			return e.handler
+		}
+	}
+	return nil
+}
+
+func (w *Worker) entryFor(taskType string) *handlerEntry {
+	if taskType == "" {
+		return nil
+	}
+	return w.handlers[taskType]
 }
 
 // safeExecute 调 Execute，用 recover 捕获 panic；返回 (payload, err, panicked)。
@@ -226,10 +312,18 @@ func topStackFrame(stack []byte) string {
 	return strings.Join(out, "\n")
 }
 
-// save 调 src.Save；错误仅记日志（Source 负责重建/兜底，worker 不重试 Save）。
-func (w *Worker) save(task *gasync.AsyncTask, res gasync.Result, cb gasync.EnsureFunc) {
-	if err := w.src.Save(w.baseCtx, task, res, cb); err != nil {
-		w.logger.Errorw(w.baseCtx, "gasync worker save error",
+// saveResult 调 src.Save。ctx 与执行期上下文解耦（否则停机取消会让整个保存回滚），
+// 但带独立超时，避免 Save 卡死拖住停机。
+func (w *Worker) saveResult(task *gasync.AsyncTask, res gasync.Result, cb gasync.EnsureFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(w.baseCtx), w.cfg.ShutdownTimeout)
+	defer cancel()
+	if err := w.src.Save(ctx, task, res, cb); err != nil {
+		if errors.Is(err, gasync.ErrLeaseLost) {
+			w.logger.Warnw(ctx, "gasync worker save skipped: lease lost",
+				"task_type", task.Type, "async_task_id", task.ID, "outcome", res.Outcome)
+			return
+		}
+		w.logger.Errorw(ctx, "gasync worker save error",
 			"task_type", task.Type, "async_task_id", task.ID, "outcome", res.Outcome, "error", err)
 	}
 }
@@ -239,12 +333,12 @@ func (w *Worker) emit(typ string, task *gasync.AsyncTask, attempt int, d time.Du
 		return
 	}
 	w.cfg.EventHandler(Event{
-		Type:     typ,
-		AsyncTaskID:    task.ID,
-		TaskType: task.Type,
-		WorkerID: w.cfg.WorkerID,
-		Attempt:  attempt,
-		Duration: d,
-		Err:      err,
+		Type:        typ,
+		AsyncTaskID: task.ID,
+		TaskType:    task.Type,
+		WorkerID:    w.cfg.WorkerID,
+		Attempt:     attempt,
+		Duration:    d,
+		Err:         err,
 	})
 }

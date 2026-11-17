@@ -113,6 +113,19 @@ func (d Dialect) colLT(col string) string {
 	}
 }
 
+// colGT 返回「列 col > now」的布尔表达式（判活：lease_until > now）。
+//
+// SQLite 下必须两侧都 julianday 化：lease_until 是 RFC3339 文本、'T' > ' '，
+// 直接文本比较会与时间无关地恒真。
+func (d Dialect) colGT(col string) string {
+	switch d {
+	case DialectSQLite:
+		return fmt.Sprintf("julianday(%s) > julianday('now')", col)
+	default:
+		return fmt.Sprintf("%s > %s", col, d.nowExpr())
+	}
+}
+
 // colLEAfter 返回「列 col <= now - dur」的布尔表达式（清理：finished_at < now-Retention）。
 // 参数由调用方按 afterArg 的负数形式传入。
 func (d Dialect) colLTBefore(col string) string {
@@ -207,6 +220,19 @@ func (d Dialect) claimLockClause() string {
 	}
 }
 
+// rowLockClause 返回「按主键锁住这一行」的子句（不加 SKIP LOCKED）。
+//
+// 用于 Save 在读-判-写之间锁住任务行：先确认仍持有租约，再跑业务钩子，
+// 避免「守卫判定与钩子执行之间被接管」。
+func (d Dialect) rowLockClause() string {
+	switch d {
+	case DialectMySQL, DialectPostgres:
+		return " FOR UPDATE"
+	default:
+		return ""
+	}
+}
+
 // emptyKeyExpr 返回「空串归一为 NULL」的表达式，用于 uniq_key 写入。
 //
 // 直接写空串会让唯一索引把所有「不带幂等键」的任务视作同一个键，
@@ -284,16 +310,23 @@ func (d Dialect) EmptyKeyExpr() string { return d.emptyKeyExpr() }
 // InsertIgnoreClause 返回「冲突忽略」插入的前后缀（导出包装，见 insertIgnoreClause）。
 func (d Dialect) InsertIgnoreClause() (prefix, suffix string) { return d.insertIgnoreClause() }
 
+// ColGT 返回「列 col > now」的布尔表达式（导出包装，见 colGT）。
+func (d Dialect) ColGT(col string) string { return d.colGT(col) }
+
 // jsonExtract 返回「按 key 精确匹配 value」的 WHERE 片段与参数（按方言）。
 // MySQL: JSON_UNQUOTE(JSON_EXTRACT(col,'$.k')) = ?；Postgres: col->>'k' = ?；
 // SQLite: json_extract(col,'$.k') = ?。key 由调用方保证为合法标识符（本包仅用于业务 label 名）。
 func (d Dialect) jsonExtract(col, key, val string) (string, []any) {
+	// labels 列是 text：PG 必须显式转 jsonb（text 没有 ->> 运算符），
+	// 且三方言都要先排除 NULL/空串（空串不是合法 JSON，MySQL/SQLite 的
+	// JSON_EXTRACT / json_extract 会直接报错）。
+	guard := fmt.Sprintf("%s IS NOT NULL AND %s <> ''", col, col)
 	switch d {
 	case DialectPostgres:
-		return fmt.Sprintf("%s->>? = ?", col), []any{key, val}
+		return fmt.Sprintf("%s AND (%s::jsonb) ->> ? = ?", guard, col), []any{key, val}
 	case DialectMySQL:
-		return fmt.Sprintf("JSON_UNQUOTE(JSON_EXTRACT(%s, ?)) = ?", col), []any{"$." + key, val}
+		return fmt.Sprintf("%s AND JSON_UNQUOTE(JSON_EXTRACT(%s, ?)) = ?", guard, col), []any{"$." + key, val}
 	default: // sqlite
-		return fmt.Sprintf("json_extract(%s, ?) = ?", col), []any{"$." + key, val}
+		return fmt.Sprintf("%s AND json_extract(%s, ?) = ?", guard, col), []any{"$." + key, val}
 	}
 }

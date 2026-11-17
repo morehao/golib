@@ -457,19 +457,20 @@ For usage examples, refer to [gtrace usage](gtrace/README.md)
 ## task
 
 ### Overview
-`task` is a task scheduling component package containing cron and async task sub-packages, both persisting execution records via GORM and integrating glog logging and gtrace distributed tracing.
+`task` is a task scheduling component package containing cron and stateful async task sub-packages, both persisting execution records via GORM and integrating glog logging and gtrace distributed tracing.
 
 ### Sub-components
 - **gcron**: Cron tasks, based on `robfig/cron/v3`, supporting second-level cron, multi-instance distributed lock mutual exclusion, and execution record persistence
-- **gasync**: Async tasks, based on `hibiken/asynq`, supporting retry, timeout, delay, priority queues, execution record persistence, and cross-process trace propagation
+- **gasync**: Stateful async task center: per-type handlers, status/cancel/replay, per-attempt records, lease-based single-execution across instances, poll / poll+notifier wake-ups, and a remote HTTP source
 
 ### Features
 - Second-level cron expressions and custom timezone
 - Multi-instance distributed lock mutual exclusion (with optional auto-renewal; lock loss cancels the handler and records `lock_lost`)
 - Per-task execution timeout and in-process overlap prevention (gcron)
-- Retry, timeout, retention, and multi-queue priority
+- Retry, timeout, retention, and priority
 - Automatic execution record persistence (idempotent re-registration on restart; re-registration never overwrites the stored `status`, so an operator `Disable` survives restarts)
 - Optional built-in stale-`running` reaper and run-record retention (`StaleRunningCutoff` / `RunRetention`, off by default)
+- gasync: in-flight lease renewal (`LeaseTTL/3`), `Release` on shutdown, and an opt-in maintenance loop (`manager.Start`) that reaps stuck tasks and cleans terminal records by `Retention`
 - Automatic TraceID/RequestID/RunID injection and logging (string primary key as task/run identifier)
 - Cross-process trace propagation
 - Graceful shutdown: `Client.Close`, `Server.ShutdownContext` (gasync), `Scheduler.Stop(ctx)` (gcron)

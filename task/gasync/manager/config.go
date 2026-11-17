@@ -14,21 +14,29 @@ import (
 // MaxPayloadBytes / Retention / Backoff / NotifierQueuePrefix）在此定义；
 // worker 侧共享的 Concurrency / ShutdownTimeout 默认值见契约表，由 worker 包自行持有。
 type Config struct {
-	PollInterval         time.Duration // 默认 500ms；纯轮询形态周期；< 100ms 报 ErrInvalidConfig
-	FallbackPollInterval time.Duration // 默认 30s（通知器形态下的兜底轮询周期）
-	BatchSize            int           // 默认 50（单次认领上限）
-	LeaseTTL             time.Duration // 默认 60s（续租周期取 1/3）
-	ReaperInterval       time.Duration // 默认 30s（回收器周期）
-	CleanupInterval      time.Duration // 默认 1h；0 关闭
-	DefaultMaxAttempts   int           // 默认 3（任务未显式指定时）
-	DefaultTimeout       time.Duration // 默认 30s（任务未显式指定时）
-	MaxPayloadBytes      int           // 默认 4096（超过报 ErrPayloadTooLarge，不截断）
-	Retention            time.Duration // 默认 30 天（终态记录保留时长；0 不清理）
+	// PollInterval 已废弃：轮询由 worker.WorkerConfig.PollInterval 控制，本字段不生效
+	// （构造函数仍会校验 < 100ms 报 ErrInvalidConfig，仅为兼容旧配置）。
+	//
+	// Deprecated: 用 worker.WorkerConfig.PollInterval。
+	PollInterval time.Duration
+	// FallbackPollInterval 已废弃：兜底轮询由 worker.WorkerConfig.FallbackPollInterval 控制。
+	//
+	// Deprecated: 用 worker.WorkerConfig.FallbackPollInterval。
+	FallbackPollInterval time.Duration
+	// BatchSize 是后台维护循环（回收/清理）的单批处理行数，默认 50。
+	BatchSize          int
+	LeaseTTL           time.Duration // 默认 60s（续租周期取 1/3）
+	ReaperInterval     time.Duration // 默认 30s（回收器周期）
+	CleanupInterval    time.Duration // 默认 1h；0 关闭
+	DefaultMaxAttempts int           // 默认 3（任务未显式指定时）
+	DefaultTimeout     time.Duration // 默认 30s（任务未显式指定时）
+	MaxPayloadBytes    int           // 默认 4096（超过报 ErrPayloadTooLarge，不截断）
+	Retention          time.Duration // 默认 30 天（终态记录保留时长；0 不清理）
 	// FailFastChain 为 true 时，任务链某 step 进入失败终态后，同 chain 的后续 step 一并置 canceled，
 	// 避免后续步骤因前序永不 succeeded 而永久 pending 积压。默认 false（不级联，保持独立任务语义）。
 	FailFastChain       bool
-	Backoff              gasync.Backoff  // 默认指数：5s 起、上限 10m、抖动 ±20%；可替换
-	NotifierQueuePrefix  string        // 默认 "gasync"（<prefix>:<task_type>）
+	Backoff             gasync.Backoff // 默认指数：5s 起、上限 10m、抖动 ±20%；可替换
+	NotifierQueuePrefix string         // 默认 "gasync"（<prefix>:<task_type>）
 }
 
 // defaultConfig 返回带契约默认值的 Config。

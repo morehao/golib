@@ -1,5 +1,5 @@
 // Package remote 实现 gasync.Source 的 HTTP 版本：向一个独立部署的「远程任务中心」
-// 取任务（Fetch）、续租（Renew）、回传结果（Save）。
+// 取任务（Fetch）、续租（Renew）、放租约（Release）、回传结果（Save）。
 //
 // 依赖约束（A10）：本包只依赖根包 task/gasync，不引入 gorm / asynq /
 // task/gasync/manager / task/gasync/worker。远程形态下事务性不存在——
@@ -9,6 +9,7 @@
 //
 //	Fetch   → POST {base}/GetPendingAsyncTask { task_type, worker_id }
 //	Renew   → POST {base}/Heartbeat      { task_id, worker_id }
+//	Release → POST {base}/Release        { task_id, worker_id }（中心未实现 404/405 时按无操作处理）
 //	Save    → 调本地钩子 → POST {base}/Callback { task_id, worker_id, status, result, error }
 //	Close   → 关闭 HTTP 连接
 package remote
@@ -22,6 +23,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/morehao/golib/task/gasync"
@@ -48,11 +50,10 @@ var defaultCallbackRetryDelays = []time.Duration{
 var (
 	// ErrRenewLost 是 Renew 连续失败达到阈值（默认 2 次）时返回的哨兵错误。
 	//
-	// 远程 Source 无法直接取消 Worker 持有的一次性执行 ctx（Source 不持有它），
-	// 因此约定：Renew 第 2 次「连续」失败即返回本错误（错误链中可用 errors.Is 判定），
-	// Worker 侧识别到 ErrRenewLost 后应视为失权并取消本次执行的 ctx，与本地形态
-	// 「续租失败即失权」的语义对齐。任何一次成功都会把连续失败计数清零。
-	ErrRenewLost = errors.New("gasync: remote renew lost ownership")
+	// 等价于根包 gasync.ErrLeaseLost（保留本名字仅为向后兼容）：
+	// Renew 第 2 次「连续」失败即视为失权，Worker 侧据此取消本次执行的 ctx。
+	// 任何一次成功都会把连续失败计数清零。
+	ErrRenewLost = gasync.ErrLeaseLost
 
 	// ErrCallbackLost 是 Save 期间 Callback POST 在重试耗尽后仍失败时返回的哨兵错误。
 	// 接入方应据此兜底（记日志 / 触发告警 / 人工核对），中心侧可能仍认为任务在跑。
@@ -89,11 +90,17 @@ type Config struct {
 // Source 是 gasync.Source 的 HTTP 实现。并发安全（内部状态仅为 Renew 失败计数，
 // 每次 Renew 对应一个任务，Worker 串行调用同一任务的 Renew）。
 type Source struct {
-	cfg        Config
-	client     *http.Client
-	own        bool // client 是否由本包创建（决定 Close 是否关连接）
-	renewFails int  // Renew 连续失败计数
+	cfg    Config
+	client *http.Client
+	own    bool // client 是否由本包创建（决定 Close 是否关连接）
+
+	// renewFails 是 Renew 连续失败计数。多个执行槽共用一个 Source，必须加锁。
+	renewMu    sync.Mutex
+	renewFails int
 }
+
+// 编译期断言：*Source 满足 gasync.Source。
+var _ gasync.Source = (*Source)(nil)
 
 // New 构造一个远程 Source。BaseURL 或 WorkerID 为空时返回 gasync.ErrInvalidConfig 包装错误。
 func New(cfg Config) (*Source, error) {
@@ -248,19 +255,60 @@ func (s *Source) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 		slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return s.renewFailed(fmt.Errorf("Heartbeat status=%d body=%s", resp.StatusCode, bytes.TrimSpace(slurp)))
 	}
+	s.renewMu.Lock()
 	s.renewFails = 0
+	s.renewMu.Unlock()
 	return nil
 }
 
 // renewFailed 累加连续失败计数；达到阈值时返回包装了 ErrRenewLost 的错误。
 func (s *Source) renewFailed(cause error) error {
+	s.renewMu.Lock()
 	s.renewFails++
-	if s.renewFails >= s.cfg.RenewMaxFailures {
+	fails := s.renewFails
+	if fails >= s.cfg.RenewMaxFailures {
 		// 达到阈值后重置计数，避免后续每次 Renew 都重复报 lost。
 		s.renewFails = 0
-		return fmt.Errorf("%w: %d consecutive heartbeat failures: %v", ErrRenewLost, s.cfg.RenewMaxFailures, cause)
 	}
-	return fmt.Errorf("gasync: remote heartbeat failed (%d/%d): %w", s.renewFails, s.cfg.RenewMaxFailures, cause)
+	s.renewMu.Unlock()
+	if fails >= s.cfg.RenewMaxFailures {
+		return fmt.Errorf("%w: %d consecutive heartbeat failures: %v", gasync.ErrLeaseLost, s.cfg.RenewMaxFailures, cause)
+	}
+	return fmt.Errorf("gasync: remote heartbeat failed (%d/%d): %w", fails, s.cfg.RenewMaxFailures, cause)
+}
+
+// releaseReq 是 Release 的请求体。
+type releaseReq struct {
+	TaskID   string `json:"task_id"`
+	WorkerID string `json:"worker_id"`
+}
+
+// Release 主动放弃所有权：POST {base}/Release。
+//
+// 中心未实现该端点（404/405）时按「无操作」处理——租约最晚按 TTL 过期，
+// 停机流程不应因为中心版本旧而失败。
+func (s *Source) Release(ctx context.Context, task *gasync.AsyncTask) error {
+	if task == nil || task.ID == "" {
+		return nil
+	}
+	body, _ := json.Marshal(releaseReq{TaskID: task.ID, WorkerID: s.cfg.WorkerID})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/Release", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent, http.StatusNotFound, http.StatusMethodNotAllowed:
+		return nil
+	default:
+		slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("gasync: remote Release status=%d body=%s", resp.StatusCode, bytes.TrimSpace(slurp))
+	}
 }
 
 // callbackReq 是 Callback 的请求体。

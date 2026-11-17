@@ -3,10 +3,9 @@
 `task` 是任务调度组件包，包含定时任务、异步任务与有状态任务三个子包，均基于 GORM 持久化执行记录，并打通 glog 日志与 gtrace 链路追踪。
 
 - **gcron**: 定时任务，基于 `robfig/cron/v3`，支持秒级 cron、多实例分布式锁互斥、执行记录落库。
-- **gasync**: 异步任务，基于 `hibiken/asynq`，支持重试、超时、延迟、优先级队列、执行记录落库、跨进程 trace 传递。
 - **gasync**: 有状态任务中心，按任务类型注册 handler，单条任务可查状态 / 取消 / 重放、保留每次尝试记录、跨实例不重跑，支持轮询与「轮询 + 通知器」两种唤醒形态，并有远程 HTTP 形态。
 
-三个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 执行记录的 `id` 为 asynq 任务实例 ID；gasync 任务与每次尝试记录各有独立 `id`），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
+两个子包统一了标识模型：主键 `id` 即唯一标识（gcron 任务定义的 `id` 为业务方注册时指定的任务 ID，运行记录的 `id` 为每次运行的唯一标识；gasync 的任务与每次尝试记录各有独立 `id`），配合 `task_type`（任务类型）与 `request_id`（请求 ID），运行 ID 注入 ctx，可通过日志 `extra_keys` 配置 `task.run.id` 打印。trace 信息不落库，仅由 glog/gtrace 在日志链路中打点。
 
 ### 三选一判据
 
@@ -17,7 +16,7 @@
 | 按 cron 表达式周期触发 | `gcron` |
 | 一次性投递，只要「被执行到」，不需要单条任务的状态与撤回 | `gasync` |
 | 需要单条任务实体：查状态 / 取消 / 重放 / 保留每次尝试 / 跨实例不重跑 | `gasync` |
-| 需要管理界面与运维动作 | `gasync`（`manager` + `ginjob`） |
+| 需要管理界面与运维动作 | `gasync`（`manager` + `ginasync`） |
 | 上述需求 + 已有 Redis，要毫秒级起跑 | `gasync`（`manager` + 通知器） |
 | Worker 拿不到数据库（只有任务中心地址） | `gasync`（`worker` + `source/remote`） |
 
@@ -224,25 +223,26 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 
 ### 特性
 
-- 有状态任务实体：`pending / running / succeeded / failed / canceled / skipped` 六态，可查状态、取消、重放
+- 有状态任务实体：`pending / running / succeeded / failed / timeout / canceled / skipped` 七态，可查状态、取消、重放
 - 幂等提交：`UniqKey` 命中既有任务时不重复建任务（返回既有实体，`submitted=false`）
 - 尝试记录：每条任务保留 0..N 次尝试（按 `generation` 重放轮次分组），记录每次的起止、耗时、错误、request/trace
 - 重试与退避：失败按可配置退避策略重试，达到 `max_attempts` 进入终态；`ErrNoRetry` / `ErrSkip` 控制是否重试与跳过
-- 租约与续租：执行者持有租约并在执行中续租，进程崩溃后由回收器接管，跨实例不重跑
+- 租约与续租：认领即持租约，执行期由 worker 按 `LeaseTTL/3` 续租；续租失权立即取消执行 ctx，跨实例不重跑
+- 回收与清理：`manager.Start(ctx)` 起维护循环，回收「次数用尽 + 租约过期」的卡死任务、按 `Retention` 清理终态记录
 - 两种唤醒形态：纯轮询（`ModePoll`）、轮询 + 通知器（`ModePollNotify`，依赖 Redis 队列，毫秒级起跑，通知丢失由兜底轮询接手）
 - 远程形态：`task/gasync/source/remote` 走 HTTP 与远端任务中心交互，Worker 侧无需直连数据库
-- 管理面：`manager` 提供 Submit/Get/List/Cancel/Replay/Stats，可接 `ginjob` 暴露 HTTP 端点
+- 管理面：`manager` 提供 Submit/Get/List/Cancel/Replay/Stats，可接 `ginasync`（`biz/gserver/ginasync`）暴露 HTTP 端点
 - 自动建表（幂等 `AutoMigrate`）、自动注入 TraceID / RequestID，打通 glog 日志与 gtrace 链路追踪
 
 ### 增强能力（P1–P4）
 
 - **每类型独立并发**：`worker.WithHandlerConcurrency(n)` 为单个任务类型设置执行槽数，未设回落全局 `WorkerConfig.Concurrency`。
-- **步骤化任务链**：`Job`/`JobSpec` 带 `ChainID / Step / PrevStep`；`manager.SubmitAfter(ctx, 上游ID, spec)` 提交「上游成功后」的下一步，认领时要求前序 step 已 `succeeded`。`manager.Config.FailFastChain=true` 时某步失败会级联取消同链后续步（默认关闭）。
+- **步骤化任务链**：`AsyncTask`/`AsyncTaskSpec` 带 `ChainID / Step / PrevStep`；`manager.SubmitAfter(ctx, 上游ID, spec)` 提交「上游成功后」的下一步，认领时要求前序 step 已 `succeeded`。`manager.Config.FailFastChain=true` 时某步失败会级联取消同链后续步（默认关闭）。
 - **超时独立状态**：执行超时落 `StatusTimeout`（独立于 `failed`，`Stats.Timeout` 计数；旧 `failed+failure_kind=timeout` 数据查询层兼容）。
-- **业务维度 labels**：`JobSpec.Labels map[string]string` 落 `labels` JSON 列，`JobCond.Labels` 按 label 精确过滤（AND）。
-- **富查询**：`JobCond` 支持 `ChainID`、`CreatedAfter/Before` 时间区间、`OrderBy`（白名单 `created_at/updated_at/priority/status`，非法值回退默认）。
+- **业务维度 labels**：`AsyncTaskSpec.Labels map[string]string` 落 `labels` JSON 列，`AsyncTaskCond.Labels` 按 label 精确过滤（AND；三方言均支持）。
+- **富查询**：`AsyncTaskCond` 支持 `ChainID`、`CreatedAfter/Before` 时间区间、`OrderBy`（白名单 `created_at/updated_at/priority/status`，非法值回退默认）。
 - **worker 存活判定/上报**：`manager.Registry()` 返回默认「租约推导」判活器（`lease_until>now` 视为在线，零外部依赖）；worker 可配 `HealthReporter` + `HealthReportInterval` 周期上报；需要主动心跳时用可选子包 `manager/health/redis`（仅该子包 import redis）。
-- **类型级启停（Disable/Enable）**：`manager.Disable(ctx, type)` / `Enable(ctx, type)` 运行时下线/恢复某任务类型（写 `core_job_type`，跨实例，无行=启用 fail-open）。disabled 期间该类型任务**不被认领、停在 pending 不丢**，Enable 后自动恢复。worker 侧经 `WorkerConfig.TypeGate`（由 `manager.TypeGate(ttl)` 提供，带缓存）感知开关；`nil` 时行为不变。
+- **类型级启停（Disable/Enable）**：`manager.Disable(ctx, type)` / `Enable(ctx, type)` 运行时下线/恢复某任务类型（写 `core_async_task_type`，跨实例，无行=启用 fail-open）。disabled 期间该类型任务**不被认领、停在 pending 不丢**，Enable 后自动恢复。worker 侧经 `WorkerConfig.TypeGate`（由 `manager.TypeGate(ttl)` 提供，带缓存）感知开关；`nil` 时行为不变。
 
 ### 数据表
 
@@ -252,7 +252,7 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 |---|---|
 | `core_async_task` | 任务实体（id=任务 ID、task_type=任务类型、status=状态、priority=优先级、payload=入参、uniq_key=幂等键、biz_id/biz_type=业务维度、chain_id/step/prev_step=任务链、labels=业务标签、generation/attempt/max_attempts=重放与尝试计数、next_run_at/lease_until=调度与租约、各时间与 request id 等） |
 | `core_async_task_run` | 单次尝试记录（id=尝试 ID、async_task_id=所属任务、generation/attempt=轮次与第几次尝试、状态、失败分类、起止时间、耗时、错误、request id 等） |
-| `core_job_type` | 任务类型开关（id、task_type 唯一、enabled；**无行 = 启用**，仅记录被 Disable 的类型，fail-open） |
+| `core_async_task_type` | 任务类型开关（id、task_type 唯一、enabled；**无行 = 启用**，仅记录被 Disable 的类型，fail-open） |
 
 三表无物理外键（`async_task_id` 为逻辑关联），也无软删除。三张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
 
@@ -275,7 +275,7 @@ import (
 type InvoiceHandler struct{ db *gorm.DB }
 
 // 执行单条任务。返回 nil 表示成功；返回 worker.ErrNoRetry 表示失败但不再重试。
-func (h *InvoiceHandler) Execute(ctx context.Context, t *gasync.Job) error {
+func (h *InvoiceHandler) Execute(ctx context.Context, t *gasync.AsyncTask) error {
 	var p InvoicePayload
 	if err := t.Bind(&p); err != nil {
 		return worker.ErrNoRetry // 参数非法，重试无意义
@@ -284,7 +284,7 @@ func (h *InvoiceHandler) Execute(ctx context.Context, t *gasync.Job) error {
 }
 
 // 成功回调：本地形态下 tx 非 nil，与任务终态同事务（远程形态为 nil）。
-func (h *InvoiceHandler) OnSuccess(ctx context.Context, t *gasync.Job) error {
+func (h *InvoiceHandler) OnSuccess(ctx context.Context, t *gasync.AsyncTask) error {
 	tx, ok := gasync.TxFromContext(ctx).(*gorm.DB)
 	if !ok || tx == nil {
 		return nil
@@ -302,8 +302,13 @@ func main() {
 	}
 	defer center.Close()
 
+	// 启动后台维护循环：回收卡死任务 + 按 Retention 清理终态记录（不启动就永远不会发生）。
+	if err := center.Start(context.Background()); err != nil {
+		panic(err)
+	}
+
 	// 执行侧：按任务类型注册 handler，然后 Start（同步非阻塞，内部自起 goroutine；启动错误经返回值上报）。
-	w := worker.New(center.Source(), &worker.WorkerConfig{Concurrency: 10})
+	w := worker.New(center.Source(), &worker.WorkerConfig{Concurrency: 10, LeaseTTL: 60 * time.Second})
 	if err := w.Register("invoice:issue", &InvoiceHandler{db: db}); err != nil {
 		panic(err)
 	}
@@ -313,7 +318,7 @@ func main() {
 	// 退出时停机：w.Shutdown(ctx)（等待在途 → 释放租约）。
 
 	// 提交一条任务（UniqKey 相同则命中幂等，不重复建）。
-	task, submitted, err := center.Submit(context.Background(), &gasync.JobSpec{
+	task, submitted, err := center.Submit(context.Background(), &gasync.AsyncTaskSpec{
 		Type:    "invoice:issue",
 		Payload: payload,
 		BizType: "order",
@@ -331,16 +336,18 @@ func main() {
 若不需要 Submit/List/Cancel/Replay 等管理面，可跳过 `manager`，直接把 `source/db`（DB Source）交给 `worker`，两者组合即为一套轻量异步任务：
 
 ```go
-src, _ := sourcedb.New(sourcedb.Config{DB: db})              // 基于 DB 的 Source
-w := worker.New(src, &worker.WorkerConfig{Concurrency: 10})  // 只认 Source
-w.Register("email:send", handler)
-if err := w.Start(ctx); err != nil {                         // 同步非阻塞，不写 go
+src, _ := sourcedb.New(sourcedb.Config{DB: db, LeaseTTL: 60 * time.Second}) // 基于 DB 的 Source
+w := worker.New(src, &worker.WorkerConfig{Concurrency: 10, LeaseTTL: 60 * time.Second})
+if err := w.Register("email:send", handler); err != nil {                    // Register 有返回值
+	return err
+}
+if err := w.Start(ctx); err != nil {                                         // 同步非阻塞，不写 go
 	return err
 }
 defer w.Shutdown(shutdownCtx)
-
-_, _, _ = src.Submit(ctx, &gasync.JobSpec{Type: "email:send", Payload: payload}) // 投递
 ```
+
+注意：**投递仍要走 `manager`**——`source/db` 只提供 `Source`（Fetch/Renew/Release/Save）与只读 `Store`，不含提交入口。
 
 `source/db` 与 `source/remote` 是 `gasync.Source` 的两种平级实现（DB / HTTP），`worker` 只依赖接口。`manager` 内部同样复用 `source/db`，二者单向依赖、无循环引用（`bash scripts/check-gasync-deps.sh` 可断言）。
 
@@ -350,6 +357,7 @@ _, _, _ = src.Submit(ctx, &gasync.JobSpec{Type: "email:send", Payload: payload})
 - **注入写主库**：`manager.New` 传入的 `*gorm.DB` 必须是写主库；读写分离下注入从库会让认领读到延迟数据、幂等回查读不到刚插入的行。
 - **`Submit` 三值语义**：`err == nil` 写入/命中幂等成功；`err == ErrNotify` 任务已落库（`task != nil, submitted == true`）但通知没发出去——**不要重试 `Submit`**（会多建任务），兜底轮询会接手；`submitted` 区分是否新建。
 - **两表无软删除**：沿用 `gormdao` 时必须传 `WithoutSoftDelete()`，否则 Dao 会追加 `deleted_at IS NULL` 导致运行时 SQL 报列不存在。
+- **两处 `LeaseTTL` 必须一致**：`worker.WorkerConfig.LeaseTTL` 决定续租周期，`manager.Config.LeaseTTL` / `source/db.Config.LeaseTTL` 决定租约时长；配小了会被误判失权，配大了接管会变慢。
 
 ## 日志追踪
 
@@ -357,7 +365,7 @@ _, _, _ = src.Submit(ctx, &gasync.JobSpec{Type: "email:send", Payload: payload})
 
 | 字段 | glog 常量 | 含义 |
 |---|---|---|
-| `task.type` | `glog.KeyTaskType` | 任务类型（gcron 为 `TaskType`，gasync 为任务类型名/`async`，gasync 为 `JobSpec.Type`） |
+| `task.type` | `glog.KeyTaskType` | 任务类型（gcron 为 `TaskType`，gasync 为 `AsyncTaskSpec.Type`） |
 | `task.id` | `glog.KeyTaskID` | 任务唯一标识（gcron 为任务定义表主键 id，gasync 为任务实体 id） |
 | `task.run.id` | `glog.KeyRunID` | 单次运行的唯一标识（即运行记录表主键 id，gasync 为尝试记录 id） |
 

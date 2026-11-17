@@ -148,30 +148,39 @@ func TestWorker_Succeeded(t *testing.T) {
 }
 
 // 2. 失败可重试：Failed + OnRetry（多次尝试）。
+//
+// 这里自己起 worker 而不用 runWorker：runWorker 一看到第一条结果就停机，
+// 会与新语义（停机立即停止认领）竞争，导致「重试还没发生就断言」。
 func TestWorker_FailedRetry(t *testing.T) {
 	h := &recordingHandler{
 		execFn: func(ctx context.Context, t *gasync.AsyncTask) error {
 			return errors.New("boom")
 		},
 	}
-	src := runWorker(t, h, "invoice:issue", &gasync.AsyncTask{ID: "j2", MaxAttempts: 3})
-	// 等到重试若干次并最终 failure。
-	waitCond(t, func() bool {
-		_, _, hooks := src.snapshot()
-		for _, x := range hooks {
-			if x == "on_failure_or_retry" {
-				return true
-			}
-		}
-		return false
-	}, 2*time.Second)
+	src := newMemSource()
+	src.push("invoice:issue", &gasync.AsyncTask{ID: "j2", MaxAttempts: 3})
+
+	w := worker.New(src, &worker.WorkerConfig{Concurrency: 1, PollInterval: 5 * time.Millisecond})
+	if err := w.Register("invoice:issue", h); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	// 等到真的重试过（第二次 Execute 开始）。
+	waitCond(t, func() bool { return atomic.LoadInt32(&h.execCalls) >= 2 }, 2*time.Second)
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+	_ = w.Shutdown(stopCtx)
+	cancel()
+	<-done
 
 	// 至少出现过一次 OnRetry 回调（第一次失败 attempt=1 < MaxAttempts=3）。
 	if h.hookCount("OnRetry") == 0 {
 		t.Fatalf("want at least one OnRetry, got hooks=%v", h.hooks)
-	}
-	if atomic.LoadInt32(&h.execCalls) < 2 {
-		t.Fatalf("want >=2 exec (retried), got %d", h.execCalls)
 	}
 }
 
@@ -360,8 +369,8 @@ func TestWorker_ShutdownReleasesLease(t *testing.T) {
 	defer stopCancel()
 	_ = w.Shutdown(stopCtx)
 
-	if src.renewCount() < 1 {
-		t.Fatalf("want Renew called for stuck task, got %d", src.renewCount())
+	if src.releaseCount() < 1 {
+		t.Fatalf("want Release called for stuck task, got %d", src.releaseCount())
 	}
 	close(block)
 	cancel()

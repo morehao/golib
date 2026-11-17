@@ -53,16 +53,26 @@ func New(cfg Config) (*Registry, error) {
 	return &Registry{cfg: cfg}, nil
 }
 
+// globalTypeKey 是「不带类型」的心跳所用的类型段。
+//
+// worker.HealthReporter 只有 ReportAlive(workerID, running)，不带 taskType，
+// 因此上报写的是全局 key；查询侧必须能用 taskType="" 命中同一个 key，否则
+// 「上报了但永远查不到」。需要按类型区分时用 ReportAliveType。
+const globalTypeKey = "*"
+
 func (r *Registry) aliveKey(taskType, workerID string) string {
+	if taskType == "" {
+		taskType = globalTypeKey
+	}
 	return r.cfg.Prefix + taskType + ":" + workerID
 }
 
 // ReportAlive 刷新某 worker 的心跳 key（TTL=配置 TTL）。满足 worker.HealthReporter 语义
 // （worker 侧调用时 taskType 未知，此处用空串兜底为全局 key；需要按类型区分时由接入方包一层）。
 func (r *Registry) ReportAlive(ctx context.Context, workerID string, running int) error {
-	// worker.HealthReporter 不带 taskType；这里写一个「全局」key，值记录 running 数。
-	key := r.cfg.Prefix + "*:" + workerID
-	return r.cfg.Client.Set(ctx, key, running, r.cfg.TTL).Err()
+	// worker.HealthReporter 不带 taskType；写「全局」key（taskType="*"），值记录 running 数。
+	// IsWorkerAlive/AliveWorkers 传 taskType="" 时读的正是这个 key。
+	return r.cfg.Client.Set(ctx, r.aliveKey("", workerID), running, r.cfg.TTL).Err()
 }
 
 // ReportAliveType 按任务类型上报心跳（供需要按类型判活的接入方直接调用）。
@@ -81,7 +91,8 @@ func (r *Registry) IsWorkerAlive(ctx context.Context, taskType, workerID string)
 
 // AliveWorkers 统计某 taskType 下在线 worker 数（SCAN 前缀）。
 func (r *Registry) AliveWorkers(ctx context.Context, taskType string) (int64, error) {
-	pattern := r.cfg.Prefix + taskType + ":*"
+	// taskType 为空时统计全局心跳（ReportAlive 写的 key）。
+	pattern := r.aliveKey(taskType, "") + "*"
 	var count int64
 	iter := r.cfg.Client.Scan(ctx, 0, pattern, 100).Iterator()
 	for iter.Next(ctx) {
