@@ -208,6 +208,22 @@ func RunWorker(ctx context.Context) error {
 
 同一份 `Handler` + `Worker` 可在本地 / 远程两种 `Source` 上运行，流程结论一致（见 `TestA12_SourceReplaceable`）。远程形态下钩子拿不到事务（`gasync.TxFromContext` 返回 nil）。
 
+#### 远程中心需要实现的 4 个端点（`source/remote` 的对接契约）
+
+`source/remote` 只是**客户端**，本仓库不包含「远程任务中心」的服务端实现（`biz/gserver/ginasync`
+是管理面 REST，不是这套协议）。中心侧至少要提供：
+
+| 端点 | 请求体 | 响应 |
+|---|---|---|
+| `POST {base}/GetPendingAsyncTask` | `{"task_type","worker_id"}` | `200` + `{"available":true,"asyncTask":{...}}`；无任务用 `204` 或 `available:false` |
+| `POST {base}/Heartbeat` | `{"task_id","worker_id"}` | `200`/`204` 表示仍持有；其它状态按失败累计 |
+| `POST {base}/Callback` | `{"task_id","worker_id","status","result","error"}` | `200`/`204`；失败会被客户端重试（默认 3 次后报 `ErrCallbackLost`） |
+| `POST {base}/Release` | `{"task_id","worker_id"}` | `200`/`204`；`404`/`405` 视为「中心未实现」按无操作处理 |
+
+`asyncTask` 字段：`id/type/priority/payload/attempt/max_attempts/timeout_ms/request_id/trace_id`。
+中心侧要做到三件事才谈得上「即时释放/不重复执行」：同一任务同一时刻只派给一个 `worker_id`、
+`Heartbeat` 校验归属、`Callback` 只接受当前归属者的结果。
+
 ## 关键 API
 
 ### 根包 `gasync`
