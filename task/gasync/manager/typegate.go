@@ -19,8 +19,8 @@ func (c *Manager) Disable(ctx context.Context, taskType string) error {
 	if err := c.setTypeEnabled(ctx, taskType, false); err != nil {
 		return err
 	}
-	if c.gate != nil {
-		c.gate.set(taskType, false)
+	if g := c.gateAdapter(); g != nil {
+		g.set(taskType, false)
 	}
 	return nil
 }
@@ -30,8 +30,8 @@ func (c *Manager) Enable(ctx context.Context, taskType string) error {
 	if err := c.setTypeEnabled(ctx, taskType, true); err != nil {
 		return err
 	}
-	if c.gate != nil {
-		c.gate.set(taskType, true)
+	if g := c.gateAdapter(); g != nil {
+		g.set(taskType, true)
 	}
 	return nil
 }
@@ -67,8 +67,17 @@ func (c *Manager) TypeGate(cacheTTL time.Duration) *TypeGateAdapter {
 		cacheTTL = 5 * time.Second
 	}
 	g := newTypeGateAdapter(c.db, cacheTTL)
+	c.maintMu.Lock()
 	c.gate = g
+	c.maintMu.Unlock()
 	return g
+}
+
+// gateAdapter 返回当前进程的类型开关缓存（可能为 nil，未调用 TypeGate 时）。
+func (c *Manager) gateAdapter() *TypeGateAdapter {
+	c.maintMu.Lock()
+	defer c.maintMu.Unlock()
+	return c.gate
 }
 
 // ---- 内部实现：开关行 upsert 的冲突子句 ----

@@ -95,15 +95,24 @@ func (s *store) ListAsyncTask(ctx context.Context, cond *gasync.AsyncTaskCond) (
 // orderByClause 把 AsyncTaskCond.OrderBy 白名单化；默认 created_at desc。
 func orderByClause(ob string) string {
 	switch strings.TrimSpace(strings.ToLower(ob)) {
-	case "created_at asc", "created_at": return "created_at ASC, id DESC"
-	case "created_at desc": return "created_at DESC, id DESC"
-	case "updated_at asc", "updated_at": return "updated_at ASC, id DESC"
-	case "updated_at desc": return "updated_at DESC, id DESC"
-	case "priority asc", "priority": return "priority ASC, id DESC"
-	case "priority desc": return "priority DESC, id DESC"
-	case "status asc", "status": return "status ASC, id DESC"
-	case "status desc": return "status DESC, id DESC"
-	default: return "created_at DESC, id DESC"
+	case "created_at asc", "created_at":
+		return "created_at ASC, id DESC"
+	case "created_at desc":
+		return "created_at DESC, id DESC"
+	case "updated_at asc", "updated_at":
+		return "updated_at ASC, id DESC"
+	case "updated_at desc":
+		return "updated_at DESC, id DESC"
+	case "priority asc", "priority":
+		return "priority ASC, id DESC"
+	case "priority desc":
+		return "priority DESC, id DESC"
+	case "status asc", "status":
+		return "status ASC, id DESC"
+	case "status desc":
+		return "status DESC, id DESC"
+	default:
+		return "created_at DESC, id DESC"
 	}
 }
 

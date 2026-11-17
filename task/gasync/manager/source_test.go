@@ -114,22 +114,22 @@ func TestSource_HookTxError_RollsBack(t *testing.T) {
 	if status, _ := dbAsyncTaskStatus(t, gdb, task.ID); status != string(gasync.StatusRunning) {
 		t.Fatalf("db status = %q, want running (rolled back)", status)
 	}
-	// 没有终态尝试行落库（整笔回滚，连 running 尝试行也不存在）。
+	// 没有终态尝试行落库（本次尝试仍是认领时写入的 running 行，未收尾）。
 	if n := terminalRunCount(t, gdb, task.ID); n != 0 {
 		t.Fatalf("terminal run rows = %d, want 0 (rolled back)", n)
 	}
 	var total int64
 	gdb.Model(&db.CoreAsyncTaskRun{}).Where("async_task_id = ?", task.ID).Count(&total)
-	if total != 0 {
-		t.Fatalf("run rows = %d, want 0 (upsertRun rolled back too)", total)
+	if total != 1 {
+		t.Fatalf("run rows = %d, want 1 (claim-time running row kept, terminal update rolled back)", total)
 	}
 }
 
-// TestSource_LostLease_NoOverwrite 判据 2：已失权后慢返回不覆盖终态。
+// TestSource_LostLease_NoOverwrite 判据 2：已失权后慢返回不覆盖终态、也不跑钩子。
 //
 // 构造「task.WorkerID 与库中该 asyncTask 的 worker_id 不一致」：库里已被别的 worker 接管。
-// finishAsyncTask 的 UPDATE 带 `WHERE id=? AND worker_id=? AND status='running'` 守卫，
-// 不匹配则 RowsAffected=0，库中该行不被改写（终态不被覆盖、worker_id 不被清）。
+// Save 先按 (worker_id, generation, attempt) 锁行校验，失权直接返回 ErrLeaseLost——
+// 钩子不执行、库中该行不被改写（终态不被覆盖、worker_id 不被清）。
 func TestSource_LostLease_NoOverwrite(t *testing.T) {
 	m, gdb := newSourceTestManager(t)
 	ctx := context.Background()
@@ -142,12 +142,19 @@ func TestSource_LostLease_NoOverwrite(t *testing.T) {
 	}
 
 	// 慢返回、尝试把结果写成 succeeded（task.WorkerID 仍是旧值，与库不符）。
+	hookCalled := false
 	err := m.dbSrc.Save(ctx, task, gasync.Result{
 		Outcome:  gasync.OutcomeSucceeded,
 		Duration: time.Millisecond,
-	}, nil)
-	if err != nil {
-		t.Fatalf("Save err = %v, want nil (guard is not an error)", err)
+	}, func(context.Context) error {
+		hookCalled = true
+		return nil
+	})
+	if !errors.Is(err, gasync.ErrLeaseLost) {
+		t.Fatalf("Save err = %v, want ErrLeaseLost", err)
+	}
+	if hookCalled {
+		t.Fatal("失权后不得执行业务钩子（副作用无法回滚）")
 	}
 
 	status, worker := dbAsyncTaskStatus(t, gdb, task.ID)
@@ -343,7 +350,9 @@ type txWritingHandler struct {
 
 func (h *txWritingHandler) Execute(ctx context.Context, task *gasync.AsyncTask) error { return nil }
 
-func (h *txWritingHandler) BeforeExecute(ctx context.Context, task *gasync.AsyncTask) error { return nil }
+func (h *txWritingHandler) BeforeExecute(ctx context.Context, task *gasync.AsyncTask) error {
+	return nil
+}
 
 func (h *txWritingHandler) OnRetry(ctx context.Context, task *gasync.AsyncTask, cause error) error {
 	return nil

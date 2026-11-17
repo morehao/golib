@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -50,8 +51,10 @@ func TestSource_LostLease_DirectFinishAsyncTaskRowsAffected(t *testing.T) {
 	stale := *task // 持有旧 worker_id 的任务视图
 	before := stale.Status
 
-	if err := src.finishAsyncTask(gdb, &stale, string(gasync.StatusSucceeded), gasync.Result{}, src.dialect.NowValueExpr()); err != nil {
-		t.Fatalf("finishAsyncTask err = %v", err)
+	if err := src.finishAsyncTask(gdb, &stale, gasync.StatusSucceeded, gasync.Result{}, src.dialect.NowValueExpr()); err != nil {
+		if !errors.Is(err, gasync.ErrLeaseLost) {
+			t.Fatalf("finishAsyncTask err = %v, want ErrLeaseLost", err)
+		}
 	}
 	if stale.Status != before {
 		t.Fatalf("task.Status mutated to %q, want unchanged %q (RowsAffected=0)", stale.Status, before)

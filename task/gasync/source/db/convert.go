@@ -82,20 +82,20 @@ func runRowToDomain(r *CoreAsyncTaskRun) *gasync.AsyncTaskRun {
 		return nil
 	}
 	jr := &gasync.AsyncTaskRun{
-		ID:         r.ID,
-		AsyncTaskID:      r.AsyncTaskID,
-		Generation: int(r.Generation),
-		Attempt:    int(r.Attempt),
-		Status:     gasync.Status(r.Status),
-		Failure:    gasync.FailureKind(r.FailureKind),
-		WorkerID:   r.WorkerID,
-		StartedAt:  r.StartedAt,
-		FinishedAt: r.FinishedAt,
-		Duration:   time.Duration(r.DurationMs) * time.Millisecond,
-		Error:      r.ErrorMsg,
-		RequestID:  r.RequestID,
-		TraceID:    r.TraceID,
-		CreatedAt:  r.CreatedAt,
+		ID:          r.ID,
+		AsyncTaskID: r.AsyncTaskID,
+		Generation:  int(r.Generation),
+		Attempt:     int(r.Attempt),
+		Status:      gasync.Status(r.Status),
+		Failure:     gasync.FailureKind(r.FailureKind),
+		WorkerID:    r.WorkerID,
+		StartedAt:   r.StartedAt,
+		FinishedAt:  r.FinishedAt,
+		Duration:    time.Duration(r.DurationMs) * time.Millisecond,
+		Error:       r.ErrorMsg,
+		RequestID:   r.RequestID,
+		TraceID:     r.TraceID,
+		CreatedAt:   r.CreatedAt,
 	}
 	if r.Result != "" {
 		jr.Result = []byte(r.Result)

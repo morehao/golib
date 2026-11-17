@@ -33,6 +33,11 @@ var (
 	ErrNoType = errors.New("gasync: no task type registered")
 	// ErrUniqKeyRace 幂等键冲突回查为空的重试后仍失败（并发提交者回滚或副本延迟）。
 	ErrUniqKeyRace = errors.New("gasync: uniq key race")
+	// ErrLeaseLost 已失去任务所有权（被接管 / 被取消 / 已进入终态）。
+	//
+	// 语义：Renew/Save 返回它时，调用方必须停止执行并放弃业务钩子——
+	// 此时写终态会被守卫拦下，钩子里的副作用却无法回滚，故 Source 保证「失权不跑钩子」。
+	ErrLeaseLost = errors.New("gasync: lease lost")
 	// ErrNotify 任务已落库但通知没发出去（不参与正确性，兜底轮询会接手）。
 	ErrNotify = errors.New("gasync: notify failed")
 	// ErrNoAsyncTask 当前无待执行任务。

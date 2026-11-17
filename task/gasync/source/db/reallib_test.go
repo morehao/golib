@@ -89,9 +89,10 @@ func seedAsyncTasks(t *testing.T, db *gorm.DB, taskType string, n int) {
 
 // TestRealA1ConcurrentClaim 多 goroutine / 多连接并发认领，断言无同一 asyncTask 被两次认领
 // （attempt 求和 == 认领次数 == 任务数；每行 attempt==1 且只被一个 worker 持有）。
+// 真库用例一律拆成子测试：MySQL 不可用时只跳过自己，不会连带跳过 PostgreSQL。
 func TestRealA1ConcurrentClaim(t *testing.T) {
-	runA1(t, realMySQLDB(t), DialectMySQL, "invoice")
-	runA1(t, realPGDB(t), DialectPostgres, "invoice")
+	t.Run("mysql", func(t *testing.T) { runA1(t, realMySQLDB(t), DialectMySQL, "invoice") })
+	t.Run("postgres", func(t *testing.T) { runA1(t, realPGDB(t), DialectPostgres, "invoice") })
 }
 
 func runA1(t *testing.T, db *gorm.DB, dialect Dialect, taskType string) {
@@ -158,8 +159,8 @@ func runA1(t *testing.T, db *gorm.DB, dialect Dialect, taskType string) {
 
 // TestRealA2LeaseTakeover 认领后手工把 lease_until 改到过去，另一认领能接管，attempt+1。
 func TestRealA2LeaseTakeover(t *testing.T) {
-	runA2(t, realMySQLDB(t), DialectMySQL)
-	runA2(t, realPGDB(t), DialectPostgres)
+	t.Run("mysql", func(t *testing.T) { runA2(t, realMySQLDB(t), DialectMySQL) })
+	t.Run("postgres", func(t *testing.T) { runA2(t, realPGDB(t), DialectPostgres) })
 }
 
 func runA2(t *testing.T, db *gorm.DB, dialect Dialect) {
@@ -202,8 +203,8 @@ func runA2(t *testing.T, db *gorm.DB, dialect Dialect) {
 
 // TestRealA8Explain 两支认领 SQL 的 EXPLAIN 命中预期索引、rows examined ≈ 候选数。
 func TestRealA8Explain(t *testing.T) {
-	runA8MySQL(t, realMySQLDB(t))
-	runA8PG(t, realPGDB(t))
+	t.Run("mysql", func(t *testing.T) { runA8MySQL(t, realMySQLDB(t)) })
+	t.Run("postgres", func(t *testing.T) { runA8PG(t, realPGDB(t)) })
 }
 
 func runA8MySQL(t *testing.T, db *gorm.DB) {
@@ -211,30 +212,31 @@ func runA8MySQL(t *testing.T, db *gorm.DB) {
 	// 10 万 pending、1 千到期（internals [待核实] 场景）。
 	seedHeavyMySQL(t, db, 100000, 1000)
 	now := "NOW(3)"
-	sql1 := fmt.Sprintf(`SELECT id FROM core_async_task WHERE task_type = 'invoice' AND status='pending' AND next_run_at <= %s AND attempt < max_attempts ORDER BY priority DESC, next_run_at, id LIMIT 50`, now)
+	sql1 := fmt.Sprintf(`SELECT id FROM core_async_task WHERE task_type = 'invoice' AND status='pending' AND next_run_at <= %s AND attempt < max_attempts ORDER BY priority DESC, next_run_at LIMIT 50`, now)
 	sql2 := fmt.Sprintf(`SELECT id FROM core_async_task WHERE status='running' AND lease_until < %s AND task_type='invoice' AND attempt < max_attempts ORDER BY lease_until LIMIT 50`, now)
-	explain(t, db, "MySQL ①", "EXPLAIN FORMAT=JSON "+sql1, "idx_core_async_task_task_type_status_next_run_at")
-	explain(t, db, "MySQL ②", "EXPLAIN FORMAT=JSON "+sql2, "idx_core_async_task_status_lease_until")
+	// ① 必须走新索引且不 filesort（优先级顺序由索引提供）。
+	explainMySQL(t, db, "MySQL ①", sql1, true, "idx_core_async_task_claim")
+	explainMySQL(t, db, "MySQL ②", sql2, false, "idx_core_async_task_status_lease_until")
 }
 
 func runA8PG(t *testing.T, db *gorm.DB) {
 	resetRealDB(t, db)
 	seedHeavyPG(t, db, 100000, 1000)
-	sql1 := `SELECT id FROM core_async_task WHERE task_type = 'invoice' AND status='pending' AND next_run_at <= now() AND attempt < max_attempts ORDER BY priority DESC, next_run_at, id LIMIT 50`
+	sql1 := `SELECT id FROM core_async_task WHERE task_type = 'invoice' AND status='pending' AND next_run_at <= now() AND attempt < max_attempts ORDER BY priority DESC, next_run_at LIMIT 50`
 	sql2 := `SELECT id FROM core_async_task WHERE status='running' AND lease_until < now() AND task_type='invoice' AND attempt < max_attempts ORDER BY lease_until LIMIT 50`
-	explainPG(t, db, "PG ①", sql1,
-		"idx_core_async_task_task_type_status_next_run_at", "idx_core_async_task_task_type_status_created_at")
+	// ① 必须走 idx_core_async_task_claim 且计划里没有 Sort 节点。
+	explainPG(t, db, "PG ①", sql1, true, "idx_core_async_task_claim")
 	// PG 的代价模型在 task_type+status 高选择性的数据分布下，可能选 (task_type,status)
 	// 前缀索引而非 (status,lease_until)。两者都是合法索引扫描，非 Seq Scan 即接受。
-	explainPG(t, db, "PG ②", sql2,
-		"idx_core_async_task_status_lease_until", "idx_core_async_task_task_type_status_created_at",
-		"idx_core_async_task_task_type_status_next_run_at")
+	explainPG(t, db, "PG ②", sql2, false,
+		"idx_core_async_task_status_lease_until", "idx_core_async_task_task_type_status_created_at")
 }
 
-// explain 跑 MySQL EXPLAIN FORMAT=JSON 并断言 key 命中预期索引。
-func explain(t *testing.T, db *gorm.DB, label, explainSQL, wantIndex string) {
+// explainMySQL 跑 MySQL EXPLAIN FORMAT=JSON 并断言命中预期索引；wantNoSort 时
+// 额外断言计划里没有 using_filesort（认领 SQL 的排序必须由索引提供）。
+func explainMySQL(t *testing.T, db *gorm.DB, label, sql string, wantNoSort bool, wantIndex string) {
 	var rows []struct{ EXPLAIN string }
-	if err := db.Raw(explainSQL).Scan(&rows).Error; err != nil {
+	if err := db.Raw("EXPLAIN FORMAT=JSON " + sql).Scan(&rows).Error; err != nil {
 		t.Fatalf("[%s] explain: %v", label, err)
 	}
 	if len(rows) == 0 {
@@ -244,13 +246,17 @@ func explain(t *testing.T, db *gorm.DB, label, explainSQL, wantIndex string) {
 	if !containsStr(js, wantIndex) {
 		t.Fatalf("[%s] EXPLAIN 未命中索引 %s:\n%s", label, wantIndex, js)
 	}
-	t.Logf("[%s] 命中索引 %s (EXPLAIN JSON 已核实)", label, wantIndex)
+	hasSort := containsStr(js, `"using_filesort": true`)
+	if wantNoSort && hasSort {
+		t.Fatalf("[%s] 计划里出现 using_filesort（排序没被索引覆盖）:\n%s", label, js)
+	}
+	t.Logf("[%s] 命中索引 %s（filesort=%v, EXPLAIN JSON 已核实）", label, wantIndex, hasSort)
 }
 
 // explainPG 跑 PostgreSQL EXPLAIN (FORMAT JSON)，断言走了 Index/Bitmap Index Scan
 // 且命中的索引属于 wantIndexes 之一（PG 的代价模型可能在同前缀的多个索引间选择，
 // 例如 task_type,status,next_run_at 与 task_type,status,created_at 前缀相同）。
-func explainPG(t *testing.T, db *gorm.DB, label, sql string, wantIndexes ...string) {
+func explainPG(t *testing.T, db *gorm.DB, label, sql string, wantNoSort bool, wantIndexes ...string) {
 	var jsBytes []byte
 	row := db.Raw("EXPLAIN (FORMAT JSON) " + sql).Row()
 	if err := row.Scan(&jsBytes); err != nil {
@@ -262,6 +268,9 @@ func explainPG(t *testing.T, db *gorm.DB, label, sql string, wantIndexes ...stri
 	}
 	if !containsStr(js, "Index Scan") {
 		t.Fatalf("[%s] 未走索引扫描:\n%s", label, js)
+	}
+	if wantNoSort && (containsStr(js, `"Node Type": "Sort"`) || containsStr(js, "Incremental Sort")) {
+		t.Fatalf("[%s] 计划里出现 Sort 节点（排序没被索引覆盖）:\n%s", label, js)
 	}
 	var hit string
 	for _, idx := range wantIndexes {
@@ -346,3 +355,97 @@ func seedHeavyPG(t *testing.T, db *gorm.DB, total, due int) {
 }
 
 var _ = gasync.ErrNoAsyncTask
+
+// TestRealSaveHookAndStatus 真库覆盖 Save 主路径（此前只有 SQLite 跑过 Save，
+// MySQL 的 ON CONFLICT 语法错误因此漏网）：认领 → 事务内钩子 → 终态 + 尝试行。
+func TestRealSaveHookAndStatus(t *testing.T) {
+	t.Run("mysql", func(t *testing.T) { runSavePath(t, realMySQLDB(t), DialectMySQL) })
+	t.Run("postgres", func(t *testing.T) { runSavePath(t, realPGDB(t), DialectPostgres) })
+}
+
+func runSavePath(t *testing.T, db *gorm.DB, dialect Dialect) {
+	t.Helper()
+	resetRealDB(t, db)
+	seedAsyncTasks(t, db, "savepath", 1)
+	ctx := context.Background()
+	src, err := New(Config{DB: db, WorkerID: "w-save", LeaseTTL: 60 * time.Second})
+	if err != nil {
+		t.Fatalf("[%s] new source: %v", dialect, err)
+	}
+	task, err := src.Fetch(ctx, "savepath")
+	if err != nil {
+		t.Fatalf("[%s] fetch: %v", dialect, err)
+	}
+	hookCalled := false
+	err = src.Save(ctx, task, gasync.Result{Outcome: gasync.OutcomeSucceeded, Duration: 5 * time.Millisecond},
+		func(hctx context.Context) error {
+			hookCalled = true
+			tx, ok := gasync.TxFromContext(hctx).(*gorm.DB)
+			if !ok || tx == nil {
+				t.Fatalf("[%s] 本地形态钩子应拿到事务", dialect)
+			}
+			// 用 trace_id 当「副作用标记」：result 列会被终态更新按 handler payload 覆盖。
+			return tx.Exec(`UPDATE core_async_task SET trace_id = 'hook-ok' WHERE id = ?`, task.ID).Error
+		})
+	if err != nil {
+		t.Fatalf("[%s] save: %v", dialect, err)
+	}
+	if !hookCalled {
+		t.Fatalf("[%s] hook not called", dialect)
+	}
+	var row CoreAsyncTask
+	if err := db.Where("id = ?", task.ID).Take(&row).Error; err != nil {
+		t.Fatalf("[%s] load: %v", dialect, err)
+	}
+	if row.Status != string(gasync.StatusSucceeded) {
+		t.Fatalf("[%s] status = %q, want succeeded", dialect, row.Status)
+	}
+	if row.TraceID != "hook-ok" {
+		t.Fatalf("[%s] 钩子的事务内写入应同事务提交，trace_id=%q", dialect, row.TraceID)
+	}
+	var run CoreAsyncTaskRun
+	if err := db.Where("async_task_id = ? AND generation = ? AND attempt = ?", task.ID, 1, 1).Take(&run).Error; err != nil {
+		t.Fatalf("[%s] run row: %v", dialect, err)
+	}
+	if run.Status != string(gasync.StatusSucceeded) {
+		t.Fatalf("[%s] run status = %q, want succeeded", dialect, run.Status)
+	}
+	if run.FinishedAt == nil || run.StartedAt.IsZero() {
+		t.Fatalf("[%s] run 起止时间未写全: started=%v finished=%v", dialect, run.StartedAt, run.FinishedAt)
+	}
+}
+
+// TestRealLabelsFilter 真库覆盖 labels 过滤（PostgreSQL 的 text->> 曾直接报错）。
+func TestRealLabelsFilter(t *testing.T) {
+	t.Run("mysql", func(t *testing.T) { runLabelsFilter(t, realMySQLDB(t), DialectMySQL) })
+	t.Run("postgres", func(t *testing.T) { runLabelsFilter(t, realPGDB(t), DialectPostgres) })
+}
+
+func runLabelsFilter(t *testing.T, db *gorm.DB, dialect Dialect) {
+	t.Helper()
+	resetRealDB(t, db)
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		row := &CoreAsyncTask{
+			ID: genUUID(), CreatedAt: now, UpdatedAt: now, TaskType: "labels",
+			Status: "pending", Generation: 1, MaxAttempts: 3, NextRunAt: now.Add(-time.Minute),
+			Labels: `{"app_group":"g0"}`, // 注意：列是 text，PG 侧必须 ::jsonb 才能 ->> 取值
+		}
+		if i == 2 {
+			row.Labels = `` // 空串必须被安全跳过（非法 JSON）
+		}
+		if err := db.Create(row).Error; err != nil {
+			t.Fatalf("[%s] seed: %v", dialect, err)
+		}
+	}
+	s := newStore(db, dialect, time.Minute)
+	rows, total, err := s.ListAsyncTask(context.Background(), &gasync.AsyncTaskCond{
+		Labels: map[string]string{"app_group": "g0"},
+	})
+	if err != nil {
+		t.Fatalf("[%s] ListAsyncTask(labels) err = %v", dialect, err)
+	}
+	if total != 2 || len(rows) != 2 {
+		t.Fatalf("[%s] labels 过滤 total=%d rows=%d, want 2", dialect, total, len(rows))
+	}
+}

@@ -19,22 +19,28 @@ type memSource struct {
 	mu     sync.Mutex
 	queues map[string][]*gasync.AsyncTask
 
-	results   []recordedResult // 每次 Save 的客观结果
-	renews    []*gasync.AsyncTask      // 每次 Renew 的任务（停机放租约证据）
-	callbacks int              // 被实际调用的钩子次数
-	hooks     []string         // 被调用的钩子名（on_success / on_retry / on_failure / on_canceled）
+	results   []recordedResult    // 每次 Save 的客观结果
+	renews    []*gasync.AsyncTask // 每次 Renew 的任务（执行期续租证据）
+	releases  []*gasync.AsyncTask // 每次 Release 的任务（停机/交付失败放租约证据）
+	callbacks int                 // 被实际调用的钩子次数
+	hooks     []string            // 被调用的钩子名（on_success / on_retry / on_failure / on_canceled）
 
 	// retryUpperBound 控制「可重试的失败」最多重新入队几次，避免无限循环。
 	retryUpperBound int
+
+	// fetchCount 认领次数（用于断言「每类型单点轮询」不随并发放大）。
+	fetchCount int
+	// renewErr 非 nil 时 Renew 直接返回它（模拟失权/故障）。
+	renewErr error
 }
 
 var _ gasync.Source = (*memSource)(nil)
 
 type recordedResult struct {
-	AsyncTaskID   string
-	Outcome gasync.Outcome
-	Failure gasync.FailureKind
-	Err     error
+	AsyncTaskID string
+	Outcome     gasync.Outcome
+	Failure     gasync.FailureKind
+	Err         error
 }
 
 func newMemSource() *memSource {
@@ -58,6 +64,7 @@ func (m *memSource) push(taskType string, task *gasync.AsyncTask) {
 func (m *memSource) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.fetchCount++
 	q := m.queues[taskType]
 	if len(q) == 0 {
 		return nil, gasync.ErrNoAsyncTask
@@ -67,11 +74,19 @@ func (m *memSource) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTa
 	return task, nil
 }
 
-// Renew 记录放租约的调用（内存实现无实际租约）。
+// Renew 记录续租调用（内存实现无实际租约）。
 func (m *memSource) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.renews = append(m.renews, task)
+	return m.renewErr
+}
+
+// Release 记录放租约调用（停机或认领后无法交付时）。
+func (m *memSource) Release(ctx context.Context, task *gasync.AsyncTask) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releases = append(m.releases, task)
 	return nil
 }
 
@@ -79,10 +94,10 @@ func (m *memSource) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 func (m *memSource) Save(ctx context.Context, task *gasync.AsyncTask, r gasync.Result, callback gasync.EnsureFunc) error {
 	m.mu.Lock()
 	m.results = append(m.results, recordedResult{
-		AsyncTaskID:   task.ID,
-		Outcome: r.Outcome,
-		Failure: r.Failure,
-		Err:     r.Err,
+		AsyncTaskID: task.ID,
+		Outcome:     r.Outcome,
+		Failure:     r.Failure,
+		Err:         r.Err,
 	})
 	// 模拟 Source 的重试决策：仅当 outcome=failed 且仍可重试时把任务重新入队。
 	requeue := false
@@ -139,6 +154,20 @@ func (m *memSource) snapshot() ([]recordedResult, int, []string) {
 	res := append([]recordedResult(nil), m.results...)
 	hooks := append([]string(nil), m.hooks...)
 	return res, m.callbacks, hooks
+}
+
+// fetches 返回 Fetch 调用次数。
+func (m *memSource) fetches() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.fetchCount
+}
+
+// releaseCount 返回 Release 调用次数。
+func (m *memSource) releaseCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.releases)
 }
 
 // renewCount 返回 Renew 调用次数。

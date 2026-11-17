@@ -38,14 +38,14 @@ const (
 
 // AsyncTask 是一条有状态的任务实体，对应表 core_async_task。
 type AsyncTask struct {
-	ID          string
-	Type        string
-	Status      Status
-	Priority    int
-	Payload     []byte
-	UniqKey     string // 空串表示无幂等键
-	BizType     string
-	BizID       string
+	ID       string
+	Type     string
+	Status   Status
+	Priority int
+	Payload  []byte
+	UniqKey  string // 空串表示无幂等键
+	BizType  string
+	BizID    string
 	// ChainID 任务链 ID（空串=独立任务）。同一条业务链的多个 step 共享同一 ChainID。
 	ChainID string
 	// Step 步骤序号，从 0 开始；独立任务恒为 0。
@@ -68,16 +68,27 @@ type AsyncTask struct {
 	Labels    map[string]string
 	RequestID string
 	TraceID   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Bind 反序列化 Payload 到 v。
+//
+// 空 payload 直接返回 nil（无入参的任务不必特殊处理）：交给 json.Unmarshal 会得到
+// "unexpected end of JSON input"，而被当作参数非法 → 不重试 → 任务直接 failed。
 func (t *AsyncTask) Bind(v any) error {
-	if len(t.Payload) == 0 {
-		return json.Unmarshal(nil, v)
+	if t == nil || len(t.Payload) == 0 {
+		return nil
 	}
 	return json.Unmarshal(t.Payload, v)
+}
+
+// HasRemainingAttempts 表示本轮是否还有剩余重试次数（MaxAttempts<=0 视为不设上限）。
+func (t *AsyncTask) HasRemainingAttempts() bool {
+	if t.MaxAttempts <= 0 {
+		return true
+	}
+	return t.Attempt < t.MaxAttempts
 }
 
 // IsStuck 判断任务是否卡住：running 且租约已过期（now 之后无可续租的归属）。
@@ -95,21 +106,21 @@ func (t *AsyncTask) CanCancel() bool {
 
 // AsyncTaskRun 是一次尝试记录，对应表 core_async_task_run。一条任务有 0..N 次尝试，按 generation 分组。
 type AsyncTaskRun struct {
-	ID         string
-	AsyncTaskID      string
-	Generation int
-	Attempt    int
-	Status     Status
-	Failure    FailureKind
-	WorkerID   string
-	StartedAt  time.Time
-	FinishedAt *time.Time
-	Duration   time.Duration
-	Result     []byte
-	Error      string
-	RequestID  string
-	TraceID    string
-	CreatedAt  time.Time
+	ID          string
+	AsyncTaskID string
+	Generation  int
+	Attempt     int
+	Status      Status
+	Failure     FailureKind
+	WorkerID    string
+	StartedAt   time.Time
+	FinishedAt  *time.Time
+	Duration    time.Duration
+	Result      []byte
+	Error       string
+	RequestID   string
+	TraceID     string
+	CreatedAt   time.Time
 }
 
 // AsyncTaskSpec 是提交任务时的参数。显式值落库非 0，其余在 Fetch 时按「AsyncTaskSpec > HandlerOption > 配置默认」解析。
@@ -154,7 +165,7 @@ type AsyncTaskCond struct {
 // AsyncTaskRunCond 尝试列表查询条件（manager 使用；根包只定义结构）。
 type AsyncTaskRunCond struct {
 	Page, PageSize int
-	AsyncTaskID          string
+	AsyncTaskID    string
 	Generation     int
 	Status         Status
 	Failure        FailureKind

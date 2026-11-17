@@ -25,9 +25,11 @@ type CoreAsyncTask struct {
 	CreatedAt time.Time `gorm:"column:created_at;index:idx_core_async_task_task_type_status_created_at,priority:3"`
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 
-	TaskType string  `gorm:"column:task_type;type:varchar(128);not null;index:idx_core_async_task_task_type_status_next_run_at,priority:1;index:idx_core_async_task_task_type_status_created_at,priority:1;comment:任务类型"`
-	Status   string  `gorm:"column:status;type:varchar(16);not null;default:'pending';index:idx_core_async_task_task_type_status_next_run_at,priority:2;index:idx_core_async_task_status_lease_until,priority:1;index:idx_core_async_task_status_finished_at,priority:1;index:idx_core_async_task_task_type_status_created_at,priority:2;comment:任务状态"`
-	Priority int32   `gorm:"column:priority;not null;default:0;comment:优先级"`
+	TaskType string `gorm:"column:task_type;type:varchar(128);not null;index:idx_core_async_task_claim,priority:1;index:idx_core_async_task_task_type_status_created_at,priority:1;comment:任务类型"`
+	Status   string `gorm:"column:status;type:varchar(16);not null;default:'pending';index:idx_core_async_task_claim,priority:2;index:idx_core_async_task_status_lease_until,priority:1;index:idx_core_async_task_status_finished_at,priority:1;index:idx_core_async_task_task_type_status_created_at,priority:2;comment:任务状态"`
+	// Priority 参与认领索引（priority DESC）：认领 SQL 按 `priority DESC, next_run_at` 取任务，
+	// 索引顺序与之完全一致才能免掉 filesort。
+	Priority int32   `gorm:"column:priority;not null;default:0;index:idx_core_async_task_claim,priority:3,sort:desc;comment:优先级"`
 	Payload  string  `gorm:"column:payload;type:text;comment:任务入参"`
 	UniqKey  *string `gorm:"column:uniq_key;type:varchar(128);uniqueIndex:uk_core_async_task_uniq_key;comment:幂等键"`
 	BizType  string  `gorm:"column:biz_type;type:varchar(64);not null;default:'';index:idx_core_async_task_biz_type_biz_id,priority:1;comment:业务类型"`
@@ -43,7 +45,7 @@ type CoreAsyncTask struct {
 	MaxAttempts int32 `gorm:"column:max_attempts;not null;default:3;comment:本轮最大尝试次数"`
 	TimeoutMs   int64 `gorm:"column:timeout_ms;not null;default:0;comment:单次执行超时毫秒"`
 
-	NextRunAt  time.Time  `gorm:"column:next_run_at;not null;index:idx_core_async_task_task_type_status_next_run_at,priority:3;comment:最早可认领时间"`
+	NextRunAt  time.Time  `gorm:"column:next_run_at;not null;index:idx_core_async_task_claim,priority:4;comment:最早可认领时间"`
 	LeaseUntil *time.Time `gorm:"column:lease_until;index:idx_core_async_task_status_lease_until,priority:2;comment:租约到期时间"`
 	WorkerID   string     `gorm:"column:worker_id;type:varchar(64);not null;default:'';comment:持有租约的执行者"`
 	StartedAt  *time.Time `gorm:"column:started_at;comment:本轮首次开始时间"`
@@ -70,9 +72,9 @@ type CoreAsyncTaskRun struct {
 	// created_at 单独索引：兜底清理按范围删除。
 	CreatedAt time.Time `gorm:"column:created_at;index:idx_core_async_task_run_created_at;comment:创建时间"`
 
-	AsyncTaskID      string `gorm:"column:async_task_id;type:varchar(36);not null;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:1;comment:所属任务 ID"`
-	Generation int32  `gorm:"column:generation;not null;default:1;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:2;comment:所属重放轮次"`
-	Attempt    int32  `gorm:"column:attempt;not null;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:3;comment:本轮第几次尝试"`
+	AsyncTaskID string `gorm:"column:async_task_id;type:varchar(36);not null;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:1;comment:所属任务 ID"`
+	Generation  int32  `gorm:"column:generation;not null;default:1;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:2;comment:所属重放轮次"`
+	Attempt     int32  `gorm:"column:attempt;not null;uniqueIndex:uk_core_async_task_run_async_task_id_generation_attempt,priority:3;comment:本轮第几次尝试"`
 
 	Status      string `gorm:"column:status;type:varchar(16);not null;index:idx_core_async_task_run_status_started_at,priority:1;comment:尝试状态"`
 	FailureKind string `gorm:"column:failure_kind;type:varchar(16);not null;default:'';comment:失败分类"`

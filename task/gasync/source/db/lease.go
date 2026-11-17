@@ -22,6 +22,15 @@ const (
 	RenewLeaseExpired
 )
 
+// terminalStatuses 是「可以回收/清理」的终态集合。新增终态时两处 SQL 都要跟着改。
+var terminalStatuses = []string{
+	string(gasync.StatusSucceeded),
+	string(gasync.StatusFailed),
+	string(gasync.StatusCanceled),
+	string(gasync.StatusSkipped),
+	string(gasync.StatusTimeout),
+}
+
 // renew 续租一次：仅当仍是本 worker 持有且 running 时更新 lease_until=now+LeaseTTL。
 //
 // RowsAffected==0 说明已失权（被接管、被取消、已终态）。此时读回状态区分原因：
@@ -156,7 +165,9 @@ func (s *store) reap(ctx context.Context, batch int) (runs int64, asyncTasks int
 // Cleanup 删除 before 之前进入终态的旧任务与其尝试记录（分批，最多若干批）。
 //
 // 删除条件钉在「终态 + finished_at」：pending/running 永不删；用 finished_at 而非
-// created_at。DELETE 再带一次 status 条件防与认领/接管竞争。这释放 UniqKey。
+// created_at。清理在事务内先锁住候选任务行再删：否则「判到终态 → 被别人 Replay 回 pending
+// 并重认领」之间，会把新一代正在跑的尝试行删掉（任务的 DELETE 有状态守卫活下来，
+// run 行却已经被删了）。
 func (s *store) Cleanup(ctx context.Context, before time.Time, batch int) (tasks int64, runs int64, err error) {
 	if batch <= 0 {
 		batch = 200
@@ -176,30 +187,53 @@ func (s *store) Cleanup(ctx context.Context, before time.Time, batch int) (tasks
 	return tasks, runs, nil
 }
 
-// cleanupOnce 执行一批清理：SELECT id → 事务内先删 run 再删 asyncTask。
+// cleanupOnce 执行一批清理：SELECT 候选 → 事务内锁住仍符合条件的行 → 先删 run 再删 asyncTask。
 // more 表示本批已满、可能还有。
 func (s *store) cleanupOnce(ctx context.Context, before time.Time, batch int) (tasks, runs int64, more bool, err error) {
+	statusList := terminalStatuses
 	// ① SELECT 候选 id：终态且 finished_at < before。
 	selSQL := fmt.Sprintf(`SELECT id FROM %s
-WHERE status IN ('succeeded','failed','canceled','skipped') AND %s LIMIT ?`,
-		CoreAsyncTaskTableName, s.dialect.colLTBefore("finished_at"))
+WHERE status IN (%s) AND %s LIMIT ?`,
+		CoreAsyncTaskTableName, wrapIDPlaceholders(len(statusList)), s.dialect.colLTBefore("finished_at"))
+	selArgs := make([]any, 0, len(statusList)+1)
+	for _, st := range statusList {
+		selArgs = append(selArgs, st)
+	}
+	selArgs = append(selArgs, s.dialect.beforeArg(time.Since(before)), batch)
 	var ids []string
-	if err := s.db.WithContext(ctx).Raw(selSQL, s.dialect.beforeArg(time.Since(before)), batch).Scan(&ids).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(selSQL, selArgs...).Scan(&ids).Error; err != nil {
 		return 0, 0, false, err
 	}
 	if len(ids) == 0 {
 		return 0, 0, false, nil
 	}
-	// ② 事务内先删 run（按 task_id），再删 asyncTask（带终态条件）。
+	// ② 事务内：重新锁定并确认仍是终态 → 删 run → 删 asyncTask。
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		lockSQL := fmt.Sprintf(`SELECT id FROM %s WHERE id IN (%s) AND status IN (%s)%s`,
+			CoreAsyncTaskTableName, wrapIDPlaceholders(len(ids)), wrapIDPlaceholders(len(statusList)),
+			s.dialect.rowLockClause())
+		lockArgs := make([]any, 0, len(ids)+len(statusList))
+		for _, id := range ids {
+			lockArgs = append(lockArgs, id)
+		}
+		for _, st := range statusList {
+			lockArgs = append(lockArgs, st)
+		}
+		var locked []string
+		if err := tx.Raw(lockSQL, lockArgs...).Scan(&locked).Error; err != nil {
+			return err
+		}
+		if len(locked) == 0 {
+			return nil
+		}
 		r := tx.Exec(fmt.Sprintf("DELETE FROM %s WHERE async_task_id IN (%s)",
-			CoreAsyncTaskRunTableName, wrapIDPlaceholders(len(ids))), toArgs(ids)...)
+			CoreAsyncTaskRunTableName, wrapIDPlaceholders(len(locked))), toArgs(locked)...)
 		if r.Error != nil {
 			return r.Error
 		}
 		runs = r.RowsAffected
-		j := tx.Exec(fmt.Sprintf("DELETE FROM %s WHERE id IN (%s) AND status IN ('succeeded','failed','canceled','skipped')",
-			CoreAsyncTaskTableName, wrapIDPlaceholders(len(ids))), toArgs(ids)...)
+		j := tx.Exec(fmt.Sprintf("DELETE FROM %s WHERE id IN (%s)",
+			CoreAsyncTaskTableName, wrapIDPlaceholders(len(locked))), toArgs(locked)...)
 		if j.Error != nil {
 			return j.Error
 		}
@@ -222,11 +256,3 @@ func toArgs(ss []string) []any {
 }
 
 var _ Store = (*store)(nil)
-
-// bumpNextRunAtExpr 返回把 next_run_at 加上 dur 的赋值 SQL 片段与参数。
-//
-// 退避由 DB 表达式加到 next_run_at，不用应用时钟（internals「退避」/「时间来源」）。
-// 供 Save 在「失败可重试」时把下次可认领时间推到 now+dur。
-func (s *store) bumpNextRunAtExpr(dur time.Duration) (string, any) {
-	return s.dialect.afterExpr(), s.dialect.afterArg(dur)
-}

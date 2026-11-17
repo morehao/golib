@@ -10,10 +10,12 @@
 
 ```
 task/gasync                     契约内核：AsyncTask / AsyncTaskRun / AsyncTaskSpec / Source 接口 / 状态 / 错误哨兵
-├── manager                     任务中心：Submit/Get/List/Cancel/Replay/Stats、类型启停、租约判活、Notifier
+├── wire                        远程协议（端点路径 + JSON 类型，客户端/服务端共用一份）
+├── center                      【可选】远程中心服务端参考实现：Fetch/Heartbeat/Callback/Release
+├── manager                     任务中心：Submit/Get/List/Cancel/Replay/Stats、类型启停、租约判活、Notifier、维护循环
 │   ├── notifier/asynq          【可选】基于 asynq 的唤醒通知器（唯一 import asynq 处）
 │   └── health/redis            【可选】基于 Redis 的心跳判活/上报（唯一 import redis 处）
-├── worker                      执行运行时：只依赖 gasync.Source，不 import gorm/manager
+├── worker                      执行运行时：每类型 1 个认领者 + N 个执行槽，执行期续租
 └── source
     ├── db                      DB Source：认领/续租/保存/回收/清理 + core_async_task* 全部 SQL
     └── remote                  远程 Source：HTTP 三段（Fetch/Renew/Save）
@@ -33,12 +35,20 @@ task/gasync                     契约内核：AsyncTask / AsyncTaskRun / AsyncT
 |---|---|
 | `AsyncTask` | 有状态任务实体，对应表 `core_async_task` |
 | `AsyncTaskRun` | 单次尝试记录，对应表 `core_async_task_run`；一条任务 0..N 次尝试，按 `generation`（重放轮次）分组 |
-| `Source` | 取任务与回传结果的接缝：`Fetch` / `Renew` / `Save` / `Close`。`source/db` 与 `source/remote` 是它的两种实现 |
-| `Worker` | 执行运行时，只依赖 `Source`；`Fetch→BeforeExecute→Execute→Save` |
+| `Source` | 取任务与回传结果的接缝：`Fetch` / `Renew` / `Release` / `Save` / `Close`。`source/db` 与 `source/remote` 是它的两种实现 |
+| `Worker` | 执行运行时，只依赖 `Source`；每类型单点认领 → `BeforeExecute → Execute（带续租） → Save` |
 | `Handler` | 业务处理器，唯一必须实现 `Execute(ctx, *gasync.AsyncTask)` |
 | `Manager` | 任务中心门面：提交、查询、取消、重放、统计、类型启停 |
 
 状态机：`pending → running → succeeded / failed / timeout / canceled / skipped`；`running` 失败可按退避回 `pending`（重试），租约过期可被他人接管；终态可 `Replay`（`generation+1`）。
+
+**所有权（租约）语义**：
+- 认领即持有租约（`lease_until = now + LeaseTTL`），执行期由 Worker 按 `LeaseTTL/3` 续租；
+  续租失权返回 `gasync.ErrLeaseLost`，Worker 立即取消执行 ctx，不与接管者双跑。
+- `Save` 在事务内先按 `(worker_id, generation, attempt)` 锁行确认仍持有，再跑业务钩子；
+  失权时返回 `ErrLeaseLost` 且**不跑钩子**（状态可回滚，副作用不可回滚）。
+- 停机/认领后无法交付用 `Release` 把租约置为已过期（**不是**续租），另一实例可立即接管。
+- `manager.Start(ctx)` 起维护循环：回收「次数用尽 + 租约过期」的卡死任务、按 `Retention` 清理终态记录。
 
 ## 三种使用形态
 
@@ -70,7 +80,8 @@ func RunWorkers(ctx context.Context, db *gorm.DB) error {
 		return err
 	}
 
-	w := worker.New(src, &worker.WorkerConfig{Concurrency: 10}) // Worker 只认 gasync.Source，不 import manager
+	// LeaseTTL 必须与 sourcedb.Config.LeaseTTL 一致：Worker 用它决定续租周期。
+	w := worker.New(src, &worker.WorkerConfig{Concurrency: 10, LeaseTTL: 60 * time.Second})
 	_ = w.Register("email:send", worker.HandlerFunc(func(ctx context.Context, t *gasync.AsyncTask) error {
 		var p EmailPayload
 		if err := t.Bind(&p); err != nil { // payload 反序列化失败：不重试，直接 failed
@@ -134,7 +145,16 @@ func Start(ctx context.Context, db *gorm.DB, payload []byte, orderNo string) (*g
 	}
 	defer center.Close()
 
-	w := worker.New(center.Source(), &worker.WorkerConfig{Concurrency: 10}) // 复用 manager 内部的 DB Source
+	// 必须显式启动维护循环：否则「次数用尽后崩溃」的任务会永久停在 running、
+	// 终态记录也不会按 Retention 清理。
+	if err := center.Start(ctx); err != nil {
+		return nil, false, err
+	}
+
+	w := worker.New(center.Source(), &worker.WorkerConfig{
+		Concurrency: 10,
+		LeaseTTL:    60 * time.Second, // 必须与 manager.Config.LeaseTTL 一致
+	}) // 复用 manager 内部的 DB Source
 	_ = w.Register("invoice:issue", &InvoiceHandler{db: db})                // InvoiceHandler 需实现 Execute(ctx, *gasync.AsyncTask) error
 	if err := w.Start(ctx); err != nil {
 		return nil, false, err
@@ -190,6 +210,51 @@ func RunWorker(ctx context.Context) error {
 
 同一份 `Handler` + `Worker` 可在本地 / 远程两种 `Source` 上运行，流程结论一致（见 `TestA12_SourceReplaceable`）。远程形态下钩子拿不到事务（`gasync.TxFromContext` 返回 nil）。
 
+**中心侧**（服务端）用 `center` + `ginasync` 即可，不需要自己写协议：
+
+```go
+import (
+	"github.com/morehao/golib/biz/gserver/ginasync"
+	gasynccenter "github.com/morehao/golib/task/gasync/center"
+	"github.com/morehao/golib/task/gasync/manager"
+)
+
+// 中心进程：manager（落库 + 维护循环）+ center（协议逻辑）+ ginasync（HTTP 绑定）
+mgr, err := manager.New(&manager.Config{LeaseTTL: 60 * time.Second}, db)
+if err != nil {
+	return err
+}
+if err := mgr.Start(ctx); err != nil { // 远端 worker 崩溃后靠维护循环判死
+	return err
+}
+defer mgr.Close()
+
+c, err := gasynccenter.New(mgr)
+if err != nil {
+	return err
+}
+ginasync.RegisterCenter(r.Group("/gasync/center"), c) // 4 个协议端点
+```
+
+远端 worker 侧只需把 `BaseURL` 指到这个 group：`remote.New(remote.Config{BaseURL: "https://center/gasync/center", WorkerID: "w-1"})`。
+`task/gasync/wire` 是两端共用的协议定义（路径与 JSON 字段），改动只会有一处。
+
+#### 远程中心的 4 个端点（`source/remote` 的对接契约）
+
+客户端是 `source/remote`，服务端参考实现是 `task/gasync/center` + `biz/gserver/ginasync.RegisterCenter`，
+协议定义在 `task/gasync/wire`。自建中心时至少要提供：
+
+| 端点 | 请求体 | 响应 |
+|---|---|---|
+| `POST {base}/GetPendingAsyncTask` | `{"task_type","worker_id"}` | `200` + `{"available":true,"asyncTask":{...}}`；无任务用 `204` 或 `available:false` |
+| `POST {base}/Heartbeat` | `{"task_id","worker_id"}` | `200`/`204` 表示仍持有；其它状态按失败累计 |
+| `POST {base}/Callback` | `{"task_id","worker_id","status","result","error"}` | `200`/`204`；失败会被客户端重试（默认 3 次后报 `ErrCallbackLost`） |
+| `POST {base}/Release` | `{"task_id","worker_id"}` | `200`/`204`；`404`/`405` 视为「中心未实现」按无操作处理 |
+
+`asyncTask` 字段：`id/type/priority/payload/attempt/max_attempts/timeout_ms/request_id/trace_id`。
+中心侧要做到三件事才谈得上「即时释放/不重复执行」：同一任务同一时刻只派给一个 `worker_id`、
+`Heartbeat` 校验归属、`Callback` 只接受当前归属者的结果。
+
 ## 关键 API
 
 ### 根包 `gasync`
@@ -211,19 +276,35 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 // Source 仅实现 gasync.Source：Fetch / Renew / Save / Close；不含 Submit（提交走 manager）
 ```
 
+### `wire`
+
+- 端点路径常量 `PathFetch` / `PathHeartbeat` / `PathCallback` / `PathRelease`；
+- `Task`（跨网络任务子集）、`FetchRequest/Response`、`HeartbeatRequest`、`CallbackRequest`、`ReleaseRequest`；
+- 只依赖根包 gasync（`scripts/check-gasync-deps.sh` 断言），客户端/服务端/HTTP 适配三方共用。
+
 ### `manager`
 
-- `New(cfg *Config, db *gorm.DB, opts...) (*Manager, error)`；`Submit` / `SubmitAfter`（步骤链）/ `Get` / `GetRuns` / `List` / `ListRuns` / `Cancel` / `Replay` / `Stats` / `Mode` / `Store` / `Source` / `Close`；
+- `New(cfg *Config, db *gorm.DB, opts...) (*Manager, error)`；`Start(ctx)`（维护循环）/ `Close`；`Submit` / `SubmitAfter`（步骤链）/ `Get` / `GetRuns` / `List` / `ListRuns` / `Cancel` / `Replay` / `Stats` / `Mode` / `Store` / `Source`；
 - 类型级启停：`Disable(ctx, type)` / `Enable(ctx, type)` / `IsTypeEnabled` / `TypeGate(ttl)`；
 - 存活判定：`Registry() WorkerRegistry`（基于租约推导，零外部依赖）；
-- 选项：`WithoutAutoMigrate` / `WithNotifier` / `WithBackoff` / `WithPollInterval` / `WithBatchSize` / `WithLeaseTTL` / `WithRetention`。
+- 选项：`WithoutAutoMigrate` / `WithNotifier` / `WithBackoff` / `WithBatchSize`（维护循环批量）/ `WithLeaseTTL` / `WithRetention`；
+  `WithPollInterval` 仍存在但**已不生效**（轮询由 `worker.WorkerConfig.PollInterval` 决定）。
+
+### `center`（远程中心服务端，可选）
+
+- `New(m *manager.Manager) (*Center, error)`；
+- `Fetch(ctx, wire.FetchRequest)` / `Heartbeat` / `Callback` / `Release`——与 `source/remote` 的四个端点一一对应；
+- 语义：认领复用 DB 的 `FOR UPDATE SKIP LOCKED`；心跳校验归属（非持有者 `ErrLeaseLost`）；
+  回传对已终态任务幂等 ACK、对非归属者 `ErrLeaseLost`；放租约幂等。
+- HTTP 绑定：`ginasync.RegisterCenter(group, center)`（裸 JSON，不走业务 envelope）。
 
 ### `worker`
 
 - `New(src, cfg)`；`Register(type, handler, opts...)`（必须在 `Start` 前）；
 - `Start(ctx) error`（同步非阻塞、启动错误经返回值上报）；`Shutdown(ctx) error`；`Run(ctx) error`（阻塞兼容层 = Start + 等待退出）；
-- `HandlerOption`：`WithHandlerTimeout` / `WithHandlerMaxAttempts` / `WithHandlerConcurrency`（每类型并发）/ `WithHandlerBackoff`；
-- 可选：`WorkerConfig.TypeGate`（类型启停）、`HealthReporter` + `HealthReportInterval`（存活上报）。
+- `HandlerOption`：`WithHandlerTimeout` / `WithHandlerConcurrency`（每类型并发）；
+- `WorkerConfig`：`Concurrency` / `LeaseTTL` / `PollInterval` / `FallbackPollInterval` / `ShutdownTimeout` / `WakeSource` / `TypeGate` / `HealthReporter`；
+- 可选：`WorkerConfig.TypeGate`（类型启停）、`HealthReporter` + `HealthReportInterval`（存活上报）、`WakeSource`（唤醒信号）。
 
 ## 进阶能力
 
@@ -232,6 +313,9 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 - **每类型并发**：`WithHandlerConcurrency(n)` 覆写该类型执行槽数，未设回落全局 `Concurrency`。
 - **超时独立状态**：执行超时落 `StatusTimeout`（`Stats.Timeout` 计数）。
 - **业务维度 labels + 富查询**：`AsyncTaskSpec.Labels` 落 JSON，`AsyncTaskCond` 支持按 label/时间区间/白名单 `OrderBy` 过滤。
+- **后台维护（需要显式启动）**：`manager.Start(ctx)` 按 `ReaperInterval` 回收（收口残留尝试行、判死「次数用尽 + 租约过期」的任务）+ 按 `CleanupInterval`/`Retention` 清理终态记录；`Close` 停止。
+- **执行期续租**：Worker 按 `LeaseTTL/3` 续租，失权（`ErrLeaseLost`）立即取消执行 ctx；`Shutdown` 用 `Release` 放租约（不是续租），接管方无需等 TTL。
+- **每类型单点认领**：每类型只起 1 个 fetcher + N 个执行槽，空闲时该类型只有 1 路轮询，不随并发数放大。
 - **唤醒加速（可选）**：`manager.WithNotifier(asynqnotifier)` 注入 asynq 通知器，提交后毫秒级唤醒；通知器**不参与正确性**，信号丢失由兜底轮询接手（`ErrNotify` 表示已落库、通知未发出，勿重试提交）。
 - **存活判定/上报（可选）**：默认 `manager.Registry()` 用租约推导在线 worker；需要主动心跳时用可选子包 `manager/health/redis`。
 
@@ -253,6 +337,8 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 - **handler 必须幂等**：租约过期被接管、停机超时被接管都会重跑；用 `AsyncTask.ID` + `Generation` + `Attempt` 做幂等键。
 - **handler 必须响应 `ctx.Done()`**：超时/取消通过取消 ctx 表达；忽略它会在超时后继续跑完。
 - **`Submit` 三值语义**：`err==nil` 成功；`err==ErrNotify` 已落库但通知没发出（**勿重试**，兜底轮询接手）；`submitted` 区分是否新建（幂等键命中时为既有任务）。
+- **两处 LeaseTTL 必须一致**：`worker.WorkerConfig.LeaseTTL` 与 `manager.Config.LeaseTTL` / `source/db.Config.LeaseTTL` 是同一个租约时长，Worker 侧小了会被误判失权，大了接管会变慢。
+- **记得 `manager.Start(ctx)`**：管理面进程要回收/清理就必须启动维护循环；只提交不管理的进程可以只 `New` + `Close`。
 - **两表无软删除**：用 `gormdao` 时传 `WithoutSoftDelete()`。
 
 ## 测试
@@ -260,7 +346,10 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 ```bash
 export GOCACHE=$PWD/.dsh/tmp/gocache GOFLAGS=-mod=mod
 go test ./task/gasync/... -count=1          # 单元 + 集成（真库/真 Redis 连不上自动 skip）
+go test ./task/gasync/... -race -count=1    # 并发路径
 bash scripts/check-gasync-deps.sh           # 依赖边界断言（无环、worker 不含 gorm/redis）
 ```
 
-真库/真 Redis 用例连不上会自动 `t.Skip`——**skip 不等于验证过**。
+真库用例按方言拆成子测试（`TestRealXxx/mysql`、`TestRealXxx/postgres`），一种方言连不上只跳过它自己；
+`MYSQL_DSN` / `POSTGRES_DSN` / `REDIS_ADDR` 见 `.env.example`。**skip 不等于验证过**：MySQL 的
+`Save`（方言差异）与 PostgreSQL 的 `Labels` 过滤都必须真库跑过才算数。

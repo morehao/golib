@@ -101,7 +101,8 @@ func TestChain_FailFastCascade(t *testing.T) {
 	m := newChainTestManager(t, cfg)
 	ctx := context.Background()
 
-	s0, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "chain"})
+	// MaxAttempts=1：首次失败即终态，无需在内存里伪造 attempt。
+	s0, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "chain", MaxAttempts: 1})
 	s1, _, _ := m.SubmitAfter(ctx, s0.ID, &gasync.AsyncTaskSpec{Type: "chain"})
 	s2, _, _ := m.SubmitAfter(ctx, s1.ID, &gasync.AsyncTaskSpec{Type: "chain"})
 
@@ -110,7 +111,6 @@ func TestChain_FailFastCascade(t *testing.T) {
 	if err != nil || claimed.ID != s0.ID {
 		t.Fatalf("fetch s0: id=%v err=%v", claimed, err)
 	}
-	claimed.Attempt = claimed.MaxAttempts // 次数用尽，直接失败终态
 	err = m.dbSrc.Save(ctx, claimed, gasync.Result{
 		Outcome: gasync.OutcomeFailed,
 		Failure: gasync.FailureHandler,
@@ -135,10 +135,16 @@ func TestChain_FailFastCascade(t *testing.T) {
 func TestChain_FailFastOff(t *testing.T) {
 	m := newChainTestManager(t, nil) // FailFastChain 默认 false
 	ctx := context.Background()
-	s0, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "chain"})
+	s0, _, _ := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "chain", MaxAttempts: 1})
 	s1, _, _ := m.SubmitAfter(ctx, s0.ID, &gasync.AsyncTaskSpec{Type: "chain"})
 
-	_ = m.dbSrc.Save(ctx, s0, gasync.Result{Outcome: gasync.OutcomeFailed, Failure: gasync.FailureHandler}, nil)
+	claimed, err := m.dbSrc.Fetch(ctx, "chain")
+	if err != nil {
+		t.Fatalf("fetch s0: %v", err)
+	}
+	if err := m.dbSrc.Save(ctx, claimed, gasync.Result{Outcome: gasync.OutcomeFailed, Failure: gasync.FailureHandler}, nil); err != nil {
+		t.Fatalf("save s0: %v", err)
+	}
 
 	j, _ := m.Get(ctx, s1.ID)
 	if j.Status != gasync.StatusPending {
