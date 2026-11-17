@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/task/gasync"
+	"github.com/morehao/golib/task/gasync/wire"
 )
 
 // 默认参数。Config 中未显式给出的字段按这些值解析。
@@ -130,49 +131,6 @@ func New(cfg Config) (*Source, error) {
 	return s, nil
 }
 
-// getPendingAsyncTaskReq 是 GetPendingAsyncTask 的请求体。
-type getPendingAsyncTaskReq struct {
-	TaskType string `json:"task_type"`
-	WorkerID string `json:"worker_id"`
-}
-
-// pendingAsyncTaskResp 是 GetPendingAsyncTask 的响应体。中心「无任务」时 Available=false 或 204。
-type pendingAsyncTaskResp struct {
-	// Available 为 false 表示当前无待执行任务，等价于「无任务」。
-	Available bool `json:"available"`
-	// AsyncTask 是中心派发的任务；attempt 由中心给出，直接落到 gasync.AsyncTask.Attempt。
-	AsyncTask *asyncTaskWire `json:"asyncTask"`
-}
-
-// asyncTaskWire 是跨网络的 AsyncTask 子集。只传 Worker 执行所需的字段，避免根包实体全量序列化的耦合。
-type asyncTaskWire struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	Priority    int    `json:"priority"`
-	Payload     []byte `json:"payload"`
-	Attempt     int    `json:"attempt"`
-	MaxAttempts int    `json:"max_attempts"`
-	TimeoutMS   int64  `json:"timeout_ms"`
-	RequestID   string `json:"request_id"`
-	TraceID     string `json:"trace_id"`
-}
-
-func (w *asyncTaskWire) toAsyncTask() *gasync.AsyncTask {
-	return &gasync.AsyncTask{
-		ID:          w.ID,
-		Type:        w.Type,
-		Status:      gasync.StatusRunning,
-		Priority:    w.Priority,
-		Payload:     w.Payload,
-		Attempt:     w.Attempt,
-		MaxAttempts: w.MaxAttempts,
-		Timeout:     time.Duration(w.TimeoutMS) * time.Millisecond,
-		RequestID:   w.RequestID,
-		TraceID:     w.TraceID,
-		WorkerID:    "",
-	}
-}
-
 // Fetch 取一条待执行任务：POST {base}/GetPendingAsyncTask。
 //
 //   - 中心返回「无任务」（available=false 或 HTTP 204）时返回 gasync.ErrNoAsyncTask（不是错误，
@@ -185,8 +143,8 @@ func (s *Source) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTask,
 	if taskType == "" {
 		return nil, gasync.ErrEmptyType
 	}
-	body, _ := json.Marshal(getPendingAsyncTaskReq{TaskType: taskType, WorkerID: s.cfg.WorkerID})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/GetPendingAsyncTask", bytes.NewReader(body))
+	body, _ := json.Marshal(wire.FetchRequest{TaskType: taskType, WorkerID: s.cfg.WorkerID})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+wire.PathFetch, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -212,20 +170,14 @@ func (s *Source) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTask,
 		return nil, fmt.Errorf("%w: GetPendingAsyncTask status=%d body=%s", ErrBadResponse, resp.StatusCode, bytes.TrimSpace(slurp))
 	}
 
-	var out pendingAsyncTaskResp
+	var out wire.FetchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("%w: decode GetPendingAsyncTask: %v", ErrBadResponse, err)
 	}
-	if !out.Available || out.AsyncTask == nil {
+	if !out.Available || out.Task == nil {
 		return nil, gasync.ErrNoAsyncTask
 	}
-	return out.AsyncTask.toAsyncTask(), nil
-}
-
-// heartbeatReq 是 Heartbeat 的请求体。
-type heartbeatReq struct {
-	TaskID   string `json:"task_id"`
-	WorkerID string `json:"worker_id"`
+	return out.Task.ToAsyncTask(), nil
 }
 
 // Renew 向中心发心跳续租：POST {base}/Heartbeat。
@@ -238,8 +190,8 @@ func (s *Source) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 	if task == nil || task.ID == "" {
 		return gasync.ErrAsyncTaskNotFound
 	}
-	body, _ := json.Marshal(heartbeatReq{TaskID: task.ID, WorkerID: s.cfg.WorkerID})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/Heartbeat", bytes.NewReader(body))
+	body, _ := json.Marshal(wire.HeartbeatRequest{TaskID: task.ID, WorkerID: s.cfg.WorkerID})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+wire.PathHeartbeat, bytes.NewReader(body))
 	if err != nil {
 		return s.renewFailed(err)
 	}
@@ -277,12 +229,6 @@ func (s *Source) renewFailed(cause error) error {
 	return fmt.Errorf("gasync: remote heartbeat failed (%d/%d): %w", fails, s.cfg.RenewMaxFailures, cause)
 }
 
-// releaseReq 是 Release 的请求体。
-type releaseReq struct {
-	TaskID   string `json:"task_id"`
-	WorkerID string `json:"worker_id"`
-}
-
 // Release 主动放弃所有权：POST {base}/Release。
 //
 // 中心未实现该端点（404/405）时按「无操作」处理——租约最晚按 TTL 过期，
@@ -291,8 +237,8 @@ func (s *Source) Release(ctx context.Context, task *gasync.AsyncTask) error {
 	if task == nil || task.ID == "" {
 		return nil
 	}
-	body, _ := json.Marshal(releaseReq{TaskID: task.ID, WorkerID: s.cfg.WorkerID})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+"/Release", bytes.NewReader(body))
+	body, _ := json.Marshal(wire.ReleaseRequest{TaskID: task.ID, WorkerID: s.cfg.WorkerID})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+wire.PathRelease, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -309,15 +255,6 @@ func (s *Source) Release(ctx context.Context, task *gasync.AsyncTask) error {
 		slurp, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("gasync: remote Release status=%d body=%s", resp.StatusCode, bytes.TrimSpace(slurp))
 	}
-}
-
-// callbackReq 是 Callback 的请求体。
-type callbackReq struct {
-	TaskID   string `json:"task_id"`
-	WorkerID string `json:"worker_id"`
-	Status   string `json:"status"`
-	Result   []byte `json:"result,omitempty"`
-	Error    string `json:"error,omitempty"`
 }
 
 // Save 保存一次执行结果：先调本地钩子 callback，再 POST {base}/Callback。
@@ -356,12 +293,14 @@ func (s *Source) Save(ctx context.Context, task *gasync.AsyncTask, r gasync.Resu
 	}
 	workerID = s.cfg.WorkerID
 
-	body, _ := json.Marshal(callbackReq{
-		TaskID:   taskID,
-		WorkerID: workerID,
-		Status:   string(r.Outcome),
-		Result:   r.Payload,
-		Error:    errMsg,
+	body, _ := json.Marshal(wire.CallbackRequest{
+		TaskID:     taskID,
+		WorkerID:   workerID,
+		Status:     string(r.Outcome),
+		Failure:    string(r.Failure),
+		Result:     r.Payload,
+		Error:      errMsg,
+		DurationMS: r.Duration.Milliseconds(),
 	})
 
 	return s.postCallback(ctx, body)
@@ -369,7 +308,7 @@ func (s *Source) Save(ctx context.Context, task *gasync.AsyncTask, r gasync.Resu
 
 // postCallback POST Callback，按配置重试。
 func (s *Source) postCallback(ctx context.Context, body []byte) error {
-	url := s.cfg.BaseURL + "/Callback"
+	url := s.cfg.BaseURL + wire.PathCallback
 	var lastErr error
 	attempts := s.cfg.CallbackMaxRetry + 1 // 首次 + 重试次数
 	for i := 0; i < attempts; i++ {

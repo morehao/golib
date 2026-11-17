@@ -10,6 +10,8 @@
 
 ```
 task/gasync                     契约内核：AsyncTask / AsyncTaskRun / AsyncTaskSpec / Source 接口 / 状态 / 错误哨兵
+├── wire                        远程协议（端点路径 + JSON 类型，客户端/服务端共用一份）
+├── center                      【可选】远程中心服务端参考实现：Fetch/Heartbeat/Callback/Release
 ├── manager                     任务中心：Submit/Get/List/Cancel/Replay/Stats、类型启停、租约判活、Notifier、维护循环
 │   ├── notifier/asynq          【可选】基于 asynq 的唤醒通知器（唯一 import asynq 处）
 │   └── health/redis            【可选】基于 Redis 的心跳判活/上报（唯一 import redis 处）
@@ -208,10 +210,39 @@ func RunWorker(ctx context.Context) error {
 
 同一份 `Handler` + `Worker` 可在本地 / 远程两种 `Source` 上运行，流程结论一致（见 `TestA12_SourceReplaceable`）。远程形态下钩子拿不到事务（`gasync.TxFromContext` 返回 nil）。
 
-#### 远程中心需要实现的 4 个端点（`source/remote` 的对接契约）
+**中心侧**（服务端）用 `center` + `ginasync` 即可，不需要自己写协议：
 
-`source/remote` 只是**客户端**，本仓库不包含「远程任务中心」的服务端实现（`biz/gserver/ginasync`
-是管理面 REST，不是这套协议）。中心侧至少要提供：
+```go
+import (
+	"github.com/morehao/golib/biz/gserver/ginasync"
+	gasynccenter "github.com/morehao/golib/task/gasync/center"
+	"github.com/morehao/golib/task/gasync/manager"
+)
+
+// 中心进程：manager（落库 + 维护循环）+ center（协议逻辑）+ ginasync（HTTP 绑定）
+mgr, err := manager.New(&manager.Config{LeaseTTL: 60 * time.Second}, db)
+if err != nil {
+	return err
+}
+if err := mgr.Start(ctx); err != nil { // 远端 worker 崩溃后靠维护循环判死
+	return err
+}
+defer mgr.Close()
+
+c, err := gasynccenter.New(mgr)
+if err != nil {
+	return err
+}
+ginasync.RegisterCenter(r.Group("/gasync/center"), c) // 4 个协议端点
+```
+
+远端 worker 侧只需把 `BaseURL` 指到这个 group：`remote.New(remote.Config{BaseURL: "https://center/gasync/center", WorkerID: "w-1"})`。
+`task/gasync/wire` 是两端共用的协议定义（路径与 JSON 字段），改动只会有一处。
+
+#### 远程中心的 4 个端点（`source/remote` 的对接契约）
+
+客户端是 `source/remote`，服务端参考实现是 `task/gasync/center` + `biz/gserver/ginasync.RegisterCenter`，
+协议定义在 `task/gasync/wire`。自建中心时至少要提供：
 
 | 端点 | 请求体 | 响应 |
 |---|---|---|
@@ -245,6 +276,12 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 // Source 仅实现 gasync.Source：Fetch / Renew / Save / Close；不含 Submit（提交走 manager）
 ```
 
+### `wire`
+
+- 端点路径常量 `PathFetch` / `PathHeartbeat` / `PathCallback` / `PathRelease`；
+- `Task`（跨网络任务子集）、`FetchRequest/Response`、`HeartbeatRequest`、`CallbackRequest`、`ReleaseRequest`；
+- 只依赖根包 gasync（`scripts/check-gasync-deps.sh` 断言），客户端/服务端/HTTP 适配三方共用。
+
 ### `manager`
 
 - `New(cfg *Config, db *gorm.DB, opts...) (*Manager, error)`；`Start(ctx)`（维护循环）/ `Close`；`Submit` / `SubmitAfter`（步骤链）/ `Get` / `GetRuns` / `List` / `ListRuns` / `Cancel` / `Replay` / `Stats` / `Mode` / `Store` / `Source`；
@@ -252,6 +289,14 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 - 存活判定：`Registry() WorkerRegistry`（基于租约推导，零外部依赖）；
 - 选项：`WithoutAutoMigrate` / `WithNotifier` / `WithBackoff` / `WithBatchSize`（维护循环批量）/ `WithLeaseTTL` / `WithRetention`；
   `WithPollInterval` 仍存在但**已不生效**（轮询由 `worker.WorkerConfig.PollInterval` 决定）。
+
+### `center`（远程中心服务端，可选）
+
+- `New(m *manager.Manager) (*Center, error)`；
+- `Fetch(ctx, wire.FetchRequest)` / `Heartbeat` / `Callback` / `Release`——与 `source/remote` 的四个端点一一对应；
+- 语义：认领复用 DB 的 `FOR UPDATE SKIP LOCKED`；心跳校验归属（非持有者 `ErrLeaseLost`）；
+  回传对已终态任务幂等 ACK、对非归属者 `ErrLeaseLost`；放租约幂等。
+- HTTP 绑定：`ginasync.RegisterCenter(group, center)`（裸 JSON，不走业务 envelope）。
 
 ### `worker`
 

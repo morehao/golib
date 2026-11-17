@@ -469,6 +469,14 @@ func (c *Manager) Stats(ctx context.Context) (*Stats, error) {
 	return st, nil
 }
 
+// FetchFor 代表「远程执行节点」认领一条任务：以传入的 workerID 写归属列。
+//
+// 远程形态下中心服务的 Source 只有一个固定 workerID，不能直接用它认领——
+// 否则远端 worker 的续租/回传会因归属不符而失权。无任务返回 gasync.ErrNoAsyncTask。
+func (c *Manager) FetchFor(ctx context.Context, taskType, workerID string) (*gasync.AsyncTask, error) {
+	return c.dbSrc.ClaimFor(ctx, taskType, workerID)
+}
+
 // Source 把中心适配成 gasync.Source，交给 worker.New。
 func (c *Manager) Source() gasync.Source { return c.dbSrc }
 

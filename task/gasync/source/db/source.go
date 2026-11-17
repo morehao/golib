@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/morehao/golib/task/gasync"
 	"gorm.io/gorm"
@@ -31,12 +32,24 @@ type source struct {
 // 编译期断言：source 满足 gasync.Source。
 var _ gasync.Source = (*source)(nil)
 
-// Fetch 认领一条任务。无候选返回 gasync.ErrNoAsyncTask。
+// Fetch 以本 Source 的身份认领一条任务。无候选返回 gasync.ErrNoAsyncTask。
 //
 // 认领事务内会一并写入本次尝试的 running 行，因此这里拿到的就是「已翻转为 running、
 // attempt 已 +1、worker_id 已写入」的完整任务，无需二次查询。
 func (s *source) Fetch(ctx context.Context, taskType string) (*gasync.AsyncTask, error) {
-	rows, err := s.store.claimBatch(ctx, taskType, s.workerID, 1)
+	return s.ClaimFor(ctx, taskType, s.workerID)
+}
+
+// ClaimFor 以指定执行者身份认领一条任务。
+//
+// 供「远程任务中心」代表远端 worker 认领：中心侧的 Source 只有一个固定 workerID，
+// 不能直接用它去认领远端 worker 的任务，否则续租/回传的归属校验全都会错位。
+// workerID 为空返回 ErrInvalidConfig；无候选返回 gasync.ErrNoAsyncTask。
+func (s *source) ClaimFor(ctx context.Context, taskType, workerID string) (*gasync.AsyncTask, error) {
+	if strings.TrimSpace(workerID) == "" {
+		return nil, fmt.Errorf("%w: worker_id is empty", gasync.ErrInvalidConfig)
+	}
+	rows, err := s.store.claimBatch(ctx, taskType, workerID, 1)
 	if err != nil {
 		return nil, err
 	}

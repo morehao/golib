@@ -104,10 +104,10 @@ func handleListRuns(mgr *manager.Manager) gin.HandlerFunc {
 			return
 		}
 		cond := &gasync.AsyncTaskRunCond{
-			AsyncTaskID:      uri.ID,
-			Generation: req.Generation,
-			Status:     gasync.Status(req.Status),
-			Failure:    gasync.FailureKind(req.Failure),
+			AsyncTaskID: uri.ID,
+			Generation:  req.Generation,
+			Status:      gasync.Status(req.Status),
+			Failure:     gasync.FailureKind(req.Failure),
 		}
 		cond.Page = req.Page
 		cond.PageSize = req.PageSize

@@ -31,6 +31,25 @@
 - **失权不再「静默成功」**：`Save` 在失去租约（被接管 / 被取消）时返回 `gasync.ErrLeaseLost`，
   且**不执行业务钩子**（此前钩子照跑、事务照提交，副作用与状态分裂）。
 
+### Features（gasync）：远程中心服务端参考实现
+
+远程形态此前只有客户端（`source/remote`）和一份写在测试里的假中心，中心侧要自己从零实现。
+本次补齐服务端（可选组件，不影响本地形态）：
+
+- **`task/gasync/wire`**：远程协议定义（4 个端点路径 + JSON 类型），客户端/服务端/HTTP 适配三方共用，
+  只依赖根包 gasync。
+- **`task/gasync/center`**：中心侧逻辑 `New(mgr)` + `Fetch / Heartbeat / Callback / Release`，
+  认领复用 DB 的 `FOR UPDATE SKIP LOCKED`，心跳/回传校验归属，终态回传幂等 ACK。
+- **`manager.FetchFor(ctx, taskType, workerID)`** + `source/db.(*Source).ClaimFor`：以**远端 worker 的
+  worker_id** 认领（之前只能用自己的固定 workerID，代远端认领会导致归属校验错位）。
+- **`ginasync.RegisterCenter(group, center)`**：把 4 个端点挂到 gin（裸 JSON，不走业务 envelope）。
+- `Callback` 载荷新增可选的 `failure` / `duration_ms`，中心侧据此把超时记成 `StatusTimeout`
+  而不是普通 `failed`（客户端与中心同时升级后生效，旧中心忽略未知字段）。
+
+端到端用例：`biz/gserver/ginasync/center_test.go`（真 remote 客户端 + worker 打通 HTTP 四段）、
+`task/gasync/center/center_test.go`（认领/续租/回传/幂等/放租约/归属校验）。
+`scripts/check-gasync-deps.sh` 增加 `wire`（只依赖根包）与 `center`（不引 gin）两条断言。
+
 ### 迁移（gasync）：认领索引改为「优先级感知」
 
 认领 SQL 的排序是 `ORDER BY priority DESC, next_run_at`，原索引

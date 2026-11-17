@@ -230,7 +230,9 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 - 租约与续租：认领即持租约，执行期由 worker 按 `LeaseTTL/3` 续租；续租失权立即取消执行 ctx，跨实例不重跑
 - 回收与清理：`manager.Start(ctx)` 起维护循环，回收「次数用尽 + 租约过期」的卡死任务、按 `Retention` 清理终态记录
 - 两种唤醒形态：纯轮询（`ModePoll`）、轮询 + 通知器（`ModePollNotify`，依赖 Redis 队列，毫秒级起跑，通知丢失由兜底轮询接手）
-- 远程形态：`task/gasync/source/remote` 走 HTTP 与远端任务中心交互，Worker 侧无需直连数据库
+- 远程形态：`task/gasync/source/remote` 走 HTTP 与远端任务中心交互，Worker 侧无需直连数据库；
+  中心侧参考实现见 `task/gasync/center` + `ginasync.RegisterCenter`（协议定义在 `task/gasync/wire`）
+- 后台维护：`manager.Start(ctx)` 回收卡死任务 + 按 `Retention` 清理终态记录
 - 管理面：`manager` 提供 Submit/Get/List/Cancel/Replay/Stats，可接 `ginasync`（`biz/gserver/ginasync`）暴露 HTTP 端点
 - 自动建表（幂等 `AutoMigrate`）、自动注入 TraceID / RequestID，打通 glog 日志与 gtrace 链路追踪
 

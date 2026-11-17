@@ -53,21 +53,21 @@ func toAsyncTaskResponses(list []*gasync.AsyncTask) []*asyncTaskResponse {
 
 func toRunResponse(r *gasync.AsyncTaskRun) *runResponse {
 	return &runResponse{
-		ID:         r.ID,
-		AsyncTaskID:      r.AsyncTaskID,
-		Generation: r.Generation,
-		Attempt:    r.Attempt,
-		Status:     string(r.Status),
-		Failure:    string(r.Failure),
-		WorkerID:   r.WorkerID,
-		StartedAt:  r.StartedAt.Unix(),
-		FinishedAt: tsPtr(r.FinishedAt),
-		DurationMS: r.Duration.Milliseconds(),
-		Result:     r.Result,
-		Error:      r.Error,
-		RequestID:  r.RequestID,
-		TraceID:    r.TraceID,
-		CreatedAt:  r.CreatedAt.Unix(),
+		ID:          r.ID,
+		AsyncTaskID: r.AsyncTaskID,
+		Generation:  r.Generation,
+		Attempt:     r.Attempt,
+		Status:      string(r.Status),
+		Failure:     string(r.Failure),
+		WorkerID:    r.WorkerID,
+		StartedAt:   r.StartedAt.Unix(),
+		FinishedAt:  tsPtr(r.FinishedAt),
+		DurationMS:  r.Duration.Milliseconds(),
+		Result:      r.Result,
+		Error:       r.Error,
+		RequestID:   r.RequestID,
+		TraceID:     r.TraceID,
+		CreatedAt:   r.CreatedAt.Unix(),
 	}
 }
 

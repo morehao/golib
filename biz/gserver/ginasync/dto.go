@@ -59,27 +59,27 @@ type asyncTaskResponse struct {
 
 // runResponse 一次尝试记录。
 type runResponse struct {
-	ID         string `json:"id"`
-	AsyncTaskID      string `json:"async_task_id"`
-	Generation int    `json:"generation"`
-	Attempt    int    `json:"attempt"`
-	Status     string `json:"status"`
-	Failure    string `json:"failure"`
-	WorkerID   string `json:"worker_id"`
-	StartedAt  int64  `json:"started_at"`
-	FinishedAt *int64 `json:"finished_at"`
-	DurationMS int64  `json:"duration_ms"`
-	Result     []byte `json:"result"`
-	Error      string `json:"error"`
-	RequestID  string `json:"request_id"`
-	TraceID    string `json:"trace_id"`
-	CreatedAt  int64  `json:"created_at"`
+	ID          string `json:"id"`
+	AsyncTaskID string `json:"async_task_id"`
+	Generation  int    `json:"generation"`
+	Attempt     int    `json:"attempt"`
+	Status      string `json:"status"`
+	Failure     string `json:"failure"`
+	WorkerID    string `json:"worker_id"`
+	StartedAt   int64  `json:"started_at"`
+	FinishedAt  *int64 `json:"finished_at"`
+	DurationMS  int64  `json:"duration_ms"`
+	Result      []byte `json:"result"`
+	Error       string `json:"error"`
+	RequestID   string `json:"request_id"`
+	TraceID     string `json:"trace_id"`
+	CreatedAt   int64  `json:"created_at"`
 }
 
 // asyncTaskListResponse 任务分页列表。
 type asyncTaskListResponse struct {
 	List  []*asyncTaskResponse `json:"list"`
-	Total int64          `json:"total"`
+	Total int64                `json:"total"`
 }
 
 // runListResponse 尝试记录分页列表。

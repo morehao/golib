@@ -57,6 +57,20 @@ else
   echo "⚠ manager 未依赖 source/db（可能结构调整，请确认）"
 fi
 
+# wire: 协议层只依赖根包（客户端/服务端/HTTP 适配三方共用，不得夹带 gorm/gin/manager）
+check_absent ./task/gasync/wire \
+  '^gorm\.io/gorm$' \
+  'github.com/gin-gonic/gin' \
+  'github.com/morehao/golib/task/gasync/manager$' \
+  'github.com/morehao/golib/task/gasync/worker$' \
+  'github.com/morehao/golib/task/gasync/source/db$'
+echo "  wire: 只依赖根包"
+
+# center（远程中心服务端）：不引 HTTP 框架（适配层在 biz/gserver）
+check_absent ./task/gasync/center \
+  'github.com/gin-gonic/gin'
+echo "  center: 不依赖 gin（HTTP 适配在 biz/gserver）"
+
 if [ "$fail" -ne 0 ]; then
   echo "== 断言失败 =="
   exit 1
