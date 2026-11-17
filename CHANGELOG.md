@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.38.4] - 2026-11-17
+
+### Fixes
+
+- **gasync**: 补全租约生命周期、方言覆盖与远程中心参考实现 (#168)
+
+**Full Changelog**: https://github.com/morehao/golib/compare/v1.38.3...v1.38.4
+
 ## [v1.38.1] - 2026-11-16
 
 ### Features
