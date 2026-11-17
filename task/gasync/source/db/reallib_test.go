@@ -212,30 +212,31 @@ func runA8MySQL(t *testing.T, db *gorm.DB) {
 	// 10 万 pending、1 千到期（internals [待核实] 场景）。
 	seedHeavyMySQL(t, db, 100000, 1000)
 	now := "NOW(3)"
-	sql1 := fmt.Sprintf(`SELECT id FROM core_async_task WHERE task_type = 'invoice' AND status='pending' AND next_run_at <= %s AND attempt < max_attempts ORDER BY priority DESC, next_run_at, id LIMIT 50`, now)
+	sql1 := fmt.Sprintf(`SELECT id FROM core_async_task WHERE task_type = 'invoice' AND status='pending' AND next_run_at <= %s AND attempt < max_attempts ORDER BY priority DESC, next_run_at LIMIT 50`, now)
 	sql2 := fmt.Sprintf(`SELECT id FROM core_async_task WHERE status='running' AND lease_until < %s AND task_type='invoice' AND attempt < max_attempts ORDER BY lease_until LIMIT 50`, now)
-	explain(t, db, "MySQL ①", "EXPLAIN FORMAT=JSON "+sql1, "idx_core_async_task_task_type_status_next_run_at")
-	explain(t, db, "MySQL ②", "EXPLAIN FORMAT=JSON "+sql2, "idx_core_async_task_status_lease_until")
+	// ① 必须走新索引且不 filesort（优先级顺序由索引提供）。
+	explainMySQL(t, db, "MySQL ①", sql1, true, "idx_core_async_task_claim")
+	explainMySQL(t, db, "MySQL ②", sql2, false, "idx_core_async_task_status_lease_until")
 }
 
 func runA8PG(t *testing.T, db *gorm.DB) {
 	resetRealDB(t, db)
 	seedHeavyPG(t, db, 100000, 1000)
-	sql1 := `SELECT id FROM core_async_task WHERE task_type = 'invoice' AND status='pending' AND next_run_at <= now() AND attempt < max_attempts ORDER BY priority DESC, next_run_at, id LIMIT 50`
+	sql1 := `SELECT id FROM core_async_task WHERE task_type = 'invoice' AND status='pending' AND next_run_at <= now() AND attempt < max_attempts ORDER BY priority DESC, next_run_at LIMIT 50`
 	sql2 := `SELECT id FROM core_async_task WHERE status='running' AND lease_until < now() AND task_type='invoice' AND attempt < max_attempts ORDER BY lease_until LIMIT 50`
-	explainPG(t, db, "PG ①", sql1,
-		"idx_core_async_task_task_type_status_next_run_at", "idx_core_async_task_task_type_status_created_at")
+	// ① 必须走 idx_core_async_task_claim 且计划里没有 Sort 节点。
+	explainPG(t, db, "PG ①", sql1, true, "idx_core_async_task_claim")
 	// PG 的代价模型在 task_type+status 高选择性的数据分布下，可能选 (task_type,status)
 	// 前缀索引而非 (status,lease_until)。两者都是合法索引扫描，非 Seq Scan 即接受。
-	explainPG(t, db, "PG ②", sql2,
-		"idx_core_async_task_status_lease_until", "idx_core_async_task_task_type_status_created_at",
-		"idx_core_async_task_task_type_status_next_run_at")
+	explainPG(t, db, "PG ②", sql2, false,
+		"idx_core_async_task_status_lease_until", "idx_core_async_task_task_type_status_created_at")
 }
 
-// explain 跑 MySQL EXPLAIN FORMAT=JSON 并断言 key 命中预期索引。
-func explain(t *testing.T, db *gorm.DB, label, explainSQL, wantIndex string) {
+// explainMySQL 跑 MySQL EXPLAIN FORMAT=JSON 并断言命中预期索引；wantNoSort 时
+// 额外断言计划里没有 using_filesort（认领 SQL 的排序必须由索引提供）。
+func explainMySQL(t *testing.T, db *gorm.DB, label, sql string, wantNoSort bool, wantIndex string) {
 	var rows []struct{ EXPLAIN string }
-	if err := db.Raw(explainSQL).Scan(&rows).Error; err != nil {
+	if err := db.Raw("EXPLAIN FORMAT=JSON " + sql).Scan(&rows).Error; err != nil {
 		t.Fatalf("[%s] explain: %v", label, err)
 	}
 	if len(rows) == 0 {
@@ -245,13 +246,17 @@ func explain(t *testing.T, db *gorm.DB, label, explainSQL, wantIndex string) {
 	if !containsStr(js, wantIndex) {
 		t.Fatalf("[%s] EXPLAIN 未命中索引 %s:\n%s", label, wantIndex, js)
 	}
-	t.Logf("[%s] 命中索引 %s (EXPLAIN JSON 已核实)", label, wantIndex)
+	hasSort := containsStr(js, `"using_filesort": true`)
+	if wantNoSort && hasSort {
+		t.Fatalf("[%s] 计划里出现 using_filesort（排序没被索引覆盖）:\n%s", label, js)
+	}
+	t.Logf("[%s] 命中索引 %s（filesort=%v, EXPLAIN JSON 已核实）", label, wantIndex, hasSort)
 }
 
 // explainPG 跑 PostgreSQL EXPLAIN (FORMAT JSON)，断言走了 Index/Bitmap Index Scan
 // 且命中的索引属于 wantIndexes 之一（PG 的代价模型可能在同前缀的多个索引间选择，
 // 例如 task_type,status,next_run_at 与 task_type,status,created_at 前缀相同）。
-func explainPG(t *testing.T, db *gorm.DB, label, sql string, wantIndexes ...string) {
+func explainPG(t *testing.T, db *gorm.DB, label, sql string, wantNoSort bool, wantIndexes ...string) {
 	var jsBytes []byte
 	row := db.Raw("EXPLAIN (FORMAT JSON) " + sql).Row()
 	if err := row.Scan(&jsBytes); err != nil {
@@ -263,6 +268,9 @@ func explainPG(t *testing.T, db *gorm.DB, label, sql string, wantIndexes ...stri
 	}
 	if !containsStr(js, "Index Scan") {
 		t.Fatalf("[%s] 未走索引扫描:\n%s", label, js)
+	}
+	if wantNoSort && (containsStr(js, `"Node Type": "Sort"`) || containsStr(js, "Incremental Sort")) {
+		t.Fatalf("[%s] 计划里出现 Sort 节点（排序没被索引覆盖）:\n%s", label, js)
 	}
 	var hit string
 	for _, idx := range wantIndexes {

@@ -66,9 +66,12 @@ func (s *store) claimBatch(ctx context.Context, taskType, workerID string, want 
 
 // claimSelectAndFlip 在本连接的事务内执行两支 SELECT + 合并去重 + 带 workerID 的一次翻转。
 //
-// 两支认领分批各走各的索引（① idx_core_async_task_task_type_status_next_run_at、
-// ② idx_core_async_task_status_lease_until），合成一条 OR 会让两个索引无法同时生效，
-// 退化成按 task_type 区间逐行过滤（internals「认领」要点 1）。
+// 两支认领分批各走各的索引（① idx_core_async_task_claim、② idx_core_async_task_status_lease_until），
+// 合成一条 OR 会让两个索引无法同时生效，退化成按 task_type 区间逐行过滤（internals「认领」要点 1）。
+//
+// ① 的索引是 (task_type, status, priority DESC, next_run_at)：ORDER BY 与索引列顺序/方向逐列一致，
+// 因此不需要排序。代价是 next_run_at 的谓词退化为索引内过滤——若积压了大量「未来才到期」的高优先级
+// 行，扫描会先跨过它们；这类积压目前不构成主要场景（延迟/退避行通常少数）。
 //
 // 合并时两支交替取（r1[0], r2[0], r1[1], r2[1]…）：只用 want=1 时若简单把 ① 排在前面，
 // 队列一忙 ②（租约过期的接管候选）就永远轮不到，被接管的行会长时间卡在 running。
@@ -76,7 +79,7 @@ func (s *store) claimSelectAndFlip(tx *gorm.DB, taskType, workerID string, want 
 	nowVal := s.dialect.nowValueExpr()
 	lock := s.dialect.claimLockClause()
 
-	// ① 待执行且到点：走 idx_core_async_task_task_type_status_next_run_at
+	// ① 待执行且到点：走 idx_core_async_task_claim（顺序即 priority DESC, next_run_at）
 	// 任务链守卫：prev_step<0（首步/独立任务）直过；否则要求同 chain 的前序 step 已 succeeded。
 	// 子查询走 idx_core_async_task_chain_id_step(chain_id, step)。
 	sql1 := fmt.Sprintf(`SELECT * FROM %s j
@@ -85,7 +88,7 @@ WHERE j.task_type = ? AND j.status = 'pending' AND %s
   AND (j.prev_step < 0 OR EXISTS (
         SELECT 1 FROM %s p
         WHERE p.chain_id = j.chain_id AND p.step = j.prev_step AND p.status = 'succeeded'))
-ORDER BY j.priority DESC, j.next_run_at, j.id
+ORDER BY j.priority DESC, j.next_run_at
 LIMIT ?%s`, CoreAsyncTaskTableName, s.dialect.colLE("next_run_at"), CoreAsyncTaskTableName, lock)
 
 	// ② 执行中但租约过期（接管）：走 idx_core_async_task_status_lease_until

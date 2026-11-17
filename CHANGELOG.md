@@ -31,6 +31,23 @@
 - **失权不再「静默成功」**：`Save` 在失去租约（被接管 / 被取消）时返回 `gasync.ErrLeaseLost`，
   且**不执行业务钩子**（此前钩子照跑、事务照提交，副作用与状态分裂）。
 
+### 迁移（gasync）：认领索引改为「优先级感知」
+
+认领 SQL 的排序是 `ORDER BY priority DESC, next_run_at`，原索引
+`idx_core_async_task_task_type_status_next_run_at (task_type, status, next_run_at)` 提供不了该顺序，
+每次认领都要 filesort。新索引 `idx_core_async_task_claim (task_type, status, priority DESC, next_run_at)`
+与排序逐列一致（MySQL 8 / PostgreSQL / SQLite 均支持降序索引）。
+
+`AutoMigrate` 只会**新增**索引，不会删旧索引，升级后请手工清理一次：
+
+```sql
+-- MySQL 8.0+
+DROP INDEX `idx_core_async_task_task_type_status_next_run_at` ON `core_async_task`;
+
+-- PostgreSQL
+DROP INDEX IF EXISTS "idx_core_async_task_task_type_status_next_run_at";
+```
+
 ### Fixes（gasync）
 
 - **执行期续租**：worker 按 `LeaseTTL/3` 调 `Source.Renew`，续租失权立即取消执行 ctx；

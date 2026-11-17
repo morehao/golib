@@ -537,7 +537,7 @@ CREATE TABLE `core_async_task` (
   `labels` text COMMENT '业务维度标签（JSON）',
   PRIMARY KEY (`id`),
   INDEX `idx_core_async_task_task_type_status_created_at` (`task_type`,`status`,`created_at`),
-  INDEX `idx_core_async_task_task_type_status_next_run_at` (`task_type`,`status`,`next_run_at`),
+  INDEX `idx_core_async_task_claim` (`task_type`,`status`,`priority` DESC,`next_run_at`),
   INDEX `idx_core_async_task_status_lease_until` (`status`,`lease_until`),
   INDEX `idx_core_async_task_status_finished_at` (`status`,`finished_at`),
   UNIQUE INDEX `uk_core_async_task_uniq_key` (`uniq_key`),
@@ -623,7 +623,7 @@ CREATE INDEX IF NOT EXISTS "idx_core_async_task_status_finished_at" ON "core_asy
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_status_lease_until" ON "core_async_task" ("status","lease_until");
 
-CREATE INDEX IF NOT EXISTS "idx_core_async_task_task_type_status_next_run_at" ON "core_async_task" ("task_type","status","next_run_at");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_claim" ON "core_async_task" ("task_type","status","priority" DESC,"next_run_at");
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_task_type_status_created_at" ON "core_async_task" ("task_type","status","created_at");
 
