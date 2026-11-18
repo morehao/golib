@@ -275,21 +275,27 @@ For usage examples, refer to [dict usage](dict/README.md)
 ```go
 // import _ "github.com/morehao/golib/distlock/driver/redis"
 locker, err := distlock.New(distlock.Config{
-	Driver: "redis",
-	Redis:   &distlock.RedisConfig{Addr: "10.0.0.8:6379", Password: "***"},
+	Driver: distlock.DriverRedis, // distlock.DriverType; a misspelt constant fails to compile
+	Redis:  &distlock.RedisConfig{Addr: "10.0.0.8:6379", Password: "***"},
 }) // one per process
-if err != nil { /* ErrInvalidConfig / ErrDriverNotRegistered / connect failure */ }
+if err != nil {
+	// ErrInvalidConfig / ErrDriverNotRegistered / connect failure.
+	// locker is a nil interface here: only defer Close after this check.
+	return err
+}
 defer locker.Close()
-// or, for single-replica deployments: Driver "memory" + blank import distlock/driver/memory
+// or, for single-replica deployments: distlock.DriverMemory + blank import distlock/driver/memory
 
 lease, err := locker.TryAcquire(ctx, "order:pay:10086", 30*time.Second)
-switch {
-case errors.Is(err, distlock.ErrLocked):
-	// busy (normal contention, not an error)
-case err != nil:
-	// storage failure or invalid config
+if errors.Is(err, distlock.ErrLocked) {
+	// busy: normal contention, not an error
+	return
 }
-defer lease.Release(context.Background())
+if err != nil {
+	// storage failure or invalid config
+	return
+}
+defer lease.Release(context.Background()) // lease is non-nil only past this point
 
 // Wire lease end to the work context so the critical section aborts on lock loss
 workCtx, cancel := context.WithCancel(ctx)
