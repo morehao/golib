@@ -59,7 +59,7 @@ func New(cfg Config, opts ...Option) (Locker, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
-	f, ok := lookup(string(cfg.Driver))
+	f, ok := lookup(cfg.Driver)
 	if !ok {
 		// 不拼"看起来应该存在"的子包路径（名字拼错时那条路径不存在），而是列出已注册
 		// 后端 + blank import 提示，与 gcache 的拼接式文案有意不同。

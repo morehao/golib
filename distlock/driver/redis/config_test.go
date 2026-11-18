@@ -34,7 +34,7 @@ func TestRegisteredConfigPath(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Contains(t, distlock.Drivers(), "redis")
+	require.Contains(t, distlock.Drivers(), distlock.DriverRedis)
 
 	lease, err := locker.TryAcquire(ctx, "k:registered", distlock.MinTTL)
 	require.NoError(t, err)

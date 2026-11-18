@@ -12,22 +12,25 @@
 
 | 形态 | 装配 | 互斥范围 | 适用 |
 |---|---|---|---|
-| 跨进程（默认） | `Driver: "redis"` + blank import `distlock/driver/redis` | 共享同一 Redis 的所有实例 | 副本数 ≥2 的服务 |
-| 进程内 | `Driver: "memory"` + blank import `distlock/driver/memory` | 同一进程内的所有门面 | 单副本服务、CLI、本地开发 |
+| 跨进程（默认） | `Driver: distlock.DriverRedis` + blank import `distlock/driver/redis` | 共享同一 Redis 的所有实例 | 副本数 ≥2 的服务 |
+| 进程内 | `Driver: distlock.DriverMemory` + blank import `distlock/driver/memory` | 同一进程内的所有门面 | 单副本服务、CLI、本地开发 |
 
 ```go
 import (
     "github.com/morehao/golib/distlock"
-    _ "github.com/morehao/golib/distlock/driver/redis" // 注册 "redis" 后端
+    _ "github.com/morehao/golib/distlock/driver/redis" // 注册 distlock.DriverRedis 后端
 )
 
 locker, err := distlock.New(distlock.Config{
-    Driver: "redis",
-    Redis:   &distlock.RedisConfig{Service: "order-svc", Addr: "10.0.0.8:6379", Password: "***"},
+    // Driver 是 distlock.DriverType：按常量拼写，名字写错是编译错误
+    Driver: distlock.DriverRedis,
+    Redis:  &distlock.RedisConfig{Service: "order-svc", Addr: "10.0.0.8:6379", Password: "***"},
 })
 if err != nil {
     // ErrInvalidConfig（配置缺项）/ ErrDriverNotRegistered（漏 blank import）/
     // 连接错误（鉴权、PING 失败）
+    // 注意：失败时 locker 是 nil 接口，defer Close 必须放在这个检查之后
+    return err
 }
 defer locker.Close() // 连接由 driver 创建，由 Close 关闭
 ```
@@ -35,6 +38,7 @@ defer locker.Close() // 连接由 driver 创建，由 Close 关闭
 要点：
 
 - **`Driver` 必填，不默认 `memory`**：多副本误配成内存形态会静默失去互斥。
+- **`Config.Driver` 是 `distlock.DriverType`**：装配时写 `distlock.DriverRedis` / `distlock.DriverMemory` 常量，不要写裸字符串——常量写错是编译错误，字符串写错要等到 `ErrDriverNotRegistered` 才发现。
 - **同 key 跨后端互不互斥**：组件 A 用 memory、组件 B 用 redis，等于没有锁。装配点应当全进程唯一（生产代码里 `distlock.New(` 只有一处）。
 - **连接归 driver**：`driver/redis` 用 `dbaccess/dbredis` 从 `RedisConfig` 自建连接池（`RedisConfig.Service` 为空时取 `"distlock"`），因此 `Close` 会关掉它；`driver/memory` 的 `Close` 是空实现。**先 `Release` 所有租约，再 `Close`**。
 - **锁与业务的 redis 配置必须指向同一实例**：`distlock` 有自己的 `RedisConfig`，运维改地址时两处都要改，否则实例间会锁在不同 Redis 上（互斥静默失效）。
@@ -43,12 +47,15 @@ defer locker.Close() // 连接由 driver 创建，由 Close 关闭
 
 ```go
 lease, err := locker.TryAcquire(ctx, "order:pay:10086", 30*time.Second)
-switch {
-case errors.Is(err, distlock.ErrLocked):
+if errors.Is(err, distlock.ErrLocked) {
     // 被其他实例持有 —— 正常竞争，不是错误
-case err != nil:
-    // 存储故障 / 配置非法 / 已关闭
+    return
 }
+if err != nil {
+    // 存储故障 / 配置非法 / 已关闭
+    return
+}
+// 走到这里 lease 必然非 nil：抢锁失败时它是 nil，别把 Release 的 defer 写在这个判断之前
 defer func() { _ = lease.Release(context.Background()) }()
 
 // 把「租约结束」接到工作 ctx 上，丢锁时自动中止临界区（零额外 goroutine）
@@ -155,7 +162,7 @@ err = elector.Run(ctx, distlock.Callbacks{
 
 | v1.36.2 | v1.37 |
 |---|---|
-| `New(f Factory)` + 自定义 `Factory`（`NewMutex`） | 自定义后端改为实现 `distlock.Driver` + `Register`，装配用 `New(Config{Driver:"<name>"})`（重写，不是一行替换） |
+| `New(f Factory)` + 自定义 `Factory`（`NewMutex`） | 自定义后端改为实现 `distlock.Driver` + `Register(DriverType, Factory)`，装配用 `New(Config{Driver:"<name>"})`（重写，不是一行替换） |
 | `NewRedisFactory(clients...)` + `New(f)` | `New(Config{Driver:"redis", Redis:&RedisConfig{...}})` |
 | `NewRedis(clients...)`（多节点 quorum） | 不再支持多节点；`RedisConfig` 只描述一个实例 |
 | `Lock`/`Mutex` 接口（`TryLock/Refresh/Unlock/Token`）、`LockFactory` | 删除；存储原语收敛为导出的 `Driver`（`Acquire/Renew/Release`） |
@@ -182,7 +189,7 @@ err = elector.Run(ctx, distlock.Callbacks{
 ## 测试
 
 - `Lease` 状态机 / `Locker` 三态语义：核心包内 fake `Driver`（覆盖慢失败不误杀、窗口耗尽才判丢、并发 Release 结果一致、Release 有界、钩子 panic、goroutine 不泄漏、`Close` 生命周期）。
-- 装配契约：空 `Driver`、未注册、`Driver="redis"` 缺 `RedisConfig`、重复 `Register`、`Drivers()` 排序、`NewWithDriver(nil)`。
+- 装配契约：空 `Driver`、未注册、`Driver=distlock.DriverRedis` 缺 `RedisConfig`、重复 `Register`、`Drivers()` 排序、`NewWithDriver(nil)`。
 - Redis 后端（`distlock/driver/redis`）：`miniredis` 覆盖三态归一化、自动续期保活、key 被抢占、`EVAL` 瞬时故障注入、`Close` 幂等；另有经注册表的 `Config{Driver:"redis"}` 端到端用例。
 - 真实 Redis（`REDIS_ADDR`，默认 `127.0.0.1:6379`，不可用时 Skip）。
 - 依赖边界（手工复核，不入库脚本）：`go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./distlock` 去掉自身后应只剩 `github.com/google/uuid`；命令前先 `go build ./distlock`，否则包编译不过时输出为空会假通过。

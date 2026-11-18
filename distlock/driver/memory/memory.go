@@ -20,7 +20,7 @@ import (
 )
 
 func init() {
-	distlock.Register("memory", newDriver)
+	distlock.Register(distlock.DriverMemory, newDriver)
 }
 
 // inprocDriver 是进程内实现。
