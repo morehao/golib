@@ -38,6 +38,7 @@ func handleList(mgr *manager.Manager) gin.HandlerFunc {
 		}
 		cond.Page = req.Page
 		cond.PageSize = req.PageSize
+		// 作用域不接受客户端传参：Scope 由 manager 从请求 ctx 解析覆盖（见设计 §5.4）。
 		list, total, err := mgr.List(c.Request.Context(), cond)
 		if err != nil {
 			failAsyncTaskOp(c, err)
@@ -161,7 +162,12 @@ func handleReplay(mgr *manager.Manager) gin.HandlerFunc {
 			gincontext.Fail(c, fmt.Errorf("invalid request: %w", err))
 			return
 		}
-		asyncTask, err := mgr.Replay(c.Request.Context(), uri.ID)
+		// 重放者取自已认证主体（controller 读 gin ctx），不接受请求体自报；空则不覆写。
+		var replayOpts []manager.ReplayOption
+		if actor := gincontext.GetUserIDString(c); actor != "" {
+			replayOpts = append(replayOpts, manager.WithReplayActor(actor))
+		}
+		asyncTask, err := mgr.Replay(c.Request.Context(), uri.ID, replayOpts...)
 		if err != nil {
 			failAsyncTaskOp(c, err)
 			return

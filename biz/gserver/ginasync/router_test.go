@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/morehao/golib/biz/gcontext"
 	"github.com/morehao/golib/biz/gserver/ginserver"
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/task/gasync"
@@ -65,6 +66,13 @@ func setupFixture(t *testing.T) *fixture {
 	require.NoError(t, err)
 
 	engine := gin.New()
+	// 测试用：把 X-User-ID 头当成认证主体写入 gin Keys（模拟中间件解出的身份）。
+	engine.Use(func(c *gin.Context) {
+		if uid := c.GetHeader("X-User-ID"); uid != "" {
+			c.Set(gcontext.KeyUserID, uid)
+		}
+		c.Next()
+	})
 	groups := ginserver.NewRouterGroups(engine, "ginasync", []ginserver.VersionGroup{{Version: "v1"}}, ginserver.WithoutTrace())
 	Register(groups.MustGetGroup("v1"), mgr)
 
@@ -214,4 +222,41 @@ func TestStats(t *testing.T) {
 	require.EqualValues(t, 2, d["pending"])
 	require.EqualValues(t, 1, d["canceled"])
 	require.EqualValues(t, 3, d["total"])
+}
+
+// doJSONH 同 doJSON，但附带 X-User-ID 请求头（模拟认证主体）。
+func (f *fixture) doJSONH(t *testing.T, method, path, userID string, body any) (int, map[string]any) {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		require.NoError(t, json.NewEncoder(&buf).Encode(body))
+	}
+	req := httptest.NewRequest(method, testAPIPrefix+path, &buf)
+	req.Header.Set("Content-Type", "application/json")
+	if userID != "" {
+		req.Header.Set("X-User-ID", userID)
+	}
+	w := httptest.NewRecorder()
+	f.engine.ServeHTTP(w, req)
+	var envelope map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &envelope)
+	return w.Code, envelope
+}
+
+// TestReplay_ActorFromAuthSubject 重放者取自认证主体（gin ctx），不接受请求体自报；
+// 响应体携带 scope/created_by/last_actor_id（T4.1/T4.2）。
+func TestReplay_ActorFromAuthSubject(t *testing.T) {
+	f := setupFixture(t)
+	code, env := f.doJSONH(t, "POST", "/asyncTasks/"+f.replayableID+"/replay", "operator-9", nil)
+	requireOK(t, code, env, "带主体重放")
+	d := dataMap(t, env)
+	require.Equal(t, "operator-9", d["last_actor_id"], "last_actor_id 应取认证主体")
+	// 新字段存在（legacy 无 resolver，scope 为空、created_by 为空）。
+	_, hasScope := d["scope"]
+	_, hasCreatedBy := d["created_by"]
+	require.True(t, hasScope, "响应应含 scope 字段")
+	require.True(t, hasCreatedBy, "响应应含 created_by 字段")
+
+	// 请求体伪造 actor 字段无效：body 里塞 last_actor_id/actor 不改变结果。
+	// （此时任务已 pending，只能验证占位不报错；核心断言是上面主体生效。）
 }

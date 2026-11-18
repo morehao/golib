@@ -279,7 +279,8 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 ### `wire`
 
 - 端点路径常量 `PathFetch` / `PathHeartbeat` / `PathCallback` / `PathRelease`；
-- `Task`（跨网络任务子集）、`FetchRequest/Response`、`HeartbeatRequest`、`CallbackRequest`、`ReleaseRequest`；
+- `Task`（跨网络任务子集，含 `scope`）、`FetchRequest/Response`、`HeartbeatRequest`、`CallbackRequest`、`ReleaseRequest`；
+  `FetchRequest` 不含作用域参数（认领全局）；`wire.Task.scope` 供执行期建立作用域，旧中心缺省按 `__platform__` 兜底；
 - 只依赖根包 gasync（`scripts/check-gasync-deps.sh` 断言），客户端/服务端/HTTP 适配三方共用。
 
 ### `manager`
@@ -325,11 +326,23 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 
 | 表名 | 说明 |
 |---|---|
-| `core_async_task` | 任务实体（id、task_type、status、priority、payload、uniq_key、biz_type/biz_id、chain_id/step/prev_step、labels、generation/attempt/max_attempts、next_run_at/lease_until、各时间与 request id） |
+| `core_async_task` | 任务实体（id、scope_key、task_type、status、priority、payload、uniq_key、created_by、last_actor_id、biz_type/biz_id、chain_id/step/prev_step、labels、generation/attempt/max_attempts、next_run_at/lease_until、各时间与 request id） |
 | `core_async_task_run` | 单次尝试记录（id、async_task_id、generation/attempt、状态、failure_kind、起止、耗时、结果、错误、request id） |
 | `core_async_task_type` | 任务类型开关（id、task_type 唯一、enabled；无行=启用） |
 
 建表方式、三方言 DDL 附录、共库/无 DDL 权限的迁移约定，见 [`task/README.md`](../README.md#建表与迁移)。索引名一律带表前缀（`idx_core_async_task_*` / `uk_core_async_task_*`），PostgreSQL 下索引名 schema 级唯一。
+
+任务表索引：`idx_core_async_task_claim`、`idx_core_async_task_task_type_status_created_at`、`idx_core_async_task_status_lease_until`、`idx_core_async_task_status_finished_at`、`idx_core_async_task_biz_type_biz_id`、`idx_core_async_task_chain_id_step`、`idx_core_async_task_scope_created_by_created_at`、`uk_core_async_task_scope_uniq_key`（共 8 条，不再增加）。
+
+## 作用域（scope）
+
+- **隔离 = `scope_key`**：作用域分区键。幂等语义为**域内唯一**——唯一键是 `(scope_key, uniq_key)`，两个域用同一 `uniq_key` 各自成功。平台任务用保留值 `__platform__`（`gasync.ScopePlatform`）显式声明，不用空串（空串=未声明，fail-closed 会拒绝）。
+- **归属 = `created_by` / `last_actor_id`**：`created_by` 提交时快照、不可变；`last_actor_id` 记录最近触发者（`Replay` 可覆写，仅保留最近一次）。均不存部门。
+- **部门走 `Labels`**：提交时写 `Labels["dept_id"]` 快照，不进核心列；按部门查询用 `AsyncTaskCond.Labels` 精确过滤。
+- **取值来源**：`manager.WithScopeResolver(fn)` / `source/db.Config.ScopeResolver`。注入后读路径叠 `scope_key` 条件、写路径以 `(id, scope_key)` 守卫、未声明作用域一律 `ErrScopeRequired`；不注入时行为与加作用域前一致（灰度兼容）。同一张任务表只能有一个作用域取值空间（部署约束）。
+- **执行侧注入**：`worker.WorkerConfig.ScopeInjector func(ctx, task) context.Context` 在执行前把任务行作用域注入 handler 的 ctx；缺省不注入时 handler 需自行用 `task.Scope` 建立作用域。
+- **认领保持全局**：`Fetch` 不加作用域过滤，任一 worker 可取任一域任务；跨域可见性靠部署隔离与 handler 校验。`FetchRequest` **不新增**作用域参数；`wire.Task` 携带 `scope` 供执行期建立作用域。
+- **管理面**：`Get/GetRuns/ListRuns/Cancel/Replay` 按 `(scope_key, id)` 取，越权与不存在**都返回 not found**（防枚举）；`List/Stats` 按 ctx 作用域过滤/聚合。`Replay` 的重放者由接入层从认证主体传入（`manager.WithReplayActor`），不从请求体自报。
 
 ## 接入要点
 

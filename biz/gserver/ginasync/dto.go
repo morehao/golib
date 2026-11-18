@@ -35,6 +35,9 @@ type asyncTaskResponse struct {
 	ID          string `json:"id"`
 	Type        string `json:"type"`
 	Status      string `json:"status"`
+	Scope       string `json:"scope"`
+	CreatedBy   string `json:"created_by"`
+	LastActorID string `json:"last_actor_id"`
 	Priority    int    `json:"priority"`
 	BizType     string `json:"biz_type"`
 	BizID       string `json:"biz_id"`
