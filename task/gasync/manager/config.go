@@ -37,6 +37,12 @@ type Config struct {
 	FailFastChain       bool
 	Backoff             gasync.Backoff // 默认指数：5s 起、上限 10m、抖动 ±20%；可替换
 	NotifierQueuePrefix string         // 默认 "gasync"（<prefix>:<task_type>）
+	// ScopeResolver 作用域取值来源。注入后管理面按 (scope_key, id) 读写、提交写作用域与归属，
+	// 未声明作用域一律拒绝（fail-closed）。未注入时行为与加作用域前一致（灰度兼容）。
+	// 会一并注入给内部 source/db，使认领/回写守卫与读路径统一口径。
+	ScopeResolver gasync.ScopeResolver
+	// RequireScope 仅在未注入 ScopeResolver 时生效：true 表示要求强制却无取值来源，一律拒绝。
+	RequireScope bool
 }
 
 // defaultConfig 返回带契约默认值的 Config。

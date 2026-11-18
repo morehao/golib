@@ -3,6 +3,8 @@ package manager
 import (
 	"context"
 	"time"
+
+	"github.com/morehao/golib/task/gasync"
 )
 
 // Notifier 是通知器形态下「发布唤醒信号 + 消费唤醒信号」的接口（poll+notify 形态）。
@@ -87,4 +89,22 @@ func WithLeaseTTL(d time.Duration) Option {
 // WithRetention 覆盖终态记录保留时长（0 不清理）。
 func WithRetention(d time.Duration) Option {
 	return optionFunc(func(o *newOptions) { o.Retention = d })
+}
+
+// WithScopeResolver 注入作用域取值来源（fail-closed 强制的入口）。
+//
+// 注入后：提交写 scope_key/created_by/last_actor_id；管理面按 (scope_key, id) 读写，
+// 越权等价不存在；未声明作用域一律拒绝。未注入时保持灰度兼容（行为与加作用域前一致）。
+func WithScopeResolver(f gasync.ScopeResolver) Option {
+	return optionFunc(func(o *newOptions) {
+		if f != nil {
+			o.ScopeResolver = f
+		}
+	})
+}
+
+// WithRequireScope 要求强制作用域。仅在未注入 ScopeResolver 时有意义：
+// true 表示「要求强制却无取值来源」，此时任何请求都被拒绝（ErrScopeRequired）。
+func WithRequireScope(require bool) Option {
+	return optionFunc(func(o *newOptions) { o.RequireScope = require })
 }
