@@ -86,6 +86,11 @@ type WorkerConfig struct {
 	TypeGate TypeGate
 	// TypeGateTTL worker 侧缓存开关状态的 TTL，默认 5s；<=0 每次查询（不缓存）。
 	TypeGateTTL time.Duration
+
+	// ScopeInjector 可选：在执行前把任务作用域注入到 handler 的 ctx（如 gcontext 实现）。
+	// 缺省不注入时，handler 需自行用 task.Scope 建立作用域（README 显式说明）。
+	// 依赖边界：注入的是函数，worker 包不 import gcontext，保持 check-gasync-deps 断言。
+	ScopeInjector func(ctx context.Context, task *gasync.AsyncTask) context.Context
 }
 
 // TypeGate 是类型级启停开关接口（可选）。

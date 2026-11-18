@@ -39,8 +39,9 @@ check_absent ./task/gasync/worker \
   '^gorm\.io/gorm$' \
   'github.com/morehao/golib/task/gasync/manager$' \
   'github.com/morehao/golib/task/gasync/source/db$' \
-  'github.com/hibiken/asynq'
-echo "  worker: 不依赖 gorm/manager/source-db/asynq"
+  'github.com/hibiken/asynq' \
+  'github.com/morehao/golib/biz/gcontext'
+echo "  worker: 不依赖 gorm/manager/source-db/asynq/gcontext"
 
 # V1: 无环 — source/db 不得反向依赖 manager
 if go list -deps ./task/gasync/source/db 2>/dev/null | grep -q 'task/gasync/manager'; then
