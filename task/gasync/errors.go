@@ -42,4 +42,10 @@ var (
 	ErrNotify = errors.New("gasync: notify failed")
 	// ErrNoAsyncTask 当前无待执行任务。
 	ErrNoAsyncTask = errors.New("gasync: no task available")
+	// ErrScopeRequired 未声明作用域且 RequireScope 打开时拒绝执行（fail-closed）。
+	//
+	// 触发点：提交（Submit/SubmitAfter）、管理面读写（Get/List/Cancel/Replay 等）
+	// 在注入的 ScopeResolver 返回未声明时返回它。平台任务用保留值 ScopePlatform 表示，
+	// 不会被此错误误杀。
+	ErrScopeRequired = errors.New("gasync: scope required")
 )
