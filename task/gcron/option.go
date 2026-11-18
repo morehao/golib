@@ -6,7 +6,7 @@ import (
 	"github.com/morehao/golib/distlock"
 )
 
-// Option 是 New / NewServer / NewClient 的构造选项。
+// Option 是 New 的构造选项。
 //
 // Option 是封闭接口（apply 未导出），因此其签名变更不会影响调用方。
 type Option interface {
@@ -63,6 +63,15 @@ func WithEnableLock(v bool) Option {
 
 func WithLockTTL(ttl time.Duration) Option {
 	return optionFunc(func(o *newOptions) { o.LockTTL = ttl })
+}
+
+// WithLockKeyPrefix 配置分布式锁 key 前缀（默认 "cron:lock:"，锁 key = 前缀 + 任务 ID）。
+//
+// distlock 的 Service 只用于日志，不做 key 命名空间：多个服务共用同一个 Redis 库、
+// 且存在同名任务 ID 时，必须用不同的前缀隔离，否则会互相阻塞。
+// 前缀请自带分隔符，如 WithLockKeyPrefix("order-svc:cron:")。
+func WithLockKeyPrefix(prefix string) Option {
+	return optionFunc(func(o *newOptions) { o.LockKeyPrefix = prefix })
 }
 
 func WithTimeout(d time.Duration) Option {

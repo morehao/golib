@@ -265,14 +265,19 @@ func TestAutoMigrateRunIndexes(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 
 	m := db.Migrator()
-	for _, idx := range []string{"idx_status_start_at", "idx_created_at", "idx_task_id", "idx_core_cron_task_run_request_id"} {
+	for _, idx := range []string{
+		"idx_core_cron_task_run_status_start_at",
+		"idx_core_cron_task_run_created_at",
+		"idx_core_cron_task_run_task_id",
+		"idx_core_cron_task_run_request_id",
+	} {
 		require.True(t, m.HasIndex(&CronTaskRun{}, idx), "缺少索引 %s", idx)
 	}
 
 	var cols []struct {
 		Name string `gorm:"column:name"`
 	}
-	require.NoError(t, db.Raw("PRAGMA index_info('idx_status_start_at')").Scan(&cols).Error)
+	require.NoError(t, db.Raw("PRAGMA index_info('idx_core_cron_task_run_status_start_at')").Scan(&cols).Error)
 	require.Len(t, cols, 2)
 	require.Equal(t, "status", cols[0].Name)
 	require.Equal(t, "start_at", cols[1].Name)

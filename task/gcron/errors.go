@@ -11,6 +11,10 @@ var (
 	ErrEmptySpec = errors.New("gcron: task spec is empty")
 	// ErrNilHandler 任务处理器为 nil。
 	ErrNilHandler = errors.New("gcron: task handler is nil")
+	// ErrFieldTooLong 任务字段超过对应列宽。注册期拦下而不是留给 DB：
+	// MySQL 非严格模式会静默截断（任务 ID 被截断后与业务方的标识不再一致），
+	// 严格模式则会变成一个难以定位的 INSERT 错误。
+	ErrFieldTooLong = errors.New("gcron: task field exceeds column width")
 	// ErrDuplicateTask 同一进程内重复注册同一任务。
 	ErrDuplicateTask = errors.New("gcron: duplicate task id")
 	// ErrLockNotSet 任务开启分布式锁但未配置锁门面。
