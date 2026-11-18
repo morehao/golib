@@ -58,10 +58,10 @@ func TestDriversSorted(t *testing.T) {
 	Register("aaa-driver", func(Config) (Driver, error) { return newFakeDriver(), nil })
 
 	drivers := Drivers()
-	require.Contains(t, drivers, "aaa-driver")
-	require.Contains(t, drivers, "zzz-driver")
+	require.Contains(t, drivers, DriverType("aaa-driver"))
+	require.Contains(t, drivers, DriverType("zzz-driver"))
 	for i := 1; i < len(drivers); i++ {
-		require.LessOrEqual(t, drivers[i-1], drivers[i], "Drivers 必须字典序，便于稳定断言")
+		require.LessOrEqual(t, string(drivers[i-1]), string(drivers[i]), "Drivers 必须字典序，便于稳定断言")
 	}
 }
 

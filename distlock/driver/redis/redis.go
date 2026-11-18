@@ -35,7 +35,7 @@ const redisUnlockExpiry = time.Second
 const defaultService = "distlock"
 
 func init() {
-	distlock.Register("redis", newDriver)
+	distlock.Register(distlock.DriverRedis, newDriver)
 }
 
 // redisDriver 是 Redis 后端，三个原语委托给 redsync（Redlock 的单节点退化）。

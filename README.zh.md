@@ -231,21 +231,27 @@ go get github.com/morehao/golib
 ```go
 // import _ "github.com/morehao/golib/distlock/driver/redis"
 locker, err := distlock.New(distlock.Config{
-	Driver: "redis",
-	Redis:   &distlock.RedisConfig{Addr: "10.0.0.8:6379", Password: "***"},
+	Driver: distlock.DriverRedis, // 类型是 distlock.DriverType，常量拼错编译不过
+	Redis:  &distlock.RedisConfig{Addr: "10.0.0.8:6379", Password: "***"},
 }) // 进程内一个门面
-if err != nil { /* ErrInvalidConfig / ErrDriverNotRegistered / 连接失败 */ }
+if err != nil {
+	// ErrInvalidConfig / ErrDriverNotRegistered / 连接失败。
+	// 此时 locker 是 nil 接口，defer Close 只能放在这个检查之后。
+	return err
+}
 defer locker.Close()
-// 单副本部署：Driver 换成 "memory"，并 blank import distlock/driver/memory
+// 单副本部署：Driver 换成 distlock.DriverMemory，并 blank import distlock/driver/memory
 
 lease, err := locker.TryAcquire(ctx, "order:pay:10086", 30*time.Second)
-switch {
-case errors.Is(err, distlock.ErrLocked):
+if errors.Is(err, distlock.ErrLocked) {
 	// 被其他实例持有（正常竞争，不是错误）
-case err != nil:
-	// 存储故障或配置非法
+	return
 }
-defer lease.Release(context.Background())
+if err != nil {
+	// 存储故障或配置非法
+	return
+}
+defer lease.Release(context.Background()) // 走到这里 lease 必然非 nil
 
 // 把「租约结束」接到工作 ctx 上：丢锁时自动中止临界区
 workCtx, cancel := context.WithCancel(ctx)

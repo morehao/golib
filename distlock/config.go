@@ -23,6 +23,10 @@ type RedisConfig struct {
 }
 
 // DriverType 标识选用哪个 driver 实现。
+//
+// 它同时是注册表的 key：Config.Driver、Register 的参数与 Drivers 的返回值都是这个类型，
+// 因此不存在「字面量注册、类型化字段查找」两套拼写；内置后端由 driver 子包用
+// DriverMemory / DriverRedis 常量注册，名字写错是编译错误。
 type DriverType string
 
 const (
@@ -47,19 +51,21 @@ type DriverFactory func(Config) (Driver, error)
 
 var (
 	registryMu sync.RWMutex
-	registry   = make(map[string]DriverFactory)
+	// registry 以 DriverType 为 key，与 Config.Driver 同一个类型：注册与查找只有一种拼写，
+	// 子包也就能用 DriverMemory / DriverRedis 常量注册（写错名字是编译错误而不是运行时 panic）。
+	registry = make(map[DriverType]DriverFactory)
 )
 
 // Register 注册一个 driver 工厂，通常由 driver 子包的 init() 调用。
 //
 // 空名、nil 工厂、重复注册都会 panic：它们是编程错误，应在进程启动期立刻暴露
 // （与 gcache/storage 的注册表语义一致）。
-func Register(name string, f DriverFactory) {
+func Register(name DriverType, f DriverFactory) {
 	if name == "" {
 		panic("distlock: register driver with empty name")
 	}
 	if f == nil {
-		panic("distlock: register nil driver factory for " + name)
+		panic("distlock: register nil driver factory for " + string(name))
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -72,19 +78,19 @@ func Register(name string, f DriverFactory) {
 // Drivers 返回已注册的 driver 名，按字典序排序。
 //
 // 排序而非 map 随机序：调用方（含测试与错误文案）可以稳定断言。
-func Drivers() []string {
+func Drivers() []DriverType {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
-	out := make([]string, 0, len(registry))
+	out := make([]DriverType, 0, len(registry))
 	for name := range registry {
 		out = append(out, name)
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
 // lookup 按 driver 名查工厂。
-func lookup(name string) (DriverFactory, bool) {
+func lookup(name DriverType) (DriverFactory, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	f, ok := registry[name]

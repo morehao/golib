@@ -99,7 +99,7 @@ center, err := manager.New(&manager.Config{}, db, manager.WithoutAutoMigrate())
 - 支持秒级 cron 表达式（`WithSeconds`）
 - 支持自定义时区（`Location`）
 - 支持多实例分布式锁互斥（基于 distlock，租约自动续期）
-- 执行记录自动落库（running/success/failed/skipped/timed_out）
+- 执行记录自动落库（running/success/failed/skipped/timed_out/lock_lost）
 - 自动注入 TraceID、RequestID、RunID 与日志
 - 任务处理器 panic 安全（自动 recover）与单次执行超时（`Config.Timeout` / `Task.Timeout`，超时记录为 timed_out）
 - 同实例防重叠：上一轮未结束时本轮跳过（记录 skipped，与分布式锁互补），且判定先于抢锁
@@ -107,7 +107,9 @@ center, err := manager.New(&manager.Config{}, db, manager.WithoutAutoMigrate())
 - 注册幂等：同一任务 `ID` 已在 DB 中存在时自动 upsert 更新定义（**不覆盖既有 `status`**），进程重启后可重新注册；同进程内重复注册返回 `ErrDuplicateTask`
 - 运行时管理：`Disable` 暂停（定义保留）、`Enable` 恢复、`Remove` 移除（软删除定义并停止调度，可重新注册）；`status` 以 DB 为准，DB 为 `disabled` 的任务注册后只登记不调度，运营侧下线不会被重启抹掉
 - 执行记录兜底：配置 `Config.StaleRunningCutoff` / `Config.RunRetention` 后，`Start` 会启动内置循环（启动即跑一次，之后按 `RunCleanupInterval` 周期执行）回收崩溃残留的 `running` 记录、清理过期执行记录；也可继续手动调用 `store.MarkStaleRunningAsFailed` / `store.CleanupRuns`
-- 任务需显式指定 `ID` 与 `TaskType`（均不允许为空）
+- 任务需显式指定 `ID` 与 `TaskType`（均不允许为空），且各字段不超过列宽（超长返回 `ErrFieldTooLong`）
+- 启停闸门：执行闭包带放行开关，`Disable` / `Remove` 立刻关闸，注册流程在 DB 状态判定完成后才开闸——DB 里 `disabled` 的任务不会在注册窗口内漏跑一次
+- 锁 key 前缀可配置（`WithLockKeyPrefix`），多个服务共用同一个 Redis 库时用于隔离同名任务 ID
 
 ### 数据表
 
@@ -116,7 +118,7 @@ center, err := manager.New(&manager.Config{}, db, manager.WithoutAutoMigrate())
 | 表名 | 说明 |
 |---|---|
 | `core_cron_task` | 定时任务定义（id=任务 ID、biz_id/biz_type=业务维度、name=任务名称、task_type、cron 表达式、描述、状态等） |
-| `core_cron_task_run` | 定时任务执行记录（id=运行 ID、task_id=所属任务、起止时间、耗时、状态（running/success/failed/skipped/timed_out）、request id 等） |
+| `core_cron_task_run` | 定时任务执行记录（id=运行 ID、task_id=所属任务、起止时间、耗时、状态（running/success/failed/skipped/timed_out/lock_lost）、request id 等） |
 
 两张表的完整 MySQL / PostgreSQL DDL 见文末[附录](#附录手工建表-ddl)。
 
@@ -144,16 +146,16 @@ func main() {
 
 	// 创建调度器（锁为可选，仅当任务开启互斥时需要）。
 	// 锁门面是运行期依赖，只通过 WithLocker 传入（New 没有锁的位置参数）：
-	//   - 多副本部署：Driver="redis" + blank import distlock/driver/redis，跨进程互斥；
-	//   - 单进程/本地开发：Driver="memory" + blank import distlock/driver/memory，仅进程内互斥。
+	//   - 多副本部署：Driver=distlock.DriverRedis + blank import distlock/driver/redis，跨进程互斥；
+	//   - 单进程/本地开发：Driver=distlock.DriverMemory + blank import distlock/driver/memory，仅进程内互斥。
 	// 装配层构造一次即可全进程复用，并在进程退出时 Close；不开启互斥
 	// （Task.EnableLock=false 且 Config.EnableLock=false）时可以不传 WithLocker。
 	locker, err := distlock.New(distlock.Config{
-		Driver: "redis",
-		Redis:   &distlock.RedisConfig{Service: "order-svc", Addr: "10.0.0.8:6379", Password: "***"},
+		Driver: distlock.DriverRedis, // 类型是 distlock.DriverType，用常量拼写
+		Redis:  &distlock.RedisConfig{Service: "order-svc", Addr: "10.0.0.8:6379", Password: "***"},
 	})
 	if err != nil {
-		panic(err)
+		panic(err) // 失败时 locker 为 nil 接口，别在检查之前 defer Close
 	}
 	defer func() { _ = locker.Close() }()
 	s, err := gcron.New(db, &gcron.Config{WithSeconds: true}, gcron.WithLocker(locker))
@@ -210,8 +212,11 @@ s.Remove("demo-task")  // 移除：软删除 DB 定义并停止调度，之后�
 - **锁租约与锁丢失**：默认 `LockTTL=60s`，**自动续期恒开**（由 `distlock` 负责，handler 跑多久都不会因 TTL 到期而丢锁），因此 `Timeout` 与 `LockTTL` 的大小关系不再影响互斥性，`AutoRenewal` / `StrictLockTTL` 两个开关已移除。`LockTTL` 现在只决定「实例静默宕机后被其他实例接管」的上限；低于 `distlock.MinTTL`（1s）会在 `Register` 直接返回 `ErrInvalidLockTTL`。锁门面只通过 `gcron.WithLocker` 配置（构造函数的锁位置参数与 `Config.Locker` 字段已移除）。
   只有**真的**丢锁（被抢占/过期，或续期持续失败到超过续期窗口）才会取消 handler 的 ctx 并把记录标为 `lock_lost`；瞬时 Redis 抖动不会再误判（旧实现会，导致正常执行被中断并误记 `lock_lost`）。临界区不成立时 handler 应监听 `ctx.Done()` 尽快退出。
 - **同实例防重叠先于抢锁**：上一轮未结束时本轮直接跳过（记录 `skipped`），不会再去抢分布式锁——抢到即释放会把锁短暂让给其他实例，反而扩大并发窗口。抢锁未获取（`distlock.ErrLocked`，正常竞争）与锁存储故障（其他错误）分别以不同的 `error_msg` 记录为 `skipped`，便于区分"竞争"与"故障"。
-- **跳过记录策略**：默认每次跳过都写一行 `skipped`（补齐 `end_at`、`duration_ms=0`）。任务被高频跳过（如多实例竞争同一把锁）时会产生写放大：`Config.RecordSkippedRuns=false` 可完全不落库（仅打日志），`Config.SkipRunMinInterval>0` 可让同一任务同一原因在窗口内只落一行（被抑制的次数记入下一次日志的 `suppressed` 字段）。
-- **生命周期 DB 超时**：`Register` / `Disable` / `Enable` / `Remove` 与内置兜底清理的 DB 操作默认带 5s 超时（`Config.LifecycleTimeout` / `WithLifecycleTimeout`，`<=0` 回落默认值），DB 卡住时返回包装错误（可用 `errors.Is(err, context.DeadlineExceeded)` 判定）而不是无界挂起。handler 内部的 DB 操作不受该超时约束，仍由 `Timeout` / handler ctx 控制；清理积压很大时可能在超时处中断，剩余部分留到下一轮。
+- **跳过记录策略**：默认每次跳过都写一行 `skipped`（补齐 `end_at`、`duration_ms=0`），并顺带刷新 `next_run_at`（不写 `last_run_at`：跳过不算一次执行）；这次额外 UPDATE 与 skipped 行同频，同样受 `RecordSkippedRuns` / `SkipRunMinInterval` 约束。任务被高频跳过（如多实例竞争同一把锁）时会产生写放大：`Config.RecordSkippedRuns=false` 可完全不落库（仅打日志），`Config.SkipRunMinInterval>0` 可让同一任务同一原因在窗口内只落一行（被抑制的次数记入下一次日志的 `suppressed` 字段）。节流以「任务 + 固定原因枚举」为 key，底层错误文本只进 `error_msg` 与日志，不会撑大内存里的节流表。
+- **启停与执行窗口**：`Disable` 先落 DB（并把 `next_run_at` 置空）再关闸，DB 写失败时任务保持原状继续调度；关闸是执行闭包进入时检查的原子开关，因此「cron 已把这个 tick 交给 job、但 `Remove` 还没被调度循环处理」的那一次也会被拦住。同理，注册流程在 DB 状态判定为可执行之后才开闸，`disabled` 的任务不会因为「先 AddFunc 后查状态」而漏跑一次。
+- **锁 key 前缀**：锁 key 为「`Config.LockKeyPrefix` + 任务 ID」，默认前缀 `cron:lock:`。distlock 的 `Service` 只用于日志、不做 key 命名空间，因此多个服务共用同一个 Redis 库且存在同名任务 ID 时必须用 `WithLockKeyPrefix` 隔离（前缀自带分隔符，如 `"order-svc:cron:"`）。
+- **生命周期 DB 超时**：`Register` / `Disable` / `Enable` / `Remove`、内置兜底清理以及**执行记录的落库**（running/skipped/收尾）都默认带 5s 超时（`Config.LifecycleTimeout` / `WithLifecycleTimeout`，`<=0` 回落默认值），DB 卡住时返回包装错误（可用 `errors.Is(err, context.DeadlineExceeded)` 判定）而不是无界挂起——落库挂死会让 job goroutine 卡住、`Stop` 也就永远等不到在途任务结束。handler 内部的 DB 操作不受该超时约束，仍由 `Timeout` / handler ctx 控制；清理积压很大时可能在超时处中断，剩余部分留到下一轮。
+- **索引命名**：索引统一为 `idx_<表名>_<列名>`（如 `idx_core_cron_task_run_status_start_at`）。PostgreSQL 的索引名是 schema 级唯一，共库部署下短名（`idx_task_id` 等）会让后建的表静默丢索引；历史短名索引必须手工 DROP，AutoMigrate 只建不删（清单见 `gcron.AutoMigrate` 的注释）。
 - **崩溃兜底与记录保留**：进程被强杀时执行记录会停留在 `running`。默认不启用回收（`StaleRunningCutoff=0`、`RunRetention=0`），配置后由 `Start` 启动内置循环执行：`StaleRunningCutoff` 把超过该时长仍为 `running` 的记录标记为 `failed`（并按 `start_at` 补齐 `duration_ms`），`RunRetention` 删除 `created_at` 早于 `now-RunRetention` 的记录，周期由 `RunCleanupInterval` 控制（默认 1h），单批行数由 `RunCleanupBatchSize` 控制（默认 1000，清理会分批循环直到清空，回收每轮最多处理一批）。
   `StaleRunningCutoff` **必须大于最长任务耗时**：长任务超过该值会被误标 `failed`（其 `finishRun` 随后会覆盖回真实结果）。也可以不配置开关，自行调用 `s.GetStore()`（返回 `gcron.Store` 接口，便于外部接收与 mock）上的 `MarkStaleRunningAsFailed` / `CleanupRuns`。
 
@@ -402,7 +407,7 @@ CREATE TABLE `core_cron_task` (
   `next_run_at` datetime(3) NULL COMMENT '下次执行时间',
   PRIMARY KEY (`id`),
   INDEX `idx_core_cron_task_deleted_at` (`deleted_at`),
-  INDEX `idx_biz_type_biz_id` (`biz_id`,`biz_type`)
+  INDEX `idx_core_cron_task_biz_type_biz_id` (`biz_id`,`biz_type`)
 );
 
 CREATE TABLE `core_cron_task_run` (
@@ -416,9 +421,9 @@ CREATE TABLE `core_cron_task_run` (
   `error_msg` text COMMENT '错误信息',
   `request_id` varchar(64) COMMENT '请求 ID',
   PRIMARY KEY (`id`),
-  INDEX `idx_created_at` (`created_at`),
-  INDEX `idx_task_id` (`task_id`),
-  INDEX `idx_status_start_at` (`status`,`start_at`),
+  INDEX `idx_core_cron_task_run_created_at` (`created_at`),
+  INDEX `idx_core_cron_task_run_task_id` (`task_id`),
+  INDEX `idx_core_cron_task_run_status_start_at` (`status`,`start_at`),
   INDEX `idx_core_cron_task_run_request_id` (`request_id`)
 );
 ```
@@ -443,7 +448,7 @@ CREATE TABLE "core_cron_task" (
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX IF NOT EXISTS "idx_biz_type_biz_id" ON "core_cron_task" ("biz_id","biz_type");
+CREATE INDEX IF NOT EXISTS "idx_core_cron_task_biz_type_biz_id" ON "core_cron_task" ("biz_id","biz_type");
 
 CREATE INDEX IF NOT EXISTS "idx_core_cron_task_deleted_at" ON "core_cron_task" ("deleted_at");
 
@@ -482,11 +487,11 @@ CREATE TABLE "core_cron_task_run" (
 
 CREATE INDEX IF NOT EXISTS "idx_core_cron_task_run_request_id" ON "core_cron_task_run" ("request_id");
 
-CREATE INDEX IF NOT EXISTS "idx_status_start_at" ON "core_cron_task_run" ("status","start_at");
+CREATE INDEX IF NOT EXISTS "idx_core_cron_task_run_status_start_at" ON "core_cron_task_run" ("status","start_at");
 
-CREATE INDEX IF NOT EXISTS "idx_task_id" ON "core_cron_task_run" ("task_id");
+CREATE INDEX IF NOT EXISTS "idx_core_cron_task_run_task_id" ON "core_cron_task_run" ("task_id");
 
-CREATE INDEX IF NOT EXISTS "idx_created_at" ON "core_cron_task_run" ("created_at");
+CREATE INDEX IF NOT EXISTS "idx_core_cron_task_run_created_at" ON "core_cron_task_run" ("created_at");
 
 COMMENT ON COLUMN "core_cron_task_run"."id" IS '运行唯一标识（每次运行生成 UUID）';
 
@@ -539,7 +544,7 @@ CREATE TABLE `core_async_task` (
   `labels` text COMMENT '业务维度标签（JSON）',
   PRIMARY KEY (`id`),
   INDEX `idx_core_async_task_task_type_status_created_at` (`task_type`,`status`,`created_at`),
-  INDEX `idx_core_async_task_claim` (`task_type`,`status`,`priority` DESC,`next_run_at`),
+  INDEX `idx_core_async_task_claim` (`task_type`,`status`,`priority` desc,`next_run_at`),
   INDEX `idx_core_async_task_status_lease_until` (`status`,`lease_until`),
   INDEX `idx_core_async_task_status_finished_at` (`status`,`finished_at`),
   UNIQUE INDEX `uk_core_async_task_uniq_key` (`uniq_key`),
@@ -625,7 +630,7 @@ CREATE INDEX IF NOT EXISTS "idx_core_async_task_status_finished_at" ON "core_asy
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_status_lease_until" ON "core_async_task" ("status","lease_until");
 
-CREATE INDEX IF NOT EXISTS "idx_core_async_task_claim" ON "core_async_task" ("task_type","status","priority" DESC,"next_run_at");
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_claim" ON "core_async_task" ("task_type","status","priority" desc,"next_run_at");
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_task_type_status_created_at" ON "core_async_task" ("task_type","status","created_at");
 

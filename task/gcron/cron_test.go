@@ -915,31 +915,31 @@ func TestAllowSkipRecordThrottle(t *testing.T) {
 	s, err := New(db, nil, WithSkipRunMinInterval(time.Hour))
 	require.NoError(t, err)
 
-	rec, sup := s.allowSkipRecord("t1", "reason")
+	rec, sup := s.allowSkipRecord("t1", skipCodeLockHeld)
 	require.True(t, rec)
 	require.Zero(t, sup)
 
-	rec, sup = s.allowSkipRecord("t1", "reason")
+	rec, sup = s.allowSkipRecord("t1", skipCodeLockHeld)
 	require.False(t, rec)
 	require.Equal(t, 1, sup)
 
-	rec, sup = s.allowSkipRecord("t1", "reason")
+	rec, sup = s.allowSkipRecord("t1", skipCodeLockHeld)
 	require.False(t, rec)
 	require.Equal(t, 2, sup)
 
 	// 不同原因、不同任务分别计数
-	rec, _ = s.allowSkipRecord("t1", "other")
+	rec, _ = s.allowSkipRecord("t1", skipCodeOverlap)
 	require.True(t, rec)
-	rec, _ = s.allowSkipRecord("t2", "reason")
+	rec, _ = s.allowSkipRecord("t2", skipCodeLockHeld)
 	require.True(t, rec)
 
 	// 默认配置：不节流，且默认记录 skipped
 	s2, err := New(db, nil)
 	require.NoError(t, err)
 	require.True(t, s2.cfg.recordSkippedRuns())
-	rec, _ = s2.allowSkipRecord("t1", "reason")
+	rec, _ = s2.allowSkipRecord("t1", skipCodeLockHeld)
 	require.True(t, rec)
-	rec, _ = s2.allowSkipRecord("t1", "reason")
+	rec, _ = s2.allowSkipRecord("t1", skipCodeLockHeld)
 	require.True(t, rec)
 }
 
@@ -968,7 +968,7 @@ func TestSkipRecordThrottledByInterval(t *testing.T) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for k, st := range s.skipAt {
-			if strings.Contains(k, "lock not acquired") && st.suppressed >= 1 {
+			if k.code == skipCodeLockHeld && k.taskID == "throttle" && st.suppressed >= 1 {
 				return true
 			}
 		}

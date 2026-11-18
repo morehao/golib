@@ -72,6 +72,27 @@ func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
 	return err
 }
 
+// disableTask 将任务置为 disabled，并同时清空 next_run_at：
+// 暂停后不该再对外显示"下次执行时间"（否则 UI 会给出一个永远不会发生的执行时刻）。
+//
+// 已是目标状态且 next_run_at 已为空时幂等返回 nil，避免 MySQL 对"无变化 UPDATE"
+// 返回 0 行受影响导致的误判。
+func (s *store) disableTask(ctx context.Context, taskID string) error {
+	def, err := s.GetTaskByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if def == nil {
+		return ErrTaskNotFound
+	}
+	if def.Status == CronTaskDisabled && def.NextRunAt == nil {
+		return nil
+	}
+	return s.dbGetter(ctx).Model(&CronTask{}).Table(CronTaskTableName).
+		Where("id = ?", taskID).
+		Updates(map[string]any{"status": CronTaskDisabled, "next_run_at": nil}).Error
+}
+
 // updateTaskStatus 更新任务定义启停状态；定义不存在（含已软删除）返回 ErrTaskNotFound。
 // 已是目标状态时幂等返回 nil，避免 MySQL 对"无变化 UPDATE"返回 0 行受影响导致的误判。
 func (s *store) updateTaskStatus(ctx context.Context, taskID string, status CronTaskStatus) error {
@@ -188,6 +209,13 @@ func (s *store) updateRunTimes(ctx context.Context, taskID string, lastRun, next
 	updates := map[string]any{"last_run_at": lastRun, "next_run_at": nextRun}
 	return s.dbGetter(ctx).Model(&CronTask{}).Table(CronTaskTableName).
 		Where("id = ?", taskID).Updates(updates).Error
+}
+
+// updateNextRunAt 只刷新下次执行时间，**不动 last_run_at**：
+// 跳过不算一次执行，不能把 last_run_at 推到一个并没有真的跑过的时刻。
+func (s *store) updateNextRunAt(ctx context.Context, taskID string, nextRun *time.Time) error {
+	return s.dbGetter(ctx).Model(&CronTask{}).Table(CronTaskTableName).
+		Where("id = ?", taskID).Update("next_run_at", nextRun).Error
 }
 
 func (s *store) insertRun(ctx context.Context, e *CronTaskRun) error {
