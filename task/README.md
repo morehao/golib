@@ -356,7 +356,7 @@ defer w.Shutdown(shutdownCtx)
 
 注意：**投递仍要走 `manager`**——`source/db` 只提供 `Source`（Fetch/Renew/Release/Save）与只读 `Store`，不含提交入口。
 
-`source/db` 与 `source/remote` 是 `gasync.Source` 的两种平级实现（DB / HTTP），`worker` 只依赖接口。`manager` 内部同样复用 `source/db`，二者单向依赖、无循环引用（`bash scripts/check-gasync-deps.sh` 可断言）。
+`source/db` 与 `source/remote` 是 `gasync.Source` 的两种平级实现（DB / HTTP），`worker` 只依赖接口。`manager` 内部同样复用 `source/db`，二者单向依赖、无循环引用。
 
 #### 注意事项
 

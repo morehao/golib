@@ -56,7 +56,7 @@
 
 端到端用例：`biz/gserver/ginasync/center_test.go`（真 remote 客户端 + worker 打通 HTTP 四段）、
 `task/gasync/center/center_test.go`（认领/续租/回传/幂等/放租约/归属校验）。
-`scripts/check-gasync-deps.sh` 增加 `wire`（只依赖根包）与 `center`（不引 gin）两条断言。
+`wire` 只依赖根包、`center` 不引 gin 的边界由代码结构保证。
 
 ### 迁移（gasync）：认领索引改为「优先级感知」
 

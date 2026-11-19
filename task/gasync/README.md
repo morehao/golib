@@ -27,7 +27,7 @@ task/gasync                     契约内核：AsyncTask / AsyncTaskRun / AsyncT
 - `worker` 只依赖根包，不 import gorm / manager / source/db / asynq；
 - `manager` 单向依赖 `source/db`（`source/db` 不反向依赖 manager，无循环引用）。
 
-可用 `bash scripts/check-gasync-deps.sh` 一键断言。
+这些依赖边界是约定，靠 review 保证；循环引用会直接导致 `go build ./...` 失败。
 
 ## 核心概念
 
@@ -281,7 +281,7 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 - 端点路径常量 `PathFetch` / `PathHeartbeat` / `PathCallback` / `PathRelease`；
 - `Task`（跨网络任务子集，含 `scope`）、`FetchRequest/Response`、`HeartbeatRequest`、`CallbackRequest`、`ReleaseRequest`；
   `FetchRequest` 不含作用域参数（认领全局）；`wire.Task.scope` 供执行期建立作用域，旧中心缺省按 `__platform__` 兜底；
-- 只依赖根包 gasync（`scripts/check-gasync-deps.sh` 断言），客户端/服务端/HTTP 适配三方共用。
+- 只依赖根包 gasync，客户端/服务端/HTTP 适配三方共用。
 
 ### `manager`
 
@@ -360,7 +360,6 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 export GOCACHE=$PWD/.dsh/tmp/gocache GOFLAGS=-mod=mod
 go test ./task/gasync/... -count=1          # 单元 + 集成（真库/真 Redis 连不上自动 skip）
 go test ./task/gasync/... -race -count=1    # 并发路径
-bash scripts/check-gasync-deps.sh           # 依赖边界断言（无环、worker 不含 gorm/redis）
 ```
 
 真库用例按方言拆成子测试（`TestRealXxx/mysql`、`TestRealXxx/postgres`），一种方言连不上只跳过它自己；
