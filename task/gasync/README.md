@@ -6,7 +6,7 @@
 
 > 与 `task/gcron`（周期触发）、`task` 族通用约定（建表、日志、依赖边界）的关系见 [`task/README.md`](../README.md)。
 >
-> 本文是**使用手册**（怎么用、API、接入要点）；**架构、取舍、并发机制等设计说明见 [`gasync-design.md`](gasync-design.md)**。
+> 本文是**使用手册**（怎么用、API、接入要点）；**架构、取舍、并发机制等设计说明见 [`ARCHITECTURE.md`](ARCHITECTURE.md)**。
 
 ## 包结构
 
