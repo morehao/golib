@@ -24,8 +24,3 @@ func (c *Manager) resolveScope(ctx context.Context) (value string, enforced bool
 	}
 	return v, true, nil
 }
-
-// mustScope 取强制下的作用域值（供管理面读写）；enforced=false 时返回空串、nil。
-func (c *Manager) mustScope(ctx context.Context) (string, bool, error) {
-	return c.resolveScope(ctx)
-}

@@ -47,18 +47,6 @@ func (s *store) applyScope(ctx context.Context, q *gorm.DB) (*gorm.DB, error) {
 	return q.Where("scope_key = ?", value), nil
 }
 
-// writeScope 返回写入侧应落库的 scope_key：enforced 时取解析值（必非空），否则空串。
-func (s *store) writeScope(ctx context.Context) (string, error) {
-	value, enforced, err := s.resolveScope(ctx)
-	if err != nil {
-		return "", err
-	}
-	if !enforced {
-		return "", nil
-	}
-	return value, nil
-}
-
 // applyRunScope 把作用域条件叠加到尝试记录查询上。
 //
 // 尝试行（core_async_task_run）无 scope_key 列，故经父任务归属约束：
