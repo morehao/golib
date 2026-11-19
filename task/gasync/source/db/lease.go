@@ -36,11 +36,15 @@ var terminalStatuses = []string{
 // RowsAffected==0 说明已失权（被接管、被取消、已终态）。此时读回状态区分原因：
 // canceled → RenewCanceled；其余 → RenewLeaseExpired。没有这条条件，
 // Cancel 在跨实例上完全无效（internals「续租」）。
-func (s *store) renew(ctx context.Context, id, workerID string) (RenewResult, error) {
+func (s *store) renew(ctx context.Context, id, workerID string, scope ...string) (RenewResult, error) {
+	sc := ""
+	if len(scope) > 0 {
+		sc = scope[0]
+	}
 	sql := fmt.Sprintf(`UPDATE %s SET lease_until = %s
-WHERE id = ? AND worker_id = ? AND status = 'running'`,
+WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running'`,
 		CoreAsyncTaskTableName, s.dialect.afterExpr())
-	res := s.db.WithContext(ctx).Exec(sql, s.dialect.afterArg(s.leaseTTL), id, workerID)
+	res := s.db.WithContext(ctx).Exec(sql, s.dialect.afterArg(s.leaseTTL), id, workerID, sc)
 	if res.Error != nil {
 		return RenewOK, res.Error
 	}

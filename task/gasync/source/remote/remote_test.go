@@ -439,3 +439,41 @@ func TestClose(t *testing.T) {
 
 // 断言 *Source 实现了 gasync.Source 接口。
 var _ gasync.Source = (*Source)(nil)
+
+// TestFetch_CarriesScope 远程 worker 取回的任务带回 scope（T8 后半）。
+func TestFetch_CarriesScope(t *testing.T) {
+	f := newFakeCenter(t)
+	f.on("/GetPendingAsyncTask", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"available": true,
+			"asyncTask": map[string]any{"id": "t1", "type": "invoice", "scope": "tenantA"},
+		})
+	})
+	s := newSource(t, f)
+	task, err := s.Fetch(context.Background(), "invoice")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if task.Scope != "tenantA" {
+		t.Errorf("scope = %q, want tenantA", task.Scope)
+	}
+}
+
+// TestFetch_MissingScopeDefaultsPlatform 旧中心不带 scope 时按平台值兜底（兼容）。
+func TestFetch_MissingScopeDefaultsPlatform(t *testing.T) {
+	f := newFakeCenter(t)
+	f.on("/GetPendingAsyncTask", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"available": true,
+			"asyncTask": map[string]any{"id": "t2", "type": "invoice"},
+		})
+	})
+	s := newSource(t, f)
+	task, err := s.Fetch(context.Background(), "invoice")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if task.Scope != gasync.ScopePlatform {
+		t.Errorf("scope = %q, want %q (default platform)", task.Scope, gasync.ScopePlatform)
+	}
+}

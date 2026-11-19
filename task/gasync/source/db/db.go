@@ -27,6 +27,11 @@ type Config struct {
 	WorkerID string
 	// FailFastChain 为 true 时，任务链某 step 失败终态后同 chain 后续 step 置 canceled。
 	FailFastChain bool
+	// ScopeResolver 作用域取值来源。注入后：读路径叠作用域条件、写路径守卫 (id, scope_key)、
+	// 未声明作用域一律拒绝（fail-closed）。未注入时行为与加作用域前一致（灰度兼容）。
+	ScopeResolver gasync.ScopeResolver
+	// RequireScope 仅在未注入 ScopeResolver 时生效：true 表示要求强制却无取值来源，一律拒绝。
+	RequireScope bool
 }
 
 // Source 导出类型别名，便于调用方持有具体类型；其方法集满足 gasync.Source。
@@ -50,8 +55,11 @@ func New(cfg Config) (*Source, error) {
 		cfg.WorkerID = "gasync-db-" + genUUID()
 	}
 	dialect := DetectDialect(cfg.DB.Dialector.Name())
+	st := newStore(cfg.DB, dialect, cfg.LeaseTTL)
+	st.scopeResolver = cfg.ScopeResolver
+	st.requireScope = cfg.RequireScope
 	return &source{
-		store:         newStore(cfg.DB, dialect, cfg.LeaseTTL),
+		store:         st,
 		db:            cfg.DB,
 		dialect:       dialect,
 		backoff:       cfg.Backoff,

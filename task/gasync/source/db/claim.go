@@ -19,6 +19,10 @@ type store struct {
 	db       *gorm.DB
 	dialect  Dialect
 	leaseTTL time.Duration
+	// scopeResolver 作用域取值来源（nil = 未注入，走灰度兼容路径）。
+	scopeResolver gasync.ScopeResolver
+	// requireScope 仅在未注入 resolver 时生效：true 表示要求强制但缺取值来源，一律拒绝。
+	requireScope bool
 }
 
 // newStore 构造内部 store。

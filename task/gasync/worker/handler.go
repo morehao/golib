@@ -97,11 +97,18 @@ func (w *Worker) process(taskType string, task *gasync.AsyncTask) {
 	attempt := task.Attempt
 	w.emit("started", task, attempt, 0, nil)
 
+	// 执行期作用域注入：把任务行携带的作用域写进 ctx，供 handler 与生命周期钩子读取。
+	// 缺省不注入时 handler 需自行用 task.Scope 建立作用域。
+	taskCtx := w.baseCtx
+	if w.cfg.ScopeInjector != nil {
+		taskCtx = w.cfg.ScopeInjector(taskCtx, task)
+	}
+
 	lc := asLifecycle(h)
 
 	// BeforeExecute 不在事务内；返回 ErrSkip 时写 skipped，无回调。
 	if lc != nil {
-		if err := lc.BeforeExecute(w.baseCtx, task); err != nil {
+		if err := lc.BeforeExecute(taskCtx, task); err != nil {
 			if errors.Is(err, ErrSkip) {
 				w.saveResult(task, gasync.Result{
 					Outcome:  gasync.OutcomeSkipped,
@@ -125,7 +132,7 @@ func (w *Worker) process(taskType string, task *gasync.AsyncTask) {
 	}
 
 	// execCtx 是本次执行的取消源：超时、停机、续租失权都通过它传递。
-	execCtx, cancelExec := context.WithCancel(w.baseCtx)
+	execCtx, cancelExec := context.WithCancel(taskCtx)
 	defer cancelExec()
 
 	var leaseLost atomic.Bool

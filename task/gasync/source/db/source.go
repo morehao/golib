@@ -64,7 +64,7 @@ func (s *source) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 	if task == nil || task.ID == "" {
 		return nil
 	}
-	res, err := s.store.renew(ctx, task.ID, task.WorkerID)
+	res, err := s.store.renew(ctx, task.ID, task.WorkerID, task.Scope)
 	if err != nil {
 		return err
 	}
@@ -85,9 +85,9 @@ func (s *source) Release(ctx context.Context, task *gasync.AsyncTask) error {
 		return nil
 	}
 	sql := fmt.Sprintf(`UPDATE %s SET lease_until = %s, worker_id = ''
-WHERE id = ? AND worker_id = ? AND status = 'running'`,
+WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running'`,
 		CoreAsyncTaskTableName, s.dialect.nowValueExpr())
-	return s.db.WithContext(ctx).Exec(sql, task.ID, task.WorkerID).Error
+	return s.db.WithContext(ctx).Exec(sql, task.ID, task.WorkerID, task.Scope).Error
 }
 
 // Reap 运行一次回收（① 收口残留尝试行、② 判死次数用尽），返回处理的行数。
@@ -179,10 +179,10 @@ func (s *source) Save(ctx context.Context, task *gasync.AsyncTask, r gasync.Resu
 // 同一进程（共用 worker_id）的陈旧 goroutine 会把别人重认领后的任务当成自己的。
 func (s *source) lockOwnership(tx *gormDB, task *gasync.AsyncTask) (bool, error) {
 	sql := fmt.Sprintf(`SELECT id FROM %s
-WHERE id = ? AND worker_id = ? AND status = 'running' AND generation = ? AND attempt = ?%s`,
+WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running' AND generation = ? AND attempt = ?%s`,
 		CoreAsyncTaskTableName, s.dialect.rowLockClause())
 	var id string
-	if err := tx.Raw(sql, task.ID, task.WorkerID, task.Generation, task.Attempt).Scan(&id).Error; err != nil {
+	if err := tx.Raw(sql, task.ID, task.WorkerID, task.Scope, task.Generation, task.Attempt).Scan(&id).Error; err != nil {
 		return false, err
 	}
 	return id != "", nil
@@ -219,10 +219,10 @@ func (s *source) finishAsyncTask(tx *gormDB, task *gasync.AsyncTask, status gasy
 	sql := fmt.Sprintf(`UPDATE %s
 SET status = ?, finished_at = %s, lease_until = NULL, worker_id = '',
     duration_ms = duration_ms + ?, last_error = ?, result = ?
-WHERE id = ? AND worker_id = ? AND status = 'running' AND generation = ? AND attempt = ?`,
+WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running' AND generation = ? AND attempt = ?`,
 		CoreAsyncTaskTableName, nowExpr)
 	res := tx.Exec(sql, string(status), r.Duration.Milliseconds(), errMsg, resultText(r.Payload),
-		task.ID, task.WorkerID, task.Generation, task.Attempt)
+		task.ID, task.WorkerID, task.Scope, task.Generation, task.Attempt)
 	if res.Error != nil {
 		return res.Error
 	}
@@ -244,10 +244,10 @@ func (s *source) retryAsyncTask(tx *gormDB, task *gasync.AsyncTask, r gasync.Res
 	sql := fmt.Sprintf(`UPDATE %s
 SET status = 'pending', lease_until = NULL, worker_id = '',
     next_run_at = %s, duration_ms = duration_ms + ?, last_error = ?
-WHERE id = ? AND worker_id = ? AND status = 'running' AND generation = ? AND attempt = ?`,
+WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running' AND generation = ? AND attempt = ?`,
 		CoreAsyncTaskTableName, s.dialect.afterExpr())
 	res := tx.Exec(sql, s.dialect.afterArg(backoff), r.Duration.Milliseconds(), errMsg,
-		task.ID, task.WorkerID, task.Generation, task.Attempt)
+		task.ID, task.WorkerID, task.Scope, task.Generation, task.Attempt)
 	if res.Error != nil {
 		return res.Error
 	}

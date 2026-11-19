@@ -55,6 +55,17 @@ type Result struct {
 // EnsureFunc 是业务钩子；Source 决定在哪调用它。
 type EnsureFunc func(ctx context.Context) error
 
+// ScopeResolver 从 ctx 解析当前作用域取值。
+//
+// 返回值 declared 表示「本次请求是否显式声明了作用域」：
+//   - declared=true 且 value=租户 ID：正常隔离；
+//   - declared=true 且 value=ScopePlatform：平台任务；
+//   - declared=false：未声明（RequireScope 打开时被拒绝）。
+//
+// 返回的是作用域**取值**，与业务表隔离列实际叫什么列（tenant_id / company_id）无关；
+// 两者只是共享同一取值空间。由应用注入 gcontext 等实现，gasync 不依赖具体来源。
+type ScopeResolver func(ctx context.Context) (value string, declared bool)
+
 // txContextKey 是 TxFromContext 在 ctx 中存取事务句柄的私有键。
 type txContextKey struct{}
 

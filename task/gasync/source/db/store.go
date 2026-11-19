@@ -21,15 +21,23 @@ type Store interface {
 }
 
 // GetAsyncTask 按 ID 取任务，不存在返回 ErrAsyncTaskNotFound。
+//
+// 作用域强制下按 (scope_key, id) 取；越权等价于不存在（同样返回 ErrAsyncTaskNotFound，
+// 防枚举，见设计 §5.4）。
 func (s *store) GetAsyncTask(ctx context.Context, id string) (*gasync.AsyncTask, error) {
-	row, err := s.loadAsyncTaskRow(ctx, id)
+	q, err := s.applyScope(ctx, s.db.WithContext(ctx).Model(&CoreAsyncTask{}))
+	if err != nil {
+		return nil, err
+	}
+	var row CoreAsyncTask
+	err = q.Where("id = ?", id).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, gasync.ErrAsyncTaskNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	return asyncTaskRowToDomain(row), nil
+	return asyncTaskRowToDomain(&row), nil
 }
 
 // GetAsyncTaskWithRuns 取任务及其跨重放的全部尝试记录（按 generation, attempt 升序）。
@@ -50,7 +58,10 @@ func (s *store) GetAsyncTaskWithRuns(ctx context.Context, id string) (*gasync.As
 // ListAsyncTask 分页查询任务，返回当页与总数。条件缺省即不过滤；PageSize<=0 默认 20，上限 200。
 func (s *store) ListAsyncTask(ctx context.Context, cond *gasync.AsyncTaskCond) ([]*gasync.AsyncTask, int64, error) {
 	page, size := normPage(cond.Page, cond.PageSize)
-	q := s.db.WithContext(ctx).Model(&CoreAsyncTask{})
+	q, err := s.applyScope(ctx, s.db.WithContext(ctx).Model(&CoreAsyncTask{}))
+	if err != nil {
+		return nil, 0, err
+	}
 	if cond.Type != "" {
 		q = q.Where("task_type = ?", cond.Type)
 	}
@@ -119,7 +130,10 @@ func orderByClause(ob string) string {
 // ListRun 分页查询尝试记录。条件缺省即不过滤；PageSize<=0 默认 20，上限 200。
 func (s *store) ListRun(ctx context.Context, cond *gasync.AsyncTaskRunCond) ([]*gasync.AsyncTaskRun, int64, error) {
 	page, size := normPage(cond.Page, cond.PageSize)
-	q := s.db.WithContext(ctx).Model(&CoreAsyncTaskRun{})
+	q, err := s.applyRunScope(ctx, s.db.WithContext(ctx).Model(&CoreAsyncTaskRun{}))
+	if err != nil {
+		return nil, 0, err
+	}
 	if cond.AsyncTaskID != "" {
 		q = q.Where("async_task_id = ?", cond.AsyncTaskID)
 	}
@@ -145,9 +159,16 @@ func (s *store) ListRun(ctx context.Context, cond *gasync.AsyncTaskRunCond) ([]*
 }
 
 // GetRun 按 ID 取尝试记录，不存在返回 ErrRunNotFound。
+//
+// 尝试行本身无 scope_key 列；作用域强制下用父任务的作用域约束（async_task_id 归属该域），
+// 越权等价于不存在。
 func (s *store) GetRun(ctx context.Context, id string) (*gasync.AsyncTaskRun, error) {
+	q, err := s.applyRunScope(ctx, s.db.WithContext(ctx).Model(&CoreAsyncTaskRun{}))
+	if err != nil {
+		return nil, err
+	}
 	var row CoreAsyncTaskRun
-	err := s.db.WithContext(ctx).Where("id = ?", id).Take(&row).Error
+	err = q.Where("id = ?", id).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, gasync.ErrRunNotFound
 	}

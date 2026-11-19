@@ -29,6 +29,10 @@ type Manager struct {
 	// gate 是本进程的类型级启停缓存适配器（TypeGate() 创建；Disable/Enable 后同步刷新）。
 	gate *TypeGateAdapter
 
+	// scopeResolver 作用域取值来源（nil = 灰度兼容，不强制）。管理面直接查询走它。
+	scopeResolver gasync.ScopeResolver
+	requireScope  bool
+
 	// 后台维护循环（Start/Close 管理）：回收残留 running 行 + 清理过期终态记录。
 	maintMu     sync.Mutex
 	maintCancel context.CancelFunc
@@ -67,19 +71,23 @@ func New(cfg *Config, gormDB *gorm.DB, opts ...Option) (*Manager, error) {
 		Backoff:       o.Config.Backoff,
 		WorkerID:      workerID,
 		FailFastChain: o.Config.FailFastChain,
+		ScopeResolver: o.Config.ScopeResolver,
+		RequireScope:  o.Config.RequireScope,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	m := &Manager{
-		cfg:         o.Config,
-		db:          gormDB,
-		dialect:     dialect,
-		dbSrc:       dbSrc,
-		notifier:    o.notifier,
-		mode:        ModePoll,
-		workerIDVal: workerID,
+		cfg:           o.Config,
+		db:            gormDB,
+		dialect:       dialect,
+		dbSrc:         dbSrc,
+		notifier:      o.notifier,
+		mode:          ModePoll,
+		workerIDVal:   workerID,
+		scopeResolver: o.Config.ScopeResolver,
+		requireScope:  o.Config.RequireScope,
 	}
 	if o.notifier != nil {
 		m.mode = ModePollNotify
@@ -176,11 +184,23 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 	if len(spec.Payload) > c.cfg.MaxPayloadBytes {
 		return nil, false, gasync.ErrPayloadTooLarge
 	}
+	// 作用域 fail-closed：在写入前解析；未声明且强制时拒绝，任务表行数不变（T4）。
+	scope, enforced, err := c.resolveScope(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if !enforced {
+		scope = ""
+	}
 
 	row, delayMs, err := c.buildSubmitRow(spec, prevStep)
 	if err != nil {
 		return nil, false, err
 	}
+	row.ScopeKey = scope
+	// 归属快照：created_by 与 last_actor_id 均写本次触发者；空表示系统/内部触发。
+	row.CreatedBy = spec.ActorID
+	row.LastActorID = spec.ActorID
 
 	submitted, err := c.insertAsyncTask(ctx, row, delayMs)
 	if err != nil {
@@ -199,7 +219,7 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 			// 没有幂等键却报冲突：只可能是主键撞车，无法回查。
 			return nil, false, gasync.ErrUniqKeyRace
 		}
-		asyncTask, err = c.findByUniqKey(ctx, *row.UniqKey)
+		asyncTask, err = c.findByUniqKey(ctx, row.ScopeKey, *row.UniqKey)
 		if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
 			retried, rerr := c.insertAsyncTask(ctx, row, delayMs)
 			if rerr != nil {
@@ -207,7 +227,7 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 			}
 			if !retried {
 				// 仍冲突但回查不到 → 幂等键竞争。
-				asyncTask, err = c.findByUniqKey(ctx, *row.UniqKey)
+				asyncTask, err = c.findByUniqKey(ctx, row.ScopeKey, *row.UniqKey)
 				if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
 					return nil, false, gasync.ErrUniqKeyRace
 				}
@@ -290,18 +310,21 @@ func (c *Manager) insertAsyncTask(ctx context.Context, row *db.CoreAsyncTask, de
 	}
 
 	sql := fmt.Sprintf(`INSERT %sINTO %s
-(id, created_at, updated_at, task_type, status, priority, payload, uniq_key,
+(id, created_at, updated_at, scope_key, task_type, status, priority, payload, uniq_key,
+ created_by, last_actor_id,
  biz_type, biz_id, chain_id, step, prev_step, generation, attempt, max_attempts, timeout_ms, next_run_at,
  worker_id, duration_ms, request_id, trace_id, labels)
-VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
+VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
+ ?, ?,
  ?, ?, ?, ?, ?, ?, ?, ?, ?,
  %s, '', 0, ?, '', NULLIF(?, ''))%s`,
 		prefix, db.CoreAsyncTaskTableName, c.dialect.EmptyKeyExpr(), nextRunExpr, suffix)
 
 	res := c.db.WithContext(ctx).Exec(sql,
-		row.ID, row.CreatedAt, row.UpdatedAt, row.TaskType, row.Status, row.Priority,
+		row.ID, row.CreatedAt, row.UpdatedAt, row.ScopeKey, row.TaskType, row.Status, row.Priority,
 		payloadOrEmpty(row), // NULLIF(?, '')
 		row.UniqKey,
+		row.CreatedBy, row.LastActorID,
 		row.BizType, row.BizID, row.ChainID, row.Step, row.PrevStep, row.Generation, row.Attempt, row.MaxAttempts, row.TimeoutMs,
 		nextRunArg,
 		row.RequestID, row.Labels,
@@ -312,10 +335,13 @@ VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
 	return res.RowsAffected > 0, nil
 }
 
-// findByUniqKey 按幂等键回查任务，不存在返回 ErrAsyncTaskNotFound。
-func (c *Manager) findByUniqKey(ctx context.Context, key string) (*gasync.AsyncTask, error) {
+// findByUniqKey 按 (scope_key, uniq_key) 回查任务，不存在返回 ErrAsyncTaskNotFound。
+//
+// 复合唯一键后同一 uniq_key 可在多个域各有一行，必须带作用域回查，否则幂等命中会
+// 返回任意域的任务（比全局唯一更糟，见设计 §5.2）。
+func (c *Manager) findByUniqKey(ctx context.Context, scope, key string) (*gasync.AsyncTask, error) {
 	var row db.CoreAsyncTask
-	err := c.db.WithContext(ctx).Where("uniq_key = ?", key).Take(&row).Error
+	err := c.db.WithContext(ctx).Where("scope_key = ? AND uniq_key = ?", scope, key).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, gasync.ErrAsyncTaskNotFound
 	}
@@ -338,6 +364,13 @@ func (c *Manager) SubmitAfter(ctx context.Context, upstreamID string, spec *gasy
 	up, err := c.dbSrc.Store().GetAsyncTask(ctx, upstreamID)
 	if err != nil {
 		return nil, false, err
+	}
+	// 防跨域拼链：强制状态下，上游作用域必须与本步解析出的作用域一致。
+	// （读已带作用域条件，这里再显式校验一次，防止灰度/多来源下口径错位。）
+	if scope, enforced, serr := c.resolveScope(ctx); serr != nil {
+		return nil, false, serr
+	} else if enforced && up.Scope != scope {
+		return nil, false, gasync.ErrAsyncTaskNotFound
 	}
 	chainID := up.ChainID
 	if chainID == "" {
@@ -400,16 +433,35 @@ func (c *Manager) Cancel(ctx context.Context, id string) (canceled bool, err err
 	// 清 worker_id/lease_until：否则执行侧晚到的 Save 仍能通过租约校验（清空后必然失权，
 	// Save 返回 ErrLeaseLost 且不跑钩子），判活查询也不会把已取消的任务算作在线。
 	sql := fmt.Sprintf(`UPDATE %s SET status = 'canceled', finished_at = %s, lease_until = NULL, worker_id = ''
-WHERE id = ? AND status IN ('pending','running')`, db.CoreAsyncTaskTableName, now)
-	res := c.db.WithContext(ctx).Exec(sql, id)
+WHERE id = ? AND scope_key = ? AND status IN ('pending','running')`, db.CoreAsyncTaskTableName, now)
+	res := c.db.WithContext(ctx).Exec(sql, id, asyncTask.Scope)
 	if res.Error != nil {
 		return false, res.Error
 	}
 	return res.RowsAffected > 0, nil
 }
 
+// ReplayOption 是 Replay 的可选参数。
+type ReplayOption func(*replayOptions)
+
+type replayOptions struct {
+	actorID    string
+	hasActorID bool
+}
+
+// WithReplayActor 显式指定本次重放的操作者，覆写任务行 last_actor_id（仅保留最近一次）。
+// 不传时沿用 created_by（不覆写）。重放者不从 ctx 推断身份（见设计 §5.4）。
+func WithReplayActor(actorID string) ReplayOption {
+	return func(o *replayOptions) {
+		o.actorID = actorID
+		o.hasActorID = true
+	}
+}
+
 // Replay 重放一条终态任务（generation+1，回到 pending）。非终态返回 ErrNotReplayable。
-func (c *Manager) Replay(ctx context.Context, id string) (*gasync.AsyncTask, error) {
+//
+// 可选 WithReplayActor 指定重放者：传入时覆写 last_actor_id；不传则不覆写（保留原值/created_by）。
+func (c *Manager) Replay(ctx context.Context, id string, opts ...ReplayOption) (*gasync.AsyncTask, error) {
 	asyncTask, err := c.dbSrc.Store().GetAsyncTask(ctx, id)
 	if err != nil {
 		return nil, err
@@ -417,15 +469,31 @@ func (c *Manager) Replay(ctx context.Context, id string) (*gasync.AsyncTask, err
 	if !isTerminal(asyncTask.Status) {
 		return nil, gasync.ErrNotReplayable
 	}
+	var ro replayOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&ro)
+		}
+	}
 	now := c.dialect.NowValueExpr()
 	// generation+1，attempt 归零，清 lease/worker/started/finished，回到 pending。
+	// 带 WithReplayActor 时一并覆写 last_actor_id（created_by 不变）。
+	setActor := ""
+	args := []any{}
+	if ro.hasActorID {
+		setActor = ", last_actor_id = ?"
+	}
 	sql := fmt.Sprintf(`UPDATE %s
 SET status = 'pending', generation = generation + 1, attempt = 0,
     next_run_at = %s, lease_until = NULL, worker_id = '', started_at = NULL,
-    finished_at = NULL, duration_ms = 0
-WHERE id = ? AND status IN ('succeeded','failed','canceled','skipped')`,
-		db.CoreAsyncTaskTableName, now)
-	res := c.db.WithContext(ctx).Exec(sql, id)
+    finished_at = NULL, duration_ms = 0%s
+WHERE id = ? AND scope_key = ? AND status IN ('succeeded','failed','canceled','skipped')`,
+		db.CoreAsyncTaskTableName, now, setActor)
+	if ro.hasActorID {
+		args = append(args, ro.actorID)
+	}
+	args = append(args, id, asyncTask.Scope)
+	res := c.db.WithContext(ctx).Exec(sql, args...)
 	if res.Error != nil {
 		return nil, res.Error
 	}
@@ -436,14 +504,22 @@ WHERE id = ? AND status IN ('succeeded','failed','canceled','skipped')`,
 	return c.dbSrc.Store().GetAsyncTask(ctx, id)
 }
 
-// Stats 返回各状态的任务计数等统计。
+// Stats 返回各状态的任务计数等统计。作用域强制下按当前作用域聚合（见设计 §5.4）。
 func (c *Manager) Stats(ctx context.Context) (*Stats, error) {
+	scope, enforced, err := c.resolveScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var rows []struct {
 		Status string
 		Cnt    int64
 	}
-	if err := c.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
-		Select("status, count(*) AS cnt").Group("status").Scan(&rows).Error; err != nil {
+	q := c.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
+		Select("status, count(*) AS cnt").Group("status")
+	if enforced {
+		q = q.Where("scope_key = ?", scope)
+	}
+	if err := q.Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	st := &Stats{}

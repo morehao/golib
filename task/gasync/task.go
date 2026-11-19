@@ -23,6 +23,13 @@ const (
 	StatusTimeout   Status = "timeout" // 执行超时（独立状态；兼容旧的 failed+failure_kind=timeout）
 )
 
+// ScopePlatform 是平台作用域的保留值。
+//
+// 平台任务（不归属任何租户的运营/后台任务）用本值显式声明作用域，而不用空串——
+// 空串语义是「未声明」（fail-closed 会拒绝），平台任务若用空串会被误杀（见设计 §3）。
+// 约定：本值不得与真实租户 ID 冲突。
+const ScopePlatform = "__platform__"
+
 // FailureKind 与 Status 正交：状态说「结束成什么样」，分类说「为什么」。
 type FailureKind string
 
@@ -38,14 +45,21 @@ const (
 
 // AsyncTask 是一条有状态的任务实体，对应表 core_async_task。
 type AsyncTask struct {
-	ID       string
-	Type     string
-	Status   Status
+	ID     string
+	Type   string
+	Status Status
+	// Scope 作用域分区键（隔离维度）。取值来自提交时的 ScopeResolver；平台任务为保留值
+	// ScopePlatform。空串为非法（写入侧强制后不得出现）。
+	Scope    string
 	Priority int
 	Payload  []byte
-	UniqKey  string // 空串表示无幂等键
-	BizType  string
-	BizID    string
+	UniqKey  string // 空串表示无幂等键；唯一性范围 = 该行存在期间的 (Scope, UniqKey)
+	// CreatedBy 提交者归属快照（触发者），提交后不可变；空串 = 系统/内部触发。
+	CreatedBy string
+	// LastActorID 最近一次触发的操作者快照（如 Replay 重放者）；空串 = 未知。不建索引。
+	LastActorID string
+	BizType     string
+	BizID       string
 	// ChainID 任务链 ID（空串=独立任务）。同一条业务链的多个 step 共享同一 ChainID。
 	ChainID string
 	// Step 步骤序号，从 0 开始；独立任务恒为 0。
@@ -132,9 +146,15 @@ type AsyncTaskSpec struct {
 	Timeout     time.Duration // 可选，见「默认值优先级」
 	RunAt       time.Time     // 可选，绝对时刻（调用方时钟）；与 Delay 互斥
 	Delay       time.Duration // 可选，相对延迟（DB 时钟）；与 RunAt 互斥
-	UniqKey     string        // 可选，唯一性范围 = 该行存在期间（受 Retention 影响）
-	BizType     string
-	BizID       string
+	UniqKey     string        // 可选，唯一性范围 = 该行存在期间且同一 Scope（受 Retention 影响）
+	// Scope 可选：作用域分区键。通常由 manager 从 ctx 的 ScopeResolver 解析填入；
+	// 显式设置会被覆盖（口径以 resolver 为准）。空串且 RequireScope 时提交被拒。
+	Scope string
+	// ActorID 可选：本次触发的操作者（归属快照）。manager 写入 created_by 与 last_actor_id；
+	// 为空时 created_by/last_actor_id 取空（系统/内部触发）。
+	ActorID string
+	BizType string
+	BizID   string
 	// ChainID 可选：指定任务链；为空时独立任务（SubmitAfter 会自动继承上游 ChainID）。
 	ChainID string
 	// Step 可选：步骤序号，默认 0。
@@ -149,8 +169,10 @@ type AsyncTaskCond struct {
 	Page, PageSize int
 	Type           string
 	Status         Status
-	BizType        string
-	BizID          string
+	// Scope 作用域过滤（AND 语义）。由 manager 从 ctx 填充；调用方显式设置会被覆盖。
+	Scope   string
+	BizType string
+	BizID   string
 	// ChainID 按任务链过滤（空=不过滤）。
 	ChainID string
 	// Labels 按 label 精确匹配（AND 语义；空=不过滤）。

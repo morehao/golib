@@ -24,8 +24,10 @@ const (
 
 // Task 是跨网络的任务子集：只传执行所需字段，避免把根包实体整体序列化。
 type Task struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	// Scope 执行期需要建立的作用域（隔离维度）。缺省（旧中心）按平台值处理。
+	Scope       string `json:"scope,omitempty"`
 	Priority    int    `json:"priority"`
 	Payload     []byte `json:"payload"`
 	Attempt     int    `json:"attempt"`
@@ -43,6 +45,7 @@ func FromAsyncTask(t *gasync.AsyncTask) *Task {
 	return &Task{
 		ID:          t.ID,
 		Type:        t.Type,
+		Scope:       t.Scope,
 		Priority:    t.Priority,
 		Payload:     t.Payload,
 		Attempt:     t.Attempt,
@@ -54,14 +57,22 @@ func FromAsyncTask(t *gasync.AsyncTask) *Task {
 }
 
 // ToAsyncTask 把跨网络载荷还原成执行视图（status 固定为 running、WorkerID 由 Source 负责）。
+//
+// Scope 缺省（空串，来自未升级的旧中心）按 gasync.ScopePlatform 处理——旧中心无作用域概念，
+// 其任务按平台任务对待，升级后自然携带真实 scope，无双向开关。
 func (w *Task) ToAsyncTask() *gasync.AsyncTask {
 	if w == nil {
 		return nil
+	}
+	scope := w.Scope
+	if scope == "" {
+		scope = gasync.ScopePlatform
 	}
 	return &gasync.AsyncTask{
 		ID:          w.ID,
 		Type:        w.Type,
 		Status:      gasync.StatusRunning,
+		Scope:       scope,
 		Priority:    w.Priority,
 		Payload:     w.Payload,
 		Attempt:     w.Attempt,

@@ -56,7 +56,7 @@
 
 端到端用例：`biz/gserver/ginasync/center_test.go`（真 remote 客户端 + worker 打通 HTTP 四段）、
 `task/gasync/center/center_test.go`（认领/续租/回传/幂等/放租约/归属校验）。
-`scripts/check-gasync-deps.sh` 增加 `wire`（只依赖根包）与 `center`（不引 gin）两条断言。
+`wire` 只依赖根包、`center` 不引 gin 的边界由代码结构保证。
 
 ### 迁移（gasync）：认领索引改为「优先级感知」
 
@@ -74,6 +74,25 @@ DROP INDEX `idx_core_async_task_task_type_status_next_run_at` ON `core_async_tas
 -- PostgreSQL
 DROP INDEX IF EXISTS "idx_core_async_task_task_type_status_next_run_at";
 ```
+
+### ⚠️ Breaking Changes（gasync）：作用域维度
+
+任务表增加作用域维度（隔离 = `scope_key`、归属 = `created_by`/`last_actor_id`、部门走 `Labels`）。
+这是**新的包语义变化，请对照升级**：
+
+- **幂等键从「全局唯一」变为「域内唯一」**：唯一键由 `uk_core_async_task_uniq_key (uniq_key)`
+  改为 `uk_core_async_task_scope_uniq_key (scope_key, uniq_key)`。两个域使用同一 `uniq_key`
+  将各自新建并执行（此前后者不执行且会拿到前者的 payload/result）。冲突回查改为按 `(scope_key, uniq_key)`。
+- **新增列**：`core_async_task.scope_key` / `created_by` / `last_actor_id`（均 `varchar(64) NOT NULL DEFAULT ''`）；
+  新增查询索引 `idx_core_async_task_scope_created_by_created_at (scope_key, created_by, created_at)`。
+  **本包为新增包、默认无存量数据**：目标态由 `AutoMigrate`（`model.go` 的 gorm tag）直接落地，无需回填脚本。
+- **接入作用域**：`manager.WithScopeResolver(fn)` / `source/db.Config.ScopeResolver` 注入取值来源后，
+  读路径叠 `scope_key` 条件、写路径以 `(id, scope_key)` 守卫、未声明作用域一律 `ErrScopeRequired`；
+  **不注入时行为不变**（灰度兼容）。平台任务用保留值 `__platform__`（`gasync.ScopePlatform`）。
+- **管理面越权 = not found**：`Get/GetRuns/ListRuns/Cancel/Replay` 按 `(scope_key, id)` 取，越权与不存在都返回 `ErrAsyncTaskNotFound`（防枚举）；`List/Stats` 按 ctx 作用域过滤/聚合。
+- **`wire.FetchRequest` 不新增参数**（认领保持全局，D7）；`wire.Task` 新增 `scope`（执行期建立作用域），旧中心缺省按 `__platform__` 兜底。
+- **`Replay` 新增可选 `manager.WithReplayActor(id)`**：覆写 `last_actor_id`（仅保留最近一次），`created_by` 不变；重放者由接入层从认证主体传入，请求体不可自报。`Replay` 签名变为 `Replay(ctx, id, opts...)`（向后兼容）。
+- **执行侧注入**：`worker.WorkerConfig.ScopeInjector func(ctx, task) context.Context` 在执行前把任务行作用域注入 handler ctx；缺省不注入时 handler 需自行用 `task.Scope` 建立作用域。
 
 ### Fixes（gasync）
 
