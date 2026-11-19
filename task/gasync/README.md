@@ -330,7 +330,7 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 | `core_async_task_run` | 单次尝试记录（id、async_task_id、generation/attempt、状态、failure_kind、起止、耗时、结果、错误、request id） |
 | `core_async_task_type` | 任务类型开关（id、task_type 唯一、enabled；无行=启用） |
 
-建表方式、三方言 DDL 附录、共库/无 DDL 权限的迁移约定，见 [`task/README.md`](../README.md#建表与迁移)。索引名一律带表前缀（`idx_core_async_task_*` / `uk_core_async_task_*`），PostgreSQL 下索引名 schema 级唯一。
+建表默认由 `manager.New` / `manager.AutoMigrate`（或 `source/db` + 显式 `AutoMigrate`）按 `source/db/model.go` 的字段生成。需要手工建表（共库 / 无 DDL 权限）时，可用终局版 DDL：[`ddl.mysql.sql`](ddl.mysql.sql)（MySQL 8.0+）、[`ddl.postgres.sql`](ddl.postgres.sql)（PostgreSQL 12+）——与 `AutoMigrate` 产物逐列一致，只描述终局结构、不含分阶段迁移/回滚。任务族通用的建表约定见 [`task/README.md`](../README.md#建表与迁移)。索引名一律带表前缀（`idx_core_async_task_*` / `uk_core_async_task_*`），PostgreSQL 下索引名 schema 级唯一。
 
 任务表索引：`idx_core_async_task_claim`、`idx_core_async_task_task_type_status_created_at`、`idx_core_async_task_status_lease_until`、`idx_core_async_task_status_finished_at`、`idx_core_async_task_biz_type_biz_id`、`idx_core_async_task_chain_id_step`、`idx_core_async_task_scope_created_by_created_at`、`uk_core_async_task_scope_uniq_key`（共 8 条，不再增加）。
 
