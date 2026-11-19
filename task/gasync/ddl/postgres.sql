@@ -48,7 +48,7 @@ COMMENT ON COLUMN core_async_task.task_type IS '任务类型';
 COMMENT ON COLUMN core_async_task.status IS '任务状态';
 COMMENT ON COLUMN core_async_task.priority IS '优先级';
 COMMENT ON COLUMN core_async_task.payload IS '任务入参';
-COMMENT ON COLUMN core_async_task.uniq_key IS '幂等键（域内唯一；空不参与唯一约束）';
+COMMENT ON COLUMN core_async_task.uniq_key IS '幂等键（活跃期域内唯一；空不参与唯一约束）';
 COMMENT ON COLUMN core_async_task.created_by IS '提交者快照（触发者，不可变）';
 COMMENT ON COLUMN core_async_task.last_actor_id IS '最近触发者快照（如重放者）';
 COMMENT ON COLUMN core_async_task.biz_type IS '业务类型';
@@ -72,7 +72,8 @@ COMMENT ON COLUMN core_async_task.request_id IS '请求 ID';
 COMMENT ON COLUMN core_async_task.trace_id IS 'TraceID';
 COMMENT ON COLUMN core_async_task.labels IS '业务维度标签（JSON，如 {"app_group":"x","company_id":"1"}）';
 
-CREATE UNIQUE INDEX IF NOT EXISTS uk_core_async_task_scope_uniq_key ON core_async_task (scope_key, uniq_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_core_async_task_active_uniq ON core_async_task (scope_key, uniq_key) WHERE uniq_key IS NOT NULL AND status IN ('pending','running');
+CREATE INDEX IF NOT EXISTS idx_core_async_task_scope_uniq_key ON core_async_task (scope_key, uniq_key);
 CREATE INDEX IF NOT EXISTS idx_core_async_task_claim ON core_async_task (task_type, status, priority DESC, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_core_async_task_task_type_status_created_at ON core_async_task (task_type, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_core_async_task_scope_created_by_created_at ON core_async_task (scope_key, created_by, created_at);

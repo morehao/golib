@@ -27,16 +27,18 @@ type CoreAsyncTask struct {
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 
 	// ScopeKey 作用域分区键（隔离维度）。取值 = 提交时 resolver 解析值，平台任务为 ScopePlatform。
-	// 进复合唯一键（priority:1）与查询索引（priority:1）。
-	ScopeKey string `gorm:"column:scope_key;type:varchar(64);not null;default:'';uniqueIndex:uk_core_async_task_scope_uniq_key,priority:1;index:idx_core_async_task_scope_created_by_created_at,priority:1;comment:作用域分区键"`
+	// 进查询索引与幂等回查索引（priority:1）。
+	ScopeKey string `gorm:"column:scope_key;type:varchar(64);not null;default:'';index:idx_core_async_task_scope_created_by_created_at,priority:1;index:idx_core_async_task_scope_uniq_key,priority:1;comment:作用域分区键"`
 	TaskType string `gorm:"column:task_type;type:varchar(128);not null;index:idx_core_async_task_claim,priority:1;index:idx_core_async_task_task_type_status_created_at,priority:1;comment:任务类型"`
 	Status   string `gorm:"column:status;type:varchar(16);not null;default:'pending';index:idx_core_async_task_claim,priority:2;index:idx_core_async_task_status_lease_until,priority:1;index:idx_core_async_task_status_finished_at,priority:1;index:idx_core_async_task_task_type_status_created_at,priority:2;comment:任务状态"`
 	// Priority 参与认领索引（priority DESC）：认领 SQL 按 `priority DESC, next_run_at` 取任务，
 	// 索引顺序与之完全一致才能免掉 filesort。
 	Priority int32  `gorm:"column:priority;not null;default:0;index:idx_core_async_task_claim,priority:3,sort:desc;comment:优先级"`
 	Payload  string `gorm:"column:payload;type:text;comment:任务入参"`
-	// UniqKey 幂等键：空(NULL) 不参与唯一约束；与 scope_key 组成复合唯一键（域内幂等，priority:2）。
-	UniqKey *string `gorm:"column:uniq_key;type:varchar(128);uniqueIndex:uk_core_async_task_scope_uniq_key,priority:2;comment:幂等键（域内唯一）"`
+	// UniqKey 幂等键：空(NULL) 不参与唯一约束；与 scope_key 组成「活跃期唯一」约束，
+	// 由迁移期建立的分区/生成列唯一索引施加（见 MigrateActiveUniqIndex），故此处不写 uniqueIndex tag。
+	// 普通查询索引 idx_core_async_task_scope_uniq_key 供 (scope_key, uniq_key) 回查使用。
+	UniqKey *string `gorm:"column:uniq_key;type:varchar(128);index:idx_core_async_task_scope_uniq_key,priority:2;comment:幂等键（活跃期域内唯一）"`
 	// CreatedBy 提交者归属快照（触发者），提交后不可变；空串=系统/内部触发。
 	CreatedBy string `gorm:"column:created_by;type:varchar(64);not null;default:'';index:idx_core_async_task_scope_created_by_created_at,priority:2;comment:提交者快照"`
 	// LastActorID 最近一次触发的操作者快照（如重放者）；空串=未知。不建索引。

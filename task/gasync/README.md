@@ -5,6 +5,8 @@
 唤醒方式（纯轮询 / 轮询 + 通知器）与取任务方式（本地 DB 认领 / 远程 HTTP）都是可替换的实现，不是组件的前提。基于它既有「全量任务中心」用法，也能退化成「简单纯异步」用法（只投递 + 执行，不引入管理面）。
 
 > 与 `task/gcron`（周期触发）、`task` 族通用约定（建表、日志、依赖边界）的关系见 [`task/README.md`](../README.md)。
+>
+> 本文是**使用手册**（怎么用、API、接入要点）；**架构、取舍、并发机制等设计说明见 [`gasync-design.md`](gasync-design.md)**。
 
 ## 包结构
 
@@ -49,6 +51,48 @@ task/gasync                     契约内核：AsyncTask / AsyncTaskRun / AsyncT
   失权时返回 `ErrLeaseLost` 且**不跑钩子**（状态可回滚，副作用不可回滚）。
 - 停机/认领后无法交付用 `Release` 把租约置为已过期（**不是**续租），另一实例可立即接管。
 - `manager.Start(ctx)` 起维护循环：回收「次数用尽 + 租约过期」的卡死任务、按 `Retention` 清理终态记录。
+
+## 任务身份：幂等键、业务维度与隔离
+
+一条任务的「身份」由四组字段从不同角度刻画。它们职责不同、彼此不替代，理解它们的边界是正确使用 gasync 的关键。
+
+### 幂等键 `uniq_key`：写入去重
+
+`uniq_key` 回答的是「**这条提交是不是同一次意图的重复**」。它是写入路径上的去重约束，不是查询标签：
+
+- **它决定任务建不建**。`Submit` 走「冲突忽略插入」（MySQL `INSERT IGNORE` / PG·SQLite `ON CONFLICT DO NOTHING`），撞上唯一约束即不再新建，转而回查返回既有任务，并把 `submitted` 置为 `false`。去重由数据库唯一约束原子完成，不依赖「先查再插」，因此并发提交同键只会落一条（并发提交由 `Submit` 的三值语义吸收，调用方据 `submitted` 判断是否复用）。
+- **唯一性有范围**：唯一键是 `(scope_key, uniq_key)`，即「**域内**」唯一——不同作用域用同一 `uniq_key` 互不影响。
+- **唯一性有时间窗（活跃期）**：只有活跃任务（pending / running）参与唯一；任务进入终态后该键即释放，同键可重新提交（重建）。由 `uk_core_async_task_active_uniq` 施加（PG/SQLite 部分唯一索引，MySQL 生成列唯一索引，见 `db.MigrateActiveUniqIndex`），`Submit` 冲突回查只认活跃行。这保证了「一次意图」的重复投递被吸收、而「同一业务对象的新意图」不会被旧终态任务卡死。
+- **可为空**：空串写成 `NULL`，不参与唯一，即「不关心幂等」的任务可任意多条。
+- **值由业务构造**，代表「一次具体意图的身份」（如按订单号、按请求 ID 派生），而非 payload 内容本身。payload 相同不意味着是同一次意图：键刻画的是意图的身份，不是入参的内容。
+- **不参与普通查询**：`AsyncTaskCond` 不含 `UniqKey`，检索不靠它。
+
+### 业务维度 `biz_type` + `biz_id`：归属与检索
+
+`biz_*` 回答的是「**这条任务属于哪个业务对象**」。它是普通复合索引（`idx_core_async_task_biz_type_biz_id`）上的查询标签：
+
+- **允许重复**：同一业务对象（如同一张订单）可以有多条、多种任务都挂在同一 `(biz_type, biz_id)` 上，这是正常语义（归属是多对一）。
+- **只用于读路径**：管理面按 `AsyncTaskCond{BizType, BizID}` 过滤「某业务对象有哪些任务」。
+- **不承担去重**：它是普通索引而非唯一约束，无法在并发下原子判重，不能替代 `uniq_key`。
+
+### 隔离维度 `scope_key`：域与域之间
+
+`scope_key` 回答的是「**这条任务属于哪个隔离域**」。它同时进入幂等唯一键（`(scope_key, uniq_key)`）与查询索引，是「域」这一层的主键。详见「[作用域（scope）](#作用域scope)」一节。
+
+### 开放标签 `labels`：任意业务维度
+
+`labels`（JSON 对象）承载不进入核心列的开放维度（如部门「部门走 `Labels`」），按精确匹配过滤。它不参与唯一约束，也不影响认领，纯粹用于检索与展示。
+
+### 一组字段协作出的完整身份
+
+四种维度是同一条任务记录上正交的刻画，一起用时各司其职：
+
+- `scope_key` 划定域；
+- `uniq_key` 在该域内判定「是否同一次意图」（去重）；
+- `biz_type` / `biz_id` 标注它归属的业务对象（检索）；
+- `labels` 承载额外的开放维度（检索/展示）。
+
+提交时四者都写进 `core_async_task` 同一行：`Submit` 用 `uniq_key` 门禁是否新建，其余三者随行落库供后续检索与隔离。
 
 ## 三种使用形态
 
@@ -332,11 +376,11 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 
 建表默认由 `manager.New` / `manager.AutoMigrate`（或 `source/db` + 显式 `AutoMigrate`）按 `source/db/model.go` 的字段生成。需要手工建表（共库 / 无 DDL 权限）时，可用终局版 DDL：[`ddl/mysql.sql`](ddl/mysql.sql)（MySQL 8.0+）、[`ddl/postgres.sql`](ddl/postgres.sql)（PostgreSQL 12+），见 [`ddl/README.md`](ddl/README.md)——与 `AutoMigrate` 产物逐列一致，只描述终局结构、不含分阶段迁移/回滚。任务族通用的建表约定见 [`task/README.md`](../README.md#建表与迁移)。索引名一律带表前缀（`idx_core_async_task_*` / `uk_core_async_task_*`），PostgreSQL 下索引名 schema 级唯一。
 
-任务表索引：`idx_core_async_task_claim`、`idx_core_async_task_task_type_status_created_at`、`idx_core_async_task_status_lease_until`、`idx_core_async_task_status_finished_at`、`idx_core_async_task_biz_type_biz_id`、`idx_core_async_task_chain_id_step`、`idx_core_async_task_scope_created_by_created_at`、`uk_core_async_task_scope_uniq_key`（共 8 条，不再增加）。
+任务表索引：`idx_core_async_task_claim`、`idx_core_async_task_task_type_status_created_at`、`idx_core_async_task_status_lease_until`、`idx_core_async_task_status_finished_at`、`idx_core_async_task_biz_type_biz_id`、`idx_core_async_task_chain_id_step`、`idx_core_async_task_scope_created_by_created_at`、`idx_core_async_task_scope_uniq_key`（幂等回查用）、`uk_core_async_task_active_uniq`（活跃期唯一）。其中 `uk_core_async_task_active_uniq` 无法用 gorm tag 表达（部分索引 / 生成列），由 `db.MigrateActiveUniqIndex` 在 `AutoMigrate` 之后按方言补建——**手工建表时必须一并创建**，否则幂等会退化为全局唯一、终态后无法重建同键。
 
 ## 作用域（scope）
 
-- **隔离 = `scope_key`**：作用域分区键。幂等语义为**域内唯一**——唯一键是 `(scope_key, uniq_key)`，两个域用同一 `uniq_key` 各自成功。平台任务用保留值 `__platform__`（`gasync.ScopePlatform`）显式声明，不用空串（空串=未声明，fail-closed 会拒绝）。
+- **隔离 = `scope_key`**：作用域分区键。幂等语义为**活跃期域内唯一**——同域同键的**活跃**任务（pending/running）至多一条；任务进入终态后该键即释放，同键可重新提交（重建）。两个域用同一 `uniq_key` 互不影响。活跃期唯一由 `uk_core_async_task_active_uniq`（PG 部分唯一索引 / MySQL 生成列唯一索引）施加，`Submit` 冲突回查只认活跃行。平台任务用保留值 `__platform__`（`gasync.ScopePlatform`）显式声明，不用空串（空串=未声明，fail-closed 会拒绝）。
 - **归属 = `created_by` / `last_actor_id`**：`created_by` 提交时快照、不可变；`last_actor_id` 记录最近触发者（`Replay` 可覆写，仅保留最近一次）。均不存部门。
 - **部门走 `Labels`**：提交时写 `Labels["dept_id"]` 快照，不进核心列；按部门查询用 `AsyncTaskCond.Labels` 精确过滤。
 - **取值来源**：`manager.WithScopeResolver(fn)` / `source/db.Config.ScopeResolver`。注入后读路径叠 `scope_key` 条件、写路径以 `(id, scope_key)` 守卫、未声明作用域一律 `ErrScopeRequired`；不注入时行为与加作用域前一致（灰度兼容）。同一张任务表只能有一个作用域取值空间（部署约束）。

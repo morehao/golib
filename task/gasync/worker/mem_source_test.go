@@ -41,6 +41,7 @@ type recordedResult struct {
 	Outcome     gasync.Outcome
 	Failure     gasync.FailureKind
 	Err         error
+	Payload     []byte // handler 交回的结果快照（供结果回传用例断言）
 }
 
 func newMemSource() *memSource {
@@ -98,6 +99,7 @@ func (m *memSource) Save(ctx context.Context, task *gasync.AsyncTask, r gasync.R
 		Outcome:     r.Outcome,
 		Failure:     r.Failure,
 		Err:         r.Err,
+		Payload:     r.Payload,
 	})
 	// 模拟 Source 的重试决策：仅当 outcome=failed 且仍可重试时把任务重新入队。
 	requeue := false

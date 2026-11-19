@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 820" role="img" aria-label="gasync 子系统分层架构">
+  <title>gasync 子系统分层架构</title>
+  <desc>从调用方到根包契约内核、Source 实现、DB 与远程中心的依赖方向与边界。worker 只依赖根包与 Source 接口；manager 单向依赖 source/db 并直接对 DB 跑管理面 SQL；wire 由 source/remote、center、ginasync 三方共用。</desc>
+  <style>
+    :root { --bg:#ffffff; --fg:#1f2733; --muted:#5b6572; --lane:#f4f7fb; --laneStroke:#c9d4e2; --node:#eef2f8; --nodeStroke:#3f5670; --core:#e9eefb; --coreStroke:#37518a; --edge:#5b6572; --accent:#b4451f; --ext:#fbf0eb; --extStroke:#b4451f; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#14181f; --fg:#e6ebf2; --muted:#9aa6b4; --lane:#1b222c; --laneStroke:#2c3746; --node:#1e2733; --nodeStroke:#7d94b0; --core:#222b40; --coreStroke:#8aa0cf; --edge:#9aa6b4; --accent:#e0794f; --ext:#2a1f1a; --extStroke:#e0794f; }
+    }
+    .lane { fill:var(--lane); stroke:var(--laneStroke); stroke-width:1.2; }
+    .lantitle { fill:var(--muted); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; font-size:13px; font-weight:700; }
+    .box { fill:var(--node); stroke:var(--nodeStroke); stroke-width:1.6; }
+    .core { fill:var(--core); stroke:var(--coreStroke); stroke-width:2; }
+    .ext { fill:var(--ext); stroke:var(--extStroke); stroke-width:1.6; stroke-dasharray:6 4; }
+    .lbl { fill:var(--fg); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; font-size:15px; font-weight:600; text-anchor:middle; dominant-baseline:middle; }
+    .sub { fill:var(--muted); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; font-size:11px; text-anchor:middle; dominant-baseline:middle; }
+    .edge { stroke:var(--edge); stroke-width:1.6; fill:none; }
+    .elabel { fill:var(--accent); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; font-size:11.5px; font-weight:600; text-anchor:middle; dominant-baseline:middle; }
+    marker path { fill:var(--edge); }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z"></path>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1120" height="820" fill="var(--bg)"/>
+
+  <!-- lanes -->
+  <rect class="lane" x="20" y="20" width="1080" height="105" rx="10"/>
+  <text class="lantitle" x="36" y="44">调用方（业务进程）</text>
+  <rect class="lane" x="20" y="145" width="1080" height="150" rx="10"/>
+  <text class="lantitle" x="36" y="169">接入与门面</text>
+  <rect class="lane" x="20" y="315" width="1080" height="130" rx="10"/>
+  <text class="lantitle" x="36" y="339">契约内核（根包 gasync，gorm-free）</text>
+  <rect class="lane" x="20" y="465" width="1080" height="150" rx="10"/>
+  <text class="lantitle" x="36" y="489">Source 实现（取任务 / 回传结果的接缝）</text>
+  <rect class="lane" x="20" y="635" width="1080" height="105" rx="10"/>
+  <text class="lantitle" x="36" y="659">外部依赖</text>
+
+  <!-- ===== edges ===== -->
+  <!-- caller -> manager / worker -->
+  <line class="edge" x1="200" y1="125" x2="200" y2="195" marker-end="url(#arr)"/>
+  <text class="elabel" x="285" y="163">Submit / Get / List</text>
+  <line class="edge" x1="680" y1="125" x2="680" y2="195" marker-end="url(#arr)"/>
+  <text class="elabel" x="742" y="163">Register / Start</text>
+
+  <!-- manager -> 根包 -->
+  <line class="edge" x1="240" y1="275" x2="400" y2="360" marker-end="url(#arr)"/>
+  <text class="elabel" x="300" y="345">根包类型</text>
+  <!-- worker -> 根包 (Source 接口) -->
+  <line class="edge" x1="640" y1="275" x2="560" y2="360" marker-end="url(#arr)"/>
+  <text class="elabel" x="640" y="330">依赖 Source 接口</text>
+  <!-- manager -> source/db 单向 -->
+  <line class="edge" x1="150" y1="275" x2="215" y2="515" marker-end="url(#arr)"/>
+  <text class="elabel" x="120" y="430">单向依赖</text>
+  <!-- manager -> DB 直接原生 SQL -->
+  <line class="edge" x1="270" y1="275" x2="340" y2="675" marker-end="url(#arr)"/>
+  <text class="elabel" x="345" y="462">管理面原生 SQL</text>
+  <text class="elabel" x="345" y="478">Cancel/Replay/Stats</text>
+
+  <!-- worker -> source/remote? NO: worker 只依赖 Source 接口，此处不画 -->
+
+  <!-- source/db -> 根包 -->
+  <line class="edge" x1="330" y1="505" x2="430" y2="425" marker-end="url(#arr)"/>
+  <!-- source/db -> DB -->
+  <line class="edge" x1="260" y1="595" x2="245" y2="675" marker-end="url(#arr)"/>
+  <text class="elabel" x="322" y="640">执行期 SQL</text>
+  <!-- source/remote -> wire -->
+  <line class="edge" x1="680" y1="505" x2="650" y2="430" marker-end="url(#arr)"/>
+  <text class="elabel" x="738" y="452">用 wire 协议</text>
+  <!-- source/remote -> 远程中心 HTTP -->
+  <line class="edge" x1="700" y1="595" x2="690" y2="675" marker-end="url(#arr)"/>
+  <text class="elabel" x="778" y="640">HTTP 四端点</text>
+
+  <!-- center -> manager (New(mgr)) -->
+  <line class="edge" x1="880" y1="395" x2="305" y2="232" marker-end="url(#arr)"/>
+  <text class="elabel" x="800" y="320">New(mgr)</text>
+  <!-- center -> wire -->
+  <line class="edge" x1="880" y1="380" x2="720" y2="425" marker-end="url(#arr)"/>
+  <text class="elabel" x="840" y="405">用 wire</text>
+  <!-- ginasync -> center -->
+  <line class="edge" x1="1010" y1="270" x2="955" y2="360" marker-end="url(#arr)"/>
+  <text class="elabel" x="1018" y="320">RegisterCenter</text>
+  <!-- ginasync -> manager -->
+  <line class="edge" x1="900" y1="228" x2="312" y2="272" marker-end="url(#arr)"/>
+  <text class="elabel" x="815" y="250">管理面路由</text>
+
+  <!-- ===== nodes ===== -->
+  <!-- callers -->
+  <rect class="box node" x="90" y="65" width="220" height="56" rx="8"/>
+  <text class="lbl" x="200" y="87">提交侧 / 管理面进程</text>
+  <text class="sub" x="200" y="106">manager.New → Submit → Close</text>
+  <rect class="box node" x="570" y="65" width="220" height="56" rx="8"/>
+  <text class="lbl" x="680" y="87">执行侧进程</text>
+  <text class="sub" x="680" y="106">worker.Register → Start</text>
+
+  <!-- 接入与门面 -->
+  <rect class="box node" x="90" y="205" width="220" height="70" rx="8"/>
+  <text class="lbl" x="200" y="233">manager（任务中心门面）</text>
+  <text class="sub" x="200" y="253">Submit/Get/Cancel/Replay/Stats/维护循环</text>
+  <rect class="box node" x="570" y="205" width="220" height="70" rx="8"/>
+  <text class="lbl" x="680" y="233">worker（执行运行时）</text>
+  <text class="sub" x="680" y="253">每类型 1 认领者 + N 执行槽</text>
+  <rect class="box node" x="900" y="205" width="200" height="70" rx="8"/>
+  <text class="lbl" x="1000" y="230">ginasync</text>
+  <text class="sub" x="1000" y="248">biz/gserver/ginasync</text>
+  <text class="sub" x="1000" y="263">HTTP 管理面 + 中心绑定</text>
+
+  <!-- 契约内核 -->
+  <rect class="core node" x="400" y="360" width="300" height="70" rx="8"/>
+  <text class="lbl" x="550" y="387">根包 gasync</text>
+  <text class="sub" x="550" y="407">AsyncTask / Spec / Source 接口 / 状态 / 错误哨兵</text>
+  <rect class="box node" x="620" y="360" width="150" height="70" rx="8"/>
+  <text class="lbl" x="695" y="387">wire</text>
+  <text class="sub" x="695" y="407">远程协议（共用）</text>
+
+  <!-- Source 实现 -->
+  <rect class="core node" x="140" y="515" width="250" height="80" rx="8"/>
+  <text class="lbl" x="265" y="543">source/db（DB Source）</text>
+  <text class="sub" x="265" y="563">认领/续租/保存/回收/清理</text>
+  <text class="sub" x="265" y="579">实现 gasync.Source</text>
+  <rect class="box node" x="600" y="515" width="250" height="80" rx="8"/>
+  <text class="lbl" x="725" y="543">source/remote</text>
+  <text class="sub" x="725" y="563">HTTP 三段 Fetch/Renew/Save</text>
+  <text class="sub" x="725" y="579">实现 gasync.Source</text>
+  <rect class="box node" x="880" y="360" width="150" height="70" rx="8"/>
+  <text class="lbl" x="955" y="387">center</text>
+  <text class="sub" x="955" y="407">远程中心服务端</text>
+
+  <!-- 外部 -->
+  <rect class="ext node" x="150" y="680" width="210" height="52" rx="8"/>
+  <text class="lbl" x="255" y="699">关系数据库</text>
+  <text class="sub" x="255" y="717">MySQL / PG / SQLite</text>
+  <rect class="ext node" x="580" y="680" width="220" height="52" rx="8"/>
+  <text class="lbl" x="690" y="699">远程任务中心（可选）</text>
+  <text class="sub" x="690" y="717">manager + center + ginasync</text>
+</svg>

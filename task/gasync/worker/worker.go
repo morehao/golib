@@ -228,6 +228,18 @@ func (w *Worker) Register(taskType string, h Handler, opts ...HandlerOption) err
 	return nil
 }
 
+// RegisterResult 注册「带结果」的处理器，契约是 ResultHandler。
+//
+// 与 Register 的唯一差别是 Handler 额外实现 ResultHandler：Execute 成功后 worker 从
+// ExecuteResult 的返回值取结果快照写进 core_async_task.result。Register 签名不变，
+// 既有调用零改动；内部用适配器把 ResultHandler 收敛成 Handler 交给统一的注册路径。
+func (w *Worker) RegisterResult(taskType string, h ResultHandler, opts ...HandlerOption) error {
+	if h == nil {
+		return gasync.ErrNilHandler
+	}
+	return w.Register(taskType, resultHandlerAdapter{ResultHandler: h}, opts...)
+}
+
 // Start 异步启动运行：完成校验、建立运行期上下文并起 fetcher/执行槽后立即返回，不阻塞。
 //
 // 启动期错误经返回值上报：未注册类型的 ErrNoType、已停止的 ErrWorkerStopped、

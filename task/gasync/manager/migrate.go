@@ -12,10 +12,16 @@ func SchemaModels() []any {
 	return []any{&db.CoreAsyncTask{}, &db.CoreAsyncTaskRun{}, &db.CoreAsyncTaskType{}}
 }
 
-// AutoMigrate 建表入口：委托 tablekit（幂等）。New 默认就会调用它。
-func AutoMigrate(db *gorm.DB) error {
-	if db == nil {
+// AutoMigrate 建表入口：委托 tablekit（幂等），随后按方言补建「活跃期唯一」约束。
+//
+// 活跃期唯一索引（幂等键仅在 pending/running 期唯一，终态后可重建）无法用 GORM tag 表达
+// （MySQL 需生成列、PG/SQLite 需部分索引），故在建表后单独补建，见 db.MigrateActiveUniqIndex。
+func AutoMigrate(gormDB *gorm.DB) error {
+	if gormDB == nil {
 		return gasync.ErrNilDB
 	}
-	return tablekit.Migrator{Component: "gasync", Models: SchemaModels()}.Migrate(db)
+	if err := (tablekit.Migrator{Component: "gasync", Models: SchemaModels()}).Migrate(gormDB); err != nil {
+		return err
+	}
+	return db.MigrateActiveUniqIndex(gormDB)
 }

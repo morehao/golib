@@ -517,11 +517,14 @@ CREATE TABLE `core_async_task` (
   `id` varchar(36) COMMENT '任务 ID（UUID v4）',
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
+  `scope_key` varchar(64) NOT NULL DEFAULT '' COMMENT '作用域分区键',
   `task_type` varchar(128) NOT NULL COMMENT '任务类型',
   `status` varchar(16) NOT NULL DEFAULT 'pending' COMMENT '任务状态',
   `priority` int NOT NULL DEFAULT 0 COMMENT '优先级',
   `payload` text COMMENT '任务入参',
-  `uniq_key` varchar(128) COMMENT '幂等键',
+  `uniq_key` varchar(128) COMMENT '幂等键（活跃期域内唯一）',
+  `created_by` varchar(64) NOT NULL DEFAULT '' COMMENT '提交者快照',
+  `last_actor_id` varchar(64) NOT NULL DEFAULT '' COMMENT '最近触发者快照',
   `biz_type` varchar(64) NOT NULL DEFAULT '' COMMENT '业务类型',
   `biz_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务 ID',
   `chain_id` varchar(36) NOT NULL DEFAULT '' COMMENT '任务链 ID（空=独立任务）',
@@ -544,10 +547,11 @@ CREATE TABLE `core_async_task` (
   `labels` text COMMENT '业务维度标签（JSON）',
   PRIMARY KEY (`id`),
   INDEX `idx_core_async_task_task_type_status_created_at` (`task_type`,`status`,`created_at`),
+  INDEX `idx_core_async_task_scope_created_by_created_at` (`scope_key`,`created_by`,`created_at`),
+  INDEX `idx_core_async_task_scope_uniq_key` (`scope_key`,`uniq_key`),
   INDEX `idx_core_async_task_claim` (`task_type`,`status`,`priority` desc,`next_run_at`),
   INDEX `idx_core_async_task_status_lease_until` (`status`,`lease_until`),
   INDEX `idx_core_async_task_status_finished_at` (`status`,`finished_at`),
-  UNIQUE INDEX `uk_core_async_task_uniq_key` (`uniq_key`),
   INDEX `idx_core_async_task_biz_type_biz_id` (`biz_type`,`biz_id`),
   INDEX `idx_core_async_task_chain_id_step` (`chain_id`,`step`)
 );
@@ -592,11 +596,14 @@ CREATE TABLE "core_async_task" (
   "id" varchar(36),
   "created_at" timestamptz,
   "updated_at" timestamptz,
+  "scope_key" varchar(64) NOT NULL DEFAULT '',
   "task_type" varchar(128) NOT NULL,
   "status" varchar(16) NOT NULL DEFAULT 'pending',
   "priority" integer NOT NULL DEFAULT 0,
   "payload" text,
   "uniq_key" varchar(128),
+  "created_by" varchar(64) NOT NULL DEFAULT '',
+  "last_actor_id" varchar(64) NOT NULL DEFAULT '',
   "biz_type" varchar(64) NOT NULL DEFAULT '',
   "biz_id" varchar(64) NOT NULL DEFAULT '',
   "chain_id" varchar(36) NOT NULL DEFAULT '',
@@ -624,17 +631,21 @@ CREATE INDEX IF NOT EXISTS "idx_core_async_task_chain_id_step" ON "core_async_ta
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_biz_type_biz_id" ON "core_async_task" ("biz_type","biz_id");
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_async_task_uniq_key" ON "core_async_task" ("uniq_key");
-
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_status_finished_at" ON "core_async_task" ("status","finished_at");
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_status_lease_until" ON "core_async_task" ("status","lease_until");
 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_claim" ON "core_async_task" ("task_type","status","priority" desc,"next_run_at");
 
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_scope_uniq_key" ON "core_async_task" ("scope_key","uniq_key");
+
+CREATE INDEX IF NOT EXISTS "idx_core_async_task_scope_created_by_created_at" ON "core_async_task" ("scope_key","created_by","created_at");
+
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_task_type_status_created_at" ON "core_async_task" ("task_type","status","created_at");
 
 COMMENT ON COLUMN "core_async_task"."id" IS '任务 ID（UUID v4）';
+
+COMMENT ON COLUMN "core_async_task"."scope_key" IS '作用域分区键';
 
 COMMENT ON COLUMN "core_async_task"."task_type" IS '任务类型';
 
@@ -644,7 +655,11 @@ COMMENT ON COLUMN "core_async_task"."priority" IS '优先级';
 
 COMMENT ON COLUMN "core_async_task"."payload" IS '任务入参';
 
-COMMENT ON COLUMN "core_async_task"."uniq_key" IS '幂等键';
+COMMENT ON COLUMN "core_async_task"."uniq_key" IS '幂等键（活跃期域内唯一）';
+
+COMMENT ON COLUMN "core_async_task"."created_by" IS '提交者快照';
+
+COMMENT ON COLUMN "core_async_task"."last_actor_id" IS '最近触发者快照';
 
 COMMENT ON COLUMN "core_async_task"."biz_type" IS '业务类型';
 

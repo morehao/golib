@@ -38,8 +38,13 @@ func runT9MySQL(t *testing.T, db *gorm.DB) {
 			t.Errorf("column %s IS_NULLABLE=%s, want NO", c.ColumnName, c.IsNullable)
 		}
 	}
-	assertIndexExistsMySQL(t, db, "uk_core_async_task_scope_uniq_key")
+	assertIndexExistsMySQL(t, db, ActiveUniqIndexName)
+	assertIndexAbsentMySQL(t, db, "uk_core_async_task_scope_uniq_key")
 	assertIndexAbsentMySQL(t, db, "uk_core_async_task_uniq_key")
+	// 生成列 uniq_key_active 存在（MySQL 用生成列表达「仅活跃行参与唯一」）。
+	if !db.Migrator().HasColumn("core_async_task", activeUniqGeneratedColumn) {
+		t.Errorf("MySQL generated column %s not found", activeUniqGeneratedColumn)
+	}
 }
 
 func runT9PG(t *testing.T, db *gorm.DB) {
@@ -61,8 +66,28 @@ func runT9PG(t *testing.T, db *gorm.DB) {
 			t.Errorf("column %s is_nullable=%s, want NO", c.ColumnName, c.IsNullable)
 		}
 	}
-	assertIndexExistsPG(t, db, "uk_core_async_task_scope_uniq_key")
+	assertIndexExistsPG(t, db, ActiveUniqIndexName)
+	assertIndexAbsentPG(t, db, "uk_core_async_task_scope_uniq_key")
 	assertIndexAbsentPG(t, db, "uk_core_async_task_uniq_key")
+	// 该索引须为部分唯一索引（predicate 只圈活跃行），否则终态后无法重建同键任务。
+	assertPartialUniqueIndexPG(t, db, ActiveUniqIndexName)
+}
+
+// assertPartialUniqueIndexPG 断言指定索引是带 predicate 的部分唯一索引。
+func assertPartialUniqueIndexPG(t *testing.T, db *gorm.DB, name string) {
+	t.Helper()
+	var pred *string
+	if err := db.Raw(`SELECT pg_get_expr(i.indpred, i.indrelid) FROM pg_index i
+		JOIN pg_class c ON c.oid = i.indexrelid
+		WHERE c.relname = ?`, name).Scan(&pred).Error; err != nil {
+		t.Fatalf("query pg index predicate: %v", err)
+	}
+	if pred == nil || *pred == "" {
+		t.Fatalf("PG index %s is not partial (no predicate)", name)
+	}
+	if !strings.Contains(*pred, "pending") || !strings.Contains(*pred, "running") {
+		t.Errorf("PG index %s predicate = %q, want pending/running", name, *pred)
+	}
 }
 
 // TestRealT10ClaimPlan 认领计划：两支分别走各自索引；不存在 scope_key 前缀的认领索引。

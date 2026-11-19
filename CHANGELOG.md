@@ -26,6 +26,42 @@
 
 ## [Unreleased]
 
+### Features（gasync）：worker 交回执行结果快照
+
+`worker` 此前只把 `Execute` 的错误交回 Source，结果快照无回传通道——`safeExecute` 的首返回值
+恒为 `nil` 且被调用点丢弃，于是 `core_async_task.result` 永远为空，下游管理面查不到执行结果。
+本次补齐「结果回传」：
+
+- **`worker.ResultProvider`（可选接口）**：`TakeResult() []byte`。`Execute` 成功后 worker 取快照写入
+  `core_async_task.result`；不实现即保持原行为（result 为空）。只在成功时取，失败/超时/失权不取，
+  避免半成品落库。**并发注意**：无 task 参数，只在每类型并发=1 时可用。
+- **`worker.ResultHandler`（推荐契约）**：`ExecuteResult(ctx, task) ([]byte, error)`，结果与本次调用
+  绑定、天然并发安全，多执行槽共享无串结果风险。**`worker.RegisterResult(type, h)`** 以适配器注册，
+  `Register` 签名不变、既有调用零改动；`safeExecute` 优先走 `ResultHandler`，未实现时回退
+  `Handler + ResultProvider`（兼容旧行为）。
+
+### ⚠️ Breaking Changes（gasync）：幂等键改为「活跃期域内唯一」
+
+幂等键 `uniq_key` 的语义由「域内唯一」改为「**活跃期**域内唯一」——同域同键的活跃任务
+（pending/running）至多一条，任务进入终态后该键即释放、同键可重新提交（重建）。
+
+- **索引结构变化**：删除 `uk_core_async_task_scope_uniq_key (scope_key, uniq_key)` 复合唯一索引，
+  新增活跃期唯一索引 `uk_core_async_task_active_uniq`——PostgreSQL/SQLite 用部分唯一索引
+  `WHERE uniq_key IS NOT NULL AND status IN ('pending','running')`；MySQL 用 STORED 生成列
+  `uniq_key_active` + 该列唯一索引。普通查询索引 `idx_core_async_task_scope_uniq_key (scope_key, uniq_key)` 保留。
+- **迁移由代码补建**：该索引无法用 gorm tag 表达，改由 `db.MigrateActiveUniqIndex` 在 `AutoMigrate`
+  之后按方言补建（`manager.AutoMigrate` 已代为调用）。**升级时请手工清理旧唯一索引**：
+
+  ```sql
+  -- MySQL 8.0+
+  DROP INDEX `uk_core_async_task_scope_uniq_key` ON `core_async_task`;
+  -- PostgreSQL
+  DROP INDEX IF EXISTS "uk_core_async_task_scope_uniq_key";
+  ```
+
+  手工建表请直接用 `task/gasync/ddl/*.sql`（已含终态结构）。
+- **冲突回查**：`findByUniqKey` 只认活跃行，终态行不参与幂等命中（终态后同键可重建）。
+
 ### ⚠️ Breaking Changes（gasync）
 
 - **`gasync.Source` 新增 `Release(ctx, task) error`**：主动放弃所有权（停机 / 认领后无法交付时用），
