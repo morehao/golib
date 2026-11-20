@@ -68,7 +68,7 @@ func newDBSource(dbGetter gormdao.DBGetter) *dbSource {
 //   - 若类型存在，再按 type_code 取项（项表自身的 app 过滤同样由回调注入）。
 //
 // 为什么不再 JOIN：gormdao 的租户回调只对**单张受控表**追加 app 条件，不解析 JOIN
-// 里的第二张表（见 gormdao.RegisterTenantScope 注释）。把类型状态塞进 JOIN 的第二张
+// 里的第二张表（见 gormplugin.EnableAppScope 注释）。把类型状态塞进 JOIN 的第二张
 // 表时，那张表的 app 条件无法被回调收敛，存在跨 app 串数据的隐患。改成两次单表查询后，
 // 每次查询都由回调在同表 WHERE 上收敛 app，从根消除"别名/JOIN 不收敛"问题。
 //

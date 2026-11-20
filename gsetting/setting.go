@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"gorm.io/gorm"
 )
 
@@ -61,13 +61,13 @@ func New(db *gorm.DB, opts ...Option) (*Setting, error) {
 		return nil, fmt.Errorf("gsetting: init crypto: %w", err)
 	}
 
-	getDB := gormdao.TenantGetter(db)
+	getDB := gormplugin.TenantGetter(db)
 	// app 隔离由调用方 opt-in：仅当传了 WithAppScope() 才注册租户回调。
 	// 默认不注册（无回调=无隔离=无 fail-closed，Create 不补 app_id），退回
 	// 原单租户语义，无 app 上下文亦可正常增删改查。
 	// 注册是幂等的（gormdao 内部按 *gorm.DB 去重）。
 	if cfg.appScope {
-		if err := gormdao.RegisterTenantScope(db, tableName); err != nil {
+		if err := gormplugin.EnableAppScope(db, tableName); err != nil {
 			return nil, fmt.Errorf("gsetting: register tenant scope: %w", err)
 		}
 	}
@@ -86,7 +86,7 @@ func (k *Setting) getEntity(ctx context.Context, group, key string) (*SettingEnt
 	// 缓存键必须带 app：不同业务线的同名 (group,key) 是不同配置，不能共用缓存项。
 	// 这里从 ctx 取 app（与 gormdao 回调同一来源）；无 app 时传空串，最终由
 	// 底层 store 的 fail-closed 回调返回 ErrAppMissing。
-	app, _ := gormdao.AppFrom(ctx)
+	app, _ := gormplugin.AppFrom(ctx)
 	if k.cache == nil {
 		return k.store.Get(ctx, group, key)
 	}
@@ -180,8 +180,8 @@ func Init(db *gorm.DB, opts ...Option) (*Setting, error) {
 
 // 包级便捷函数（GetValue/GetString/GetInt64/GetFloat64/GetBool）依赖 Init 初始化的
 // 单例 defaultSetting。它们把 ctx 原样透传到实例方法，因此业务线（app）隔离同样
-// 从 ctx 生效：调用方的 ctx 必须携带 app（gormdao.WithApp(ctx, appID)），否则底层
-// 会因缺 app 上下文返回 gormdao.ErrAppMissing。多 app 场景建议直接用 New 得到的
+// 从 ctx 生效：调用方的 ctx 必须携带 app（gormplugin.WithApp(ctx, appID)），否则底层
+// 会因缺 app 上下文返回 gormplugin.ErrAppMissing。多 app 场景建议直接用 New 得到的
 // 实例 + 带 app 的 ctx，避免共享单例。
 func GetValue(ctx context.Context, group, key string, dest any) error {
 	if defaultSetting == nil {

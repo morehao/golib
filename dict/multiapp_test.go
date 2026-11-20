@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/stretchr/testify/require"
 )
 
 // ctxFor 返回携带指定业务线标识的 ctx，用于多 app 场景验证。
 func (f *fixture) ctxFor(app string) context.Context {
-	return gormdao.WithApp(context.Background(), app)
+	return gormplugin.WithApp(context.Background(), app)
 }
 
 // TestMultiApp_SameCodeIsolated 验证：跨 app 同 code 互不可见、互不冲突，
@@ -122,10 +122,10 @@ func TestMultiApp_FailClosedWithoutApp(t *testing.T) {
 
 	bare := context.Background()
 	_, err := f.d.GetItems(bare, "order_status")
-	require.ErrorIs(t, err, gormdao.ErrAppMissing, "无 app 上下文读应 fail-closed")
+	require.ErrorIs(t, err, gormplugin.ErrAppMissing, "无 app 上下文读应 fail-closed")
 
 	_, err = f.admin().CreateType(bare, &CreateTypeReq{Code: "ghost", Name: "无 app"})
-	require.ErrorIs(t, err, gormdao.ErrAppMissing, "无 app 上下文写应 fail-closed")
+	require.ErrorIs(t, err, gormplugin.ErrAppMissing, "无 app 上下文写应 fail-closed")
 }
 
 // TestDefault_NoAppScope_CRUDWithoutApp 验证：默认 New（不传 WithAppScope）不启用 app 隔离，

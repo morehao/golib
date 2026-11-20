@@ -3,7 +3,7 @@ package gsetting
 import (
 	"testing"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -12,7 +12,7 @@ import (
 func newTestAdmin(t *testing.T) (*AdminAPI, *store) {
 	t.Helper()
 	db := newTenantDB(t)
-	st := newStore(gormdao.TenantGetter(db), nil, nil)
+	st := newStore(gormplugin.TenantGetter(db), nil, nil)
 	return newAdmin(st, nil), st
 }
 

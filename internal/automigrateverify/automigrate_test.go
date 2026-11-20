@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/dict"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/gsetting"
@@ -34,7 +34,7 @@ import (
 )
 
 // verifyApp 本包模拟的「业务线标识」。真实部署里每个请求/任务都带 app 上下文，
-// 内置表在 app 缺失时会 fail-closed（gormdao.RegisterTenantScope 的租户回调返回
+// 内置表在 app 缺失时会 fail-closed（gormplugin.EnableAppScope 的租户回调返回
 // ErrAppMissing）。因此验证「默认自动建表 + 表可用」必须在带 app 的句柄上做，
 // 否则连 AutoMigrate 内部读取当前库名（SELECT DATABASE()）都会被租户 Row 回调
 // 的 fail-closed 打断（db.Error 被置位 → Row() 返回 nil → 空指针）。
@@ -43,7 +43,7 @@ const verifyApp = "verify"
 // verifyDB 打开一个验证专用库并绑定固定 app 上下文，供各用例模拟真实请求作用域。
 func verifyDB(t *testing.T, d dialect) *gorm.DB {
 	t.Helper()
-	return d.open(t).WithContext(gormdao.WithApp(context.Background(), verifyApp))
+	return d.open(t).WithContext(gormplugin.WithApp(context.Background(), verifyApp))
 }
 
 func init() {

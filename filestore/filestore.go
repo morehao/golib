@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gutil"
 	"github.com/morehao/golib/storage"
 	"gorm.io/gorm"
@@ -56,7 +57,7 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...StoreOption) (*
 		}
 	}
 
-	getDB := gormdao.TenantGetter(db)
+	getDB := gormplugin.TenantGetter(db)
 	// app 隔离由调用方 opt-in：仅当传了 WithAppScope() 才注册租户回调。
 	// 未注册时 core_file / core_file_upload 的读/写不做 app 收敛、Create 不补
 	// app_id（app_id 恒为 ''），退回单租户行为——无 app 上下文亦可正常使用。
@@ -64,7 +65,7 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...StoreOption) (*
 		// 注册租户隔离回调（幂等）：core_file / core_file_upload 的读/写会自动按
 		// ctx 中的 app 收敛；ctx 缺 app 时 fail-closed 返回 ErrAppMissing，避免跨
 		// 业务线读写。两表由装配层一次性传入，共享同一份回调配置。
-		if err := gormdao.RegisterTenantScope(db, FileEntity{}.TableName(), FileUploadEntity{}.TableName()); err != nil {
+		if err := gormplugin.EnableAppScope(db, FileEntity{}.TableName(), FileUploadEntity{}.TableName()); err != nil {
 			return nil, fmt.Errorf("filestore.New: register tenant scope: %w", err)
 		}
 	}
@@ -152,9 +153,9 @@ func (s *FileStore) requireApp(ctx context.Context) (string, error) {
 	if !s.appScope {
 		return "", nil
 	}
-	app, ok := gormdao.AppFrom(ctx)
+	app, ok := gormplugin.AppFrom(ctx)
 	if !ok {
-		return "", gormdao.ErrAppMissing
+		return "", gormplugin.ErrAppMissing
 	}
 	return app, nil
 }

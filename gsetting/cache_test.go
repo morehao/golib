@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gcache"
 	_ "github.com/morehao/golib/gcache/driver/memory"
 	_ "github.com/morehao/golib/gcache/driver/redis"
@@ -66,7 +66,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 func newSettingWithCache(t *testing.T, c cachePort) (*Setting, *store, *countingPort) {
 	t.Helper()
 	db := newTestDB(t)
-	getDB := gormdao.TenantGetter(db)
+	getDB := gormplugin.TenantGetter(db)
 	registry := map[ValueType]Codec{
 		ValueTypeJson: &JSONCodec{}, ValueTypeToml: &TOMLCodec{}, ValueTypeYaml: &YAMLCodec{},
 	}
@@ -122,7 +122,7 @@ func TestCache_CiphertextCached(t *testing.T) {
 
 	// 直接查缓存：应是 settingCacheValue，Entity.Value 为带 enc: 前缀的密文
 	var cached settingCacheValue
-	app, _ := gormdao.AppFrom(ctx)
+	app, _ := gormplugin.AppFrom(ctx)
 	require.NoError(t, mc.Get(ctx, cacheKey(app, "g", "secret"), &cached))
 	require.True(t, cached.Found)
 	require.NotNil(t, cached.Entity)

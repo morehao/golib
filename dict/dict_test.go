@@ -7,6 +7,7 @@ import (
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -80,7 +81,7 @@ func newFixtureWithDB(t *testing.T, db *gorm.DB, opts ...Option) *fixture {
 const testApp = "app_test"
 
 func (f *fixture) ctx() context.Context {
-	return gormdao.WithApp(context.Background(), testApp)
+	return gormplugin.WithApp(context.Background(), testApp)
 }
 
 func (f *fixture) admin() *AdminAPI { return f.d.Admin() }
@@ -160,7 +161,7 @@ func labelsOf(items []*DictItem) []string {
 	return labels
 }
 
-func contextTODO() context.Context { return gormdao.WithApp(context.Background(), testApp) }
+func contextTODO() context.Context { return gormplugin.WithApp(context.Background(), testApp) }
 
 // openRawSQLite 打开一个不含任何表的 sqlite 库，用于验证 DDL 纪律。
 func openRawSQLite(t *testing.T) (*gorm.DB, error) {

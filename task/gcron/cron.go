@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/distlock"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
@@ -32,8 +32,8 @@ type Task struct {
 	// ID 任务唯一标识，同时作为任务定义表的主键（业务方指定，不可变更）。
 	ID string
 	// AppID 业务线（app）标识。定时触发无请求 ctx 时，app 取自任务自身持久化的该字段，
-	// 并注入 handler 的 ctx（gormdao.WithApp），使 handler 访问其它组件表时携带正确 app 上下文。
-	// 注册时若为空且创建者 ctx 携带 app（gormdao.WithApp），则从 ctx 取用。
+	// 并注入 handler 的 ctx（gormplugin.WithApp），使 handler 访问其它组件表时携带正确 app 上下文。
+	// 注册时若为空且创建者 ctx 携带 app（gormplugin.WithApp），则从 ctx 取用。
 	AppID string
 	// BizID 业务 ID（如商户号、订单号），任务标识之外的业务维度，可为空。
 	BizID string
@@ -433,7 +433,7 @@ func (s *Scheduler) buildRunFunc(t Task, entrySlot *atomic.Int64, active *atomic
 		// 使 handler（及其触达的其它组件表，如 dict/gsetting/...）携带正确的业务线标识，
 		// 避免下游 fail-closed 回调因缺 app 返回 ErrAppMissing。
 		if t.AppID != "" {
-			ctx = gormdao.WithApp(ctx, t.AppID)
+			ctx = gormplugin.WithApp(ctx, t.AppID)
 		}
 		runID := gutil.GenUUID()
 		ctx = context.WithValue(ctx, gconstant.KeyRunID, runID)

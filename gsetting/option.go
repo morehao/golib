@@ -67,7 +67,7 @@ func WithoutAutoMigrate() Option {
 // 传 WithAppScope() 后，New 会为 core_setting 注册 gormdao 租户回调：
 //
 //   - 读/写/删自动按 ctx 中的 app 收敛，ctx 缺 app 时 fail-closed 返回
-//     gormdao.ErrAppMissing；
+//     gormplugin.ErrAppMissing；
 //
 //   - Create 自动把 ctx 中的 app 写入 app_id；
 //
@@ -77,7 +77,7 @@ func WithoutAutoMigrate() Option {
 // 多业务线接入示例：
 //
 //	k, err := gsetting.New(db, gsetting.WithAppScope())
-//	ctx := gormdao.WithApp(context.Background(), "app-a")
+//	ctx := gormplugin.WithApp(context.Background(), "app-a")
 //	v, err := k.GetString(ctx, "payment", "timeout")
 func WithAppScope() Option {
 	return func(o *options) { o.appScope = true }

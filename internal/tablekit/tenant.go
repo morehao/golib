@@ -11,7 +11,7 @@ import (
 
 // AppIDColumn 是各内置表约定的业务线（app）判别列名。
 //
-// 与 dbaccess/gormdao.AppIDColumn 保持一致：tablekit 是 internal 工具包，
+// 与 dbaccess/gormplugin.AppIDColumn 保持一致：tablekit 是 internal 工具包，
 // 不宜反向依赖 gormdao 的公共符号，故在此独立声明一份常量，注释指回上游语义。
 const AppIDColumn = "app_id"
 

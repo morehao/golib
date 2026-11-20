@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
@@ -14,7 +14,7 @@ import (
 func TestStoreSet_Upsert(t *testing.T) {
 	db := newTenantDB(t)
 
-	s := newStore(gormdao.TenantGetter(db), nil, nil)
+	s := newStore(gormplugin.TenantGetter(db), nil, nil)
 	ctx := withApp(t)
 
 	// 首次 Set：插入，BeforeCreate 生成 UUID 主键，租户回调补 app_id
@@ -79,9 +79,9 @@ func TestStoreSet_UpsertPostgres(t *testing.T) {
 	db.Transaction(func(tx *gorm.DB) error {
 		require.NoError(t, tx.Migrator().DropTable(&SettingEntity{}))
 		require.NoError(t, tx.AutoMigrate(&SettingEntity{}))
-		require.NoError(t, gormdao.RegisterTenantScope(tx, tableName))
+		require.NoError(t, gormplugin.EnableAppScope(tx, tableName))
 
-		s := newStore(gormdao.TenantGetter(tx), nil, nil)
+		s := newStore(gormplugin.TenantGetter(tx), nil, nil)
 		ctx := withApp(t)
 
 		e1 := &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v1"}

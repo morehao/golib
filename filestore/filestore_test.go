@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -162,11 +162,11 @@ func newTestDB(t *testing.T) *gorm.DB {
 const testApp = "test-app"
 
 func testCtx() context.Context {
-	return gormdao.WithApp(context.Background(), testApp)
+	return gormplugin.WithApp(context.Background(), testApp)
 }
 
 func testCtxForApp(app string) context.Context {
-	return gormdao.WithApp(context.Background(), app)
+	return gormplugin.WithApp(context.Background(), app)
 }
 
 func TestNewAutoMigrate(t *testing.T) {

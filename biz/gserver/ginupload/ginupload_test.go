@@ -21,7 +21,7 @@ import (
 	"github.com/morehao/golib/biz/gmiddleware/ginmiddleware"
 	"github.com/morehao/golib/biz/gserver/ginserver"
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
@@ -44,7 +44,7 @@ var bg = context.Background()
 
 // testAppContext 返回带测试 app 的 context，仅供直接调用组件 API 的用例以及
 // opt-in 隔离演示使用；默认非隔离路径用 bg 即可。保留以简化既有调用点。
-func testAppContext() context.Context { return gormdao.WithApp(context.Background(), testAppID) }
+func testAppContext() context.Context { return gormplugin.WithApp(context.Background(), testAppID) }
 
 type mockStorage struct {
 	storage.Storage

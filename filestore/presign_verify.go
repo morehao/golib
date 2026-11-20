@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/storage"
 )
 
@@ -63,7 +63,7 @@ func (s *FileStore) applyPresignAppBound(ctx context.Context, presigned *storage
 	if !s.appScope {
 		return presigned, nil // 未启用 app 隔离：不绑 app，走原 storage 协议
 	}
-	app, ok := gormdao.AppFrom(ctx)
+	app, ok := gormplugin.AppFrom(ctx)
 	if !ok {
 		return presigned, nil // 无 app：保持既有行为（不额外绑定）
 	}
@@ -134,7 +134,7 @@ func VerifyPresignedTokenForContext(ctx context.Context, signSecret, bucket, key
 		return nil, err
 	}
 	if hasApp {
-		ctxApp, ok := gormdao.AppFrom(ctx)
+		ctxApp, ok := gormplugin.AppFrom(ctx)
 		if !ok {
 			return nil, ErrPresignAppMismatch
 		}

@@ -20,8 +20,8 @@ const (
 //   - 索引名一律带表前缀（PG 索引名 schema 级唯一）。
 type CoreAsyncTask struct {
 	ID string `gorm:"column:id;primaryKey;type:varchar(36);comment:任务 ID（UUID v4）"`
-	// AppID 业务线标识：提交时从创建者 ctx（gormdao.WithApp）持久化；执行时 worker 以
-	// gormdao.WithApp 注入 handler ctx，使 handler 访问其它组件表时携带正确 app 上下文。
+	// AppID 业务线标识：提交时从创建者 ctx（gormplugin.WithApp）持久化；执行时 worker 以
+	// gormplugin.WithApp 注入 handler ctx，使 handler 访问其它组件表时携带正确 app 上下文。
 	AppID string `gorm:"column:app_id;type:varchar(64);not null;default:'';comment:业务线标识"`
 	// created_at / updated_at 由 GORM 维护（可空）。created_at 单独参与两处索引：
 	// idx_core_async_task_task_type_status_created_at（管理面按类型+状态倒序分页）；

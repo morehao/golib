@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gcache"
 	_ "github.com/morehao/golib/gcache/driver/memory"
 	"github.com/morehao/golib/internal/tablekit"
@@ -21,7 +21,7 @@ func newTenantDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := gormdao.RegisterTenantScope(db, tableNamePrompt, tableNamePromptVersion); err != nil {
+	if err := gormplugin.EnableAppScope(db, tableNamePrompt, tableNamePromptVersion); err != nil {
 		t.Fatalf("register tenant scope: %v", err)
 	}
 	if err := (migratorForTest()).WithTenant(db); err != nil {
@@ -42,8 +42,8 @@ func TestTenant_SameCode_IsolatedAcrossApps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	ctxA := gormdao.WithApp(context.Background(), "appA")
-	ctxB := gormdao.WithApp(context.Background(), "appB")
+	ctxA := gormplugin.WithApp(context.Background(), "appA")
+	ctxB := gormplugin.WithApp(context.Background(), "appB")
 
 	if _, err := svc.Admin().Create(ctxA, &CreateReq{
 		Code: "greet", Name: "A", Content: "A:{{.x}}",
@@ -80,7 +80,7 @@ func TestTenant_SameCode_IsolatedAcrossApps(t *testing.T) {
 	}
 
 	// 无 app 上下文时 fail-closed，读不到任何东西（返回错误而非全量）。
-	if _, err := svc.Render(context.Background(), "greet", map[string]any{"x": "1"}); !errors.Is(err, gormdao.ErrAppMissing) {
+	if _, err := svc.Render(context.Background(), "greet", map[string]any{"x": "1"}); !errors.Is(err, gormplugin.ErrAppMissing) {
 		t.Fatalf("render without app should fail-closed with ErrAppMissing, got %v", err)
 	}
 }
@@ -93,8 +93,8 @@ func TestTenant_GroupFilterPerApp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	ctxA := gormdao.WithApp(context.Background(), "appA")
-	ctxB := gormdao.WithApp(context.Background(), "appB")
+	ctxA := gormplugin.WithApp(context.Background(), "appA")
+	ctxB := gormplugin.WithApp(context.Background(), "appB")
 
 	mk := func(ctx context.Context, code, group, content string) {
 		t.Helper()
@@ -143,7 +143,7 @@ func TestTenant_GroupFilterPerApp(t *testing.T) {
 func TestTenant_GroupPersistedOnUpdate(t *testing.T) {
 	db := newTenantDB(t)
 	svc, _ := New(db, WithAppScope(), WithoutAutoMigrate())
-	ctx := gormdao.WithApp(context.Background(), "appA")
+	ctx := gormplugin.WithApp(context.Background(), "appA")
 
 	if _, err := svc.Admin().Create(ctx, &CreateReq{Code: "p", Content: "x"}); err != nil {
 		t.Fatalf("create: %v", err)
@@ -172,7 +172,7 @@ func TestCache_AppPrefixIsolated(t *testing.T) {
 	for _, p := range []struct{ app, content string }{
 		{"appA", "A:{{.x}}"}, {"appB", "B:{{.x}}"},
 	} {
-		ctx := gormdao.WithApp(context.Background(), p.app)
+		ctx := gormplugin.WithApp(context.Background(), p.app)
 		if _, err := storeSvc.Admin().Create(ctx, &CreateReq{
 			Code: "greet", Content: p.content,
 			Variables: []VariableSpec{{Name: "x", Type: VarTypeString}},
@@ -193,8 +193,8 @@ func TestCache_AppPrefixIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new svc: %v", err)
 	}
-	ctxA := gormdao.WithApp(context.Background(), "appA")
-	ctxB := gormdao.WithApp(context.Background(), "appB")
+	ctxA := gormplugin.WithApp(context.Background(), "appA")
+	ctxB := gormplugin.WithApp(context.Background(), "appB")
 
 	for i := 0; i < 2; i++ { // 读两次确保进缓存
 		if out, err := svc.Render(ctxA, "greet", map[string]any{"x": "1"}); err != nil || out != "A:1" {

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 )
 
 // defaultSourceCacheTTL 是 CachingSource 的默认缓存 TTL。
@@ -103,7 +103,7 @@ func NewCachingSource(src Source, c cachePort, opts ...CacheOption) Source {
 //   - 无 app 上下文（如纯内存/示例场景）仍能正常读写，只是落在同一个占位桶；
 //   - 不同 app 的 key 一定不同，Invalidate 不会跨 app 误清。
 func appKeySegment(ctx context.Context) string {
-	if app, ok := gormdao.AppFrom(ctx); ok {
+	if app, ok := gormplugin.AppFrom(ctx); ok {
 		return app
 	}
 	return "_"

@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gcontext"
 	"github.com/morehao/golib/biz/gcontext/gincontext"
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/gerror"
 	"github.com/morehao/golib/glog"
@@ -58,7 +58,7 @@ func WithAppRequired(required bool) AppOption {
 // 行为（仿 Trace 中间件风格）：
 //  1. 从请求头（默认 X-App-Id，可经 WithAppHeader 配置）读取 app 标识；
 //  2. 把 app 投影到 gin Keys（gcontext.KeyAppID），供 controller/middleware 读取；
-//  3. 当 app 非空时，把它写进请求 context（gormdao.WithApp），使 handler 中
+//  3. 当 app 非空时，把它写进请求 context（gormplugin.WithApp），使 handler 中
 //     c.Request.Context() 传给组件 service 后，gormdao 的租户回调能自动注入 WHERE app_id=? / INSERT app_id；
 //  4. 空 app 时按策略：
 //     - WithAppRequired(true)：拒绝，HTTP 400 + envelope（不留 ctx 变更）；
@@ -98,7 +98,7 @@ func App(opts ...AppOption) gin.HandlerFunc {
 
 		// 投影到 gin Keys + 写入请求 context（唯一真相，供组件 DAO 隔离读取）。
 		c.Set(gcontext.KeyAppID, appID)
-		c.Request = c.Request.WithContext(gormdao.WithApp(c.Request.Context(), appID))
+		c.Request = c.Request.WithContext(gormplugin.WithApp(c.Request.Context(), appID))
 
 		c.Next()
 	}

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/task/gasync"
 	gasyncdb "github.com/morehao/golib/task/gasync/source/db"
 	"github.com/morehao/golib/task/gasync/worker"
@@ -34,7 +34,7 @@ func TestWorker_AppInjectedFromAsyncTask(t *testing.T) {
 	if err := db.AutoMigrate(&workerAppProbe{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if err := gormdao.RegisterTenantScope(db, workerAppProbe{}.TableName()); err != nil {
+	if err := gormplugin.EnableAppScope(db, workerAppProbe{}.TableName()); err != nil {
 		t.Fatalf("register scope: %v", err)
 	}
 
@@ -49,7 +49,7 @@ func TestWorker_AppInjectedFromAsyncTask(t *testing.T) {
 		createErr error
 	)
 	h := worker.HandlerFunc(func(ctx context.Context, _ *gasync.AsyncTask) error {
-		gotApp, hasApp = gormdao.AppFrom(ctx)
+		gotApp, hasApp = gormplugin.AppFrom(ctx)
 		var rows []workerAppProbe
 		queryErr = db.WithContext(ctx).Where("id = ?", "nope").Find(&rows).Error
 		createErr = db.WithContext(ctx).Create(&workerAppProbe{ID: "p1", Val: "v"}).Error

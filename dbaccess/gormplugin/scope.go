@@ -35,6 +35,7 @@ type ScopeResolver func(ctx context.Context) (value any, inject bool, declared b
 type ScopePlugin struct {
 	fieldName    string
 	skipTables   map[string]struct{}
+	onlyTables   map[string]struct{}
 	resolver     ScopeResolver
 	missingScope func(db *gorm.DB, tableName string) error
 }
@@ -60,6 +61,10 @@ type ScopeConfig struct {
 	MissingScope func(db *gorm.DB, tableName string) error
 	// SkipTables 指定跳过条件注入的表名列表，可选。
 	SkipTables []string
+	// OnlyTables 指定「仅对这些表」注入作用域（白名单），可选。
+	// 非空时启用白名单语义：只有列出的表会被注入，其余表一律豁免；与 SkipTables 互斥。
+	// 共享同一 *gorm.DB 的组件用它把隔离限定在自有表，避免误伤同库其它表。
+	OnlyTables []string
 }
 
 // New 创建 ScopePlugin。FieldName 与（Resolver 或 ExtractFunc）为必填配置，
@@ -87,6 +92,10 @@ func New(cfg *ScopeConfig) (*ScopePlugin, error) {
 		}
 	}
 
+	if len(cfg.SkipTables) > 0 && len(cfg.OnlyTables) > 0 {
+		return nil, fmt.Errorf("gormplugin: ScopeConfig.SkipTables and OnlyTables are mutually exclusive")
+	}
+
 	skipTables := make(map[string]struct{})
 	for _, t := range cfg.SkipTables {
 		normalized := normalizeTableName(t)
@@ -94,10 +103,18 @@ func New(cfg *ScopeConfig) (*ScopePlugin, error) {
 			skipTables[normalized] = struct{}{}
 		}
 	}
+	onlyTables := make(map[string]struct{})
+	for _, t := range cfg.OnlyTables {
+		normalized := normalizeTableName(t)
+		if normalized != "" {
+			onlyTables[normalized] = struct{}{}
+		}
+	}
 
 	return &ScopePlugin{
 		fieldName:    cfg.FieldName,
 		skipTables:   skipTables,
+		onlyTables:   onlyTables,
 		resolver:     resolver,
 		missingScope: cfg.MissingScope,
 	}, nil
@@ -160,7 +177,7 @@ func (p *ScopePlugin) addScope(db *gorm.DB) {
 		return
 	}
 
-	if p.isSkipped(tableName) {
+	if p.isSkipped(tableName) || !p.inOnly(tableName) {
 		return
 	}
 
@@ -222,6 +239,15 @@ func isEmptyScopeValue(value any) bool {
 		return s == ""
 	}
 	return false
+}
+
+// inOnly 实现白名单语义：OnlyTables 为空时返回 true（不限制）；非空时仅命中白名单的表注入。
+func (p *ScopePlugin) inOnly(tableName string) bool {
+	if len(p.onlyTables) == 0 {
+		return true
+	}
+	_, ok := p.onlyTables[normalizeTableName(tableName)]
+	return ok
 }
 
 func (p *ScopePlugin) isSkipped(tableName string) bool {

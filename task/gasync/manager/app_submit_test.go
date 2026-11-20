@@ -4,17 +4,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/task/gasync"
 )
 
-// TestSubmitPersistsAppFromContext 验证提交任务时从创建者 ctx（gormdao.WithApp）取 app 并
+// TestSubmitPersistsAppFromContext 验证提交任务时从创建者 ctx（gormplugin.WithApp）取 app 并
 // 持久化到 core_async_task.app_id，读回实体也带 AppID（供 worker 执行时再注入 handler ctx）。
 func TestSubmitPersistsAppFromContext(t *testing.T) {
 	m := newTestManager(t)
 
 	const appID = "biz-app-9"
-	ctx := gormdao.WithApp(context.Background(), appID)
+	ctx := gormplugin.WithApp(context.Background(), appID)
 	task, submitted, err := m.Submit(ctx, &gasync.AsyncTaskSpec{Type: "invoice"})
 	if err != nil || !submitted || task == nil {
 		t.Fatalf("Submit: submitted=%v task=%v err=%v", submitted, task, err)

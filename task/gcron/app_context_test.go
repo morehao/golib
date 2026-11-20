@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/stretchr/testify/require"
 )
 
 // tenantProbe 是回归用例用的「替身组件表」：模拟 dict/gsetting/gprompt/filestore 这类
-// 已注册 gormdao.RegisterTenantScope 的业务表（fail-closed：ctx 缺 app 时报 ErrAppMissing）。
+// 已注册 gormplugin.EnableAppScope 的业务表（fail-closed：ctx 缺 app 时报 ErrAppMissing）。
 //
 // 不直接 import 真实四包：它们的表结构与改造在多 app 上线期内仍可能变动，耦合会拖垮本 lane；
 // 这里用一张结构等价的最小表复现「handler 触下游 app 隔离表」的关键机制即可。
@@ -31,7 +31,7 @@ func TestCronHandlerCarriesAppContext(t *testing.T) {
 	require.NoError(t, AutoMigrate(db))
 	// 建替身表并注册租户回调：读/写缺 app 会 fail-closed 返回 ErrAppMissing。
 	require.NoError(t, db.AutoMigrate(&tenantProbe{}))
-	require.NoError(t, gormdao.RegisterTenantScope(db, tenantProbe{}.TableName()))
+	require.NoError(t, gormplugin.EnableAppScope(db, tenantProbe{}.TableName()))
 
 	const appID = "biz-app-42"
 	var (
@@ -53,7 +53,7 @@ func TestCronHandlerCarriesAppContext(t *testing.T) {
 		Handler: func(ctx context.Context) error {
 			mu.Lock()
 			defer mu.Unlock()
-			gotApp, hasApp = gormdao.AppFrom(ctx)
+			gotApp, hasApp = gormplugin.AppFrom(ctx)
 			// 读：缺 app 时 fail-closed 报 ErrAppMissing。
 			var rows []tenantProbe
 			queryErr = db.WithContext(ctx).Where("id = ?", "nope").Find(&rows).Error
@@ -107,7 +107,7 @@ func TestCronWithoutAppRuns(t *testing.T) {
 		TaskType: "report",
 		Spec:     "* * * * * *",
 		Handler: func(ctx context.Context) error {
-			if _, ok := gormdao.AppFrom(ctx); ok {
+			if _, ok := gormplugin.AppFrom(ctx); ok {
 				t.Errorf("未设置 AppID 的任务不应携带 app")
 			}
 			ran = 1

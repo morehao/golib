@@ -64,7 +64,7 @@ func WithoutAutoMigrate() StoreOption {
 // 回调，并启用 app 维度的存储落点与预签名绑定：
 //
 //   - 读/写/删自动按 ctx 中的 app 收敛，ctx 缺 app 时 fail-closed 返回
-//     gormdao.ErrAppMissing（上传路径在触达存储前即报错）；
+//     gormplugin.ErrAppMissing（上传路径在触达存储前即报错）；
 //
 //   - Create 自动把 ctx 中的 app 写入 app_id；
 //
@@ -79,7 +79,7 @@ func WithoutAutoMigrate() StoreOption {
 // 多业务线接入示例：
 //
 //	fs, err := filestore.New(db, st, bucket, filestore.WithAppScope())
-//	ctx := gormdao.WithApp(context.Background(), "app-a")
+//	ctx := gormplugin.WithApp(context.Background(), "app-a")
 //	detail, err := fs.UploadAndRecord(ctx, req)
 func WithAppScope() StoreOption {
 	return func(o *storeOptions) { o.appScope = true }

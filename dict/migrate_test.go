@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
@@ -89,7 +89,7 @@ func TestPostgres_RoundTrip(t *testing.T) {
 
 	var scenarioErr error
 	err := db.Transaction(func(tx *gorm.DB) error {
-		scenarioErr = postgresScenario(gormdao.WithApp(context.Background(), "app_pg"), tx)
+		scenarioErr = postgresScenario(gormplugin.WithApp(context.Background(), "app_pg"), tx)
 		return errRollback
 	})
 	require.ErrorIs(t, err, errRollback)

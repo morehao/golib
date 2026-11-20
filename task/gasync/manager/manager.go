@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/task/gasync"
 	"github.com/morehao/golib/task/gasync/source/db"
 	"gorm.io/gorm"
@@ -199,8 +199,8 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 		return nil, false, err
 	}
 	row.ScopeKey = scope
-	// 业务线 app：从创建者 ctx 取（gormdao.WithApp）。无 app 时留空串，与旧调用兼容。
-	if app, ok := gormdao.AppFrom(ctx); ok {
+	// 业务线 app：从创建者 ctx 取（gormplugin.WithApp）。无 app 时留空串，与旧调用兼容。
+	if app, ok := gormplugin.AppFrom(ctx); ok {
 		row.AppID = app
 	}
 	// 归属快照：created_by 与 last_actor_id 均写本次触发者；空表示系统/内部触发。

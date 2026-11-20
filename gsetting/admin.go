@@ -3,7 +3,7 @@ package gsetting
 import (
 	"context"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 )
 
 type AdminAPI struct {
@@ -21,7 +21,7 @@ func (a *AdminAPI) invalidate(ctx context.Context, group, key string) {
 	if a.cache == nil {
 		return
 	}
-	app, _ := gormdao.AppFrom(ctx)
+	app, _ := gormplugin.AppFrom(ctx)
 	_ = a.cache.Delete(ctx, cacheKey(app, group, key))
 }
 

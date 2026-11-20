@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 )
 
 // 本文件在 dict 包内实现 Source 的缓存装饰器（阶段三读路径 read-through）。
@@ -81,7 +81,7 @@ func NewCachingSource(src Source, c cachePort, opts ...CacheOption) Source {
 //
 // app 前缀必须放在 code/typeCode 之前：不同业务线的同名 code 是不同字典，不能共用
 // 缓存项，否则会跨 app 读到对方数据（隔离在缓存层也必须成立）。app 取自 ctx
-// （gormdao.AppFrom，与 DB 回调同一来源）；无 app 时为空段，最终由底层 store 的
+// （gormplugin.AppFrom，与 DB 回调同一来源）；无 app 时为空段，最终由底层 store 的
 // fail-closed 回调返回 ErrAppMissing。
 // 版本号 ver 当前尚未引入（模型无版本列），预留为空段以兼容后续加 ver 仍可失效。
 
@@ -115,7 +115,7 @@ func keyItemsByValues(app, typeCode string) string {
 
 // appFromCtx 取 ctx 中的业务线标识；缺失时返回空串（由底层 fail-closed 拦截）。
 func appFromCtx(ctx context.Context) string {
-	app, _ := gormdao.AppFrom(ctx)
+	app, _ := gormplugin.AppFrom(ctx)
 	return app
 }
 

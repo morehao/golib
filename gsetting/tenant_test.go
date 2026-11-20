@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -16,7 +16,7 @@ const testApp = "test-app"
 // withApp 返回携带默认业务线的 ctx，供所有需要经过租户回调的读写使用。
 func withApp(t *testing.T) context.Context {
 	t.Helper()
-	return gormdao.WithApp(context.Background(), testApp)
+	return gormplugin.WithApp(context.Background(), testApp)
 }
 
 // newPlainDB 打开一个内存 sqlite 并建表，但**不注册**租户回调——
@@ -35,7 +35,7 @@ func newPlainDB(t *testing.T) *gorm.DB {
 func newTenantDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := newPlainDB(t)
-	require.NoError(t, gormdao.RegisterTenantScope(db, tableName))
+	require.NoError(t, gormplugin.EnableAppScope(db, tableName))
 	return db
 }
 
@@ -47,8 +47,8 @@ func TestCrossApp_SameGroupKeyInvisible(t *testing.T) {
 	k, err := New(db, WithAppScope())
 	require.NoError(t, err)
 
-	ctxA := gormdao.WithApp(context.Background(), "app-a")
-	ctxB := gormdao.WithApp(context.Background(), "app-b")
+	ctxA := gormplugin.WithApp(context.Background(), "app-a")
+	ctxB := gormplugin.WithApp(context.Background(), "app-b")
 
 	// 同一 (group,key) 在两个业务线各自写入不同的值。
 	require.NoError(t, k.GetStore().Set(ctxA, &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "va", Status: StatusEnabled}))
@@ -69,14 +69,14 @@ func TestCrossApp_SameGroupKeyInvisible(t *testing.T) {
 	require.Equal(t, int64(2), cnt, "跨 app 同名 (group,key) 应各存一行")
 
 	// app 隔离下按 app 过滤：app-c 看不到前两者的配置。
-	ctxC := gormdao.WithApp(context.Background(), "app-c")
+	ctxC := gormplugin.WithApp(context.Background(), "app-c")
 	vc, err := k.GetString(ctxC, "g", "k")
 	require.NoError(t, err)
 	require.Equal(t, "", vc, "app-c 不应看到其它业务线的配置")
 
 	// 缺失 app 上下文：fail-closed，返回 ErrAppMissing。
 	_, err = k.GetString(context.Background(), "g", "k")
-	require.ErrorIs(t, err, gormdao.ErrAppMissing)
+	require.ErrorIs(t, err, gormplugin.ErrAppMissing)
 }
 
 // TestDefaultNew_NoAppScope 验证默认 New（不带 WithAppScope）不启用 app 隔离：
@@ -123,7 +123,7 @@ func TestDefaultNew_NoAppScope(t *testing.T) {
 	require.Equal(t, "", v)
 
 	// 即便 ctx 带 app，非隔离模式也不做隔离：写入的 app_id 仍为 ''。
-	appCtx := gormdao.WithApp(context.Background(), "app-a")
+	appCtx := gormplugin.WithApp(context.Background(), "app-a")
 	require.NoError(t, k.GetStore().Set(appCtx, &SettingEntity{
 		Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v3", Status: StatusEnabled,
 	}))

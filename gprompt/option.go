@@ -38,7 +38,7 @@ func WithoutAutoMigrate() Option {
 //
 // 关闭时（默认）：不注册租户回调，所有读写退化为单租户行为，无需在 ctx 中携带 app。
 // 开启后：New 会在 db 上注册租户隔离回调，Create 自动补 app_id，Query/Update/Delete
-// 自动按 ctx 中的 app 追加条件；ctx 缺失 app 时 fail-closed（返回 gormdao.ErrAppMissing）。
+// 自动按 ctx 中的 app 追加条件；ctx 缺失 app 时 fail-closed（返回 gormplugin.ErrAppMissing）。
 //
 //	svc, err := New(db, WithAppScope()) // 多业务线共享库隔离
 //

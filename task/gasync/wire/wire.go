@@ -28,7 +28,7 @@ type Task struct {
 	Type string `json:"type"`
 	// Scope 执行期需要建立的作用域（隔离维度）。缺省（旧中心）按平台值处理。
 	Scope string `json:"scope,omitempty"`
-	// AppID 业务线标识。执行期 worker 以它注入 handler ctx（gormdao.WithApp）。
+	// AppID 业务线标识。执行期 worker 以它注入 handler ctx（gormplugin.WithApp）。
 	AppID       string `json:"app_id,omitempty"`
 	Priority    int    `json:"priority"`
 	Payload     []byte `json:"payload"`

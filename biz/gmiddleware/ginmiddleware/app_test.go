@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gcontext"
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +23,7 @@ func TestApp_InjectsAppFromHeader(t *testing.T) {
 	)
 	r.Use(App())
 	r.GET("/x", func(c *gin.Context) {
-		gotApp, gotOK = gormdao.AppFrom(c.Request.Context())
+		gotApp, gotOK = gormplugin.AppFrom(c.Request.Context())
 		gotGinID = c.GetString(gcontext.KeyAppID)
 		c.Status(http.StatusOK)
 	})
@@ -51,7 +51,7 @@ func TestApp_DefaultPassThroughWhenMissing(t *testing.T) {
 	r.Use(App())
 	r.GET("/x", func(c *gin.Context) {
 		reached = true
-		_, appOK = gormdao.AppFrom(c.Request.Context())
+		_, appOK = gormplugin.AppFrom(c.Request.Context())
 		c.Status(http.StatusOK)
 	})
 
@@ -92,7 +92,7 @@ func TestApp_CustomHeader(t *testing.T) {
 	var gotApp string
 	r.Use(App(WithAppHeader("X-Biz-Line")))
 	r.GET("/x", func(c *gin.Context) {
-		gotApp, _ = gormdao.AppFrom(c.Request.Context())
+		gotApp, _ = gormplugin.AppFrom(c.Request.Context())
 		c.Status(http.StatusOK)
 	})
 

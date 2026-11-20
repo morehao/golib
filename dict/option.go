@@ -53,8 +53,8 @@ func WithSource(source Source) Option {
 // app_id 恒为空串，uk_app_code / uk_type_value 实际退化为 (code) / (type_code,value)，
 // 与原来的单租户语义等价，调用方无需携带 app 上下文。
 //
-// 显式传入本选项时：注册 gormdao.RegisterTenantScope，所有读写按 ctx 中的 app 收敛，
-// ctx 缺 app 时 fail-closed 返回 gormdao.ErrAppMissing，写入前自动回填 app_id。
+// 显式传入本选项时：注册 gormplugin.EnableAppScope，所有读写按 ctx 中的 app 收敛，
+// ctx 缺 app 时 fail-closed 返回 gormplugin.ErrAppMissing，写入前自动回填 app_id。
 // 同一 app 内 code 唯一，不同业务线的同名 code 互不可见、互不冲突。
 //
 //	d, err := dict.New(db)                    // 默认：单租户，不隔离

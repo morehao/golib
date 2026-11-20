@@ -18,7 +18,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 )
@@ -67,11 +67,11 @@ func New(db *gorm.DB, opts ...Option) (*Dict, error) {
 		}
 	}
 
-	getDB := gormdao.TenantGetter(db)
+	getDB := gormplugin.TenantGetter(db)
 	// 业务线隔离为 opt-in（默认关闭）：仅当调用方显式传 WithAppScope() 时才注册租户回调。
 	//
 	//   - 开启（cfg.appScope=true）：core_dict_type / core_dict_item 的读/写会自动按 ctx
-	//     中的 app 收敛，ctx 缺 app 时 fail-closed 返回 gormdao.ErrAppMissing，避免跨业务线
+	//     中的 app 收敛，ctx 缺 app 时 fail-closed 返回 gormplugin.ErrAppMissing，避免跨业务线
 	//     读写，写入前自动回填 app_id。
 	//   - 关闭（默认）：不注册任何回调，读写退化为单租户行为（app_id 恒为空串，复合唯一键
 	//     因 app_id='' 退化为原 code / (type_code,value) 唯一），调用方无需携带 app 上下文。
@@ -79,7 +79,7 @@ func New(db *gorm.DB, opts ...Option) (*Dict, error) {
 	// 注意 joinItems/findDanglingItems 用两次单表查询，每次查询都只命中一张表，隔离开启时
 	// 每次查询由回调在同一张表的 WHERE 上收敛 app；非隔离时两次查询同样正确（无 app 条件）。
 	if cfg.appScope {
-		if err := gormdao.RegisterTenantScope(db, tableNameType, tableNameItem); err != nil {
+		if err := gormplugin.EnableAppScope(db, tableNameType, tableNameItem); err != nil {
 			return nil, err
 		}
 	}
