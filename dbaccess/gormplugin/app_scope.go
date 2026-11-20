@@ -51,16 +51,34 @@ func AppScopeFilter(ctx context.Context) (value any, inject bool, declared bool)
 //
 // tables 是受控表名白名单（OnlyTables）：只有这些表被隔离，同库其它表不受影响——
 // 共享 *gorm.DB 时也不会误伤。这是各组件 WithAppScope() 的统一落地点，避免各包
-// 各写一遍插件装配、字段名/Resolver 漂移。多实例共享同一 *gorm.DB 时重复调用安全
-// （gorm 的 Use 对同名插件幂等，回调名固定）。
+// 各写一遍插件装配、字段名/Resolver 漂移。
+//
+// 多组件共享同一 *gorm.DB 是受支持的：对同一 db 的多次 EnableAppScope 调用会**合并**
+// 各自的 tables 到同一份白名单（而不是"重复注册被忽略"），因此后来的组件表同样被隔离。
+// 实现方式：首次调用在 db 上注册一对插件并把可变白名单集合登记到 appScopeRegistry；
+// 后续调用只把新表名并入同一集合即可（插件持有该集合指针，立即生效），返回 nil。
 //
 // 需要「跨 app 聚合/运维」时，调用方在请求入口用 gcontext.WithTenantScope(ctx, gcontext.AllScope())，
 // 而非 WithApp。
 func EnableAppScope(db *gorm.DB, tables ...string) error {
+	if db == nil {
+		return errors.New("gormplugin: EnableAppScope requires a non-nil *gorm.DB")
+	}
+
+	// 已注册过：把新表并入共享白名单即可（插件的 inOnly 读同一份集合，实时生效）。
+	// 这保证 A、B 组件先后在同一 db 上启用隔离时，两张表都被隔离——避免后注册被
+	// ErrRegistered 静默丢弃导致 fail-open。
+	if v, ok := appScopeRegistry.Load(db); ok {
+		v.(*sharedTableSet).add(tables...)
+		return nil
+	}
+
+	shared := newSharedTableSet().add(tables...)
+
 	scopePlugin, err := New(&ScopeConfig{
 		FieldName:  AppIDColumn,
 		Resolver:   AppScopeFilter,
-		OnlyTables: tables,
+		sharedOnly: shared,
 		MissingScope: func(_ *gorm.DB, _ string) error {
 			return ErrAppMissing
 		},
@@ -68,18 +86,29 @@ func EnableAppScope(db *gorm.DB, tables ...string) error {
 	if err != nil {
 		return err
 	}
-	if err := db.Use(scopePlugin); err != nil && !errors.Is(err, gorm.ErrRegistered) {
-		return err
-	}
 	createPlugin, err := NewCreateAppPlugin(&CreateScopeConfig{
 		FieldName:  AppIDColumn,
 		Resolver:   AppScopeFilter,
-		OnlyTables: tables,
+		sharedOnly: shared,
 	})
 	if err != nil {
 		return err
 	}
+
+	// 先登记集合再 Use：即使并发有两个 goroutine 同时首次进入，也只有一个能 LoadOrStore
+	// 成功并继续 Use；失败者转入"合并"分支。这里用 LoadOrStore 保证注册唯一。
+	if actual, loaded := appScopeRegistry.LoadOrStore(db, shared); loaded {
+		// 竞争失败：另一个 goroutine 已注册，把本次 tables 并入它的集合即可。
+		actual.(*sharedTableSet).add(tables...)
+		return nil
+	}
+
+	if err := db.Use(scopePlugin); err != nil && !errors.Is(err, gorm.ErrRegistered) {
+		appScopeRegistry.Delete(db)
+		return err
+	}
 	if err := db.Use(createPlugin); err != nil && !errors.Is(err, gorm.ErrRegistered) {
+		appScopeRegistry.Delete(db)
 		return err
 	}
 	return nil

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // store 是基于 gorm 的 Source 实现，同时承载写路径（供 AdminAPI 使用）。
@@ -204,6 +205,18 @@ func (s *store) insertVersion(tx *gorm.DB, prompt *Prompt, content string, specs
 	return nil
 }
 
+// promptGroupEq 构造按 group 列过滤的 clause.Eq。
+//
+// group 是 SQL 保留字：用 clause.Column 让 GORM 按方言引用标识符（PG "group"、
+// MySQL `group`）。抽成独立函数是为了让生产筛选路径与回归测试（group_filter_dialect_test.go）
+// 共用同一构造，避免两边各写一份 clause 而漂移。
+func promptGroupEq(group string) clause.Eq {
+	return clause.Eq{
+		Column: clause.Column{Table: tableNamePrompt, Name: "group"},
+		Value:  group,
+	}
+}
+
 func (s *store) listPrompts(ctx context.Context, cond *ListCond) ([]*Prompt, int64, error) {
 	db := s.db.WithContext(ctx).Model(&Prompt{})
 	if cond != nil {
@@ -214,7 +227,10 @@ func (s *store) listPrompts(ctx context.Context, cond *ListCond) ([]*Prompt, int
 			db = db.Where("status = ?", cond.Status)
 		}
 		if cond.Group != "" {
-			db = db.Where("`group` = ?", cond.Group)
+			// group 是 PG/MySQL/SQLite 保留字，必须按方言引用标识符：用 clause.Column 让
+			// GORM 生成 PG 的 "group" / MySQL 的 `group`，避免硬编码反引号在 PostgreSQL
+			// 上报语法错误。统一走 promptGroupEq，保证筛选路径与回归测试同源、不漂移。
+			db = db.Where(promptGroupEq(cond.Group))
 		}
 	}
 	var total int64

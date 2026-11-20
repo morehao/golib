@@ -34,6 +34,8 @@ type CreateScopeConfig struct {
 	SkipTables []string
 	// OnlyTables 仅对这些表自动填充（白名单，可选）；与 SkipTables 互斥。
 	OnlyTables []string
+	// sharedOnly 由 EnableAppScope 内部注入：与 ScopePlugin 共享同一份可变白名单。
+	sharedOnly *sharedTableSet
 }
 
 // CreateAppPlugin 是"创建时自动填充归属字段"的 GORM 插件。
@@ -47,6 +49,9 @@ type CreateAppPlugin struct {
 	resolver   ScopeResolver
 	skipTables map[string]struct{}
 	onlyTables map[string]struct{}
+	// sharedOnly 非空时优先于 onlyTables：与 ScopePlugin 共享同一份可变白名单，
+	// 保证同一 db 上后注册的组件表也能被 Create 回调填充 app_id。
+	sharedOnly *sharedTableSet
 }
 
 // NewCreateAppPlugin 创建 CreateAppPlugin。FieldName 必填；Resolver 与 ExtractFunc 二选一。
@@ -86,7 +91,7 @@ func NewCreateAppPlugin(cfg *CreateScopeConfig) (*CreateAppPlugin, error) {
 			only[n] = struct{}{}
 		}
 	}
-	return &CreateAppPlugin{fieldName: cfg.FieldName, resolver: resolver, skipTables: skip, onlyTables: only}, nil
+	return &CreateAppPlugin{fieldName: cfg.FieldName, resolver: resolver, skipTables: skip, onlyTables: only, sharedOnly: cfg.sharedOnly}, nil
 }
 
 // Name 实现 gorm plugin.Plugin。
@@ -137,8 +142,15 @@ func (p *CreateAppPlugin) isSkipped(table string) bool {
 	return ok
 }
 
-// inOnly 白名单语义：OnlyTables 为空返回 true（不限制）。
+// inOnly 白名单语义：白名单为空返回 true（不限制）。
+// 优先使用 sharedOnly（多组件共享同一 db 的合并白名单），否则用插件自身 onlyTables。
 func (p *CreateAppPlugin) inOnly(table string) bool {
+	if p.sharedOnly != nil {
+		if p.sharedOnly.empty() {
+			return true
+		}
+		return p.sharedOnly.has(table)
+	}
 	if len(p.onlyTables) == 0 {
 		return true
 	}
