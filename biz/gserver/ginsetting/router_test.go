@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/morehao/golib/biz/gmiddleware/ginmiddleware"
 	"github.com/morehao/golib/biz/gserver/ginserver"
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/gsetting"
@@ -20,9 +19,6 @@ const (
 	testAppName   = "ginsetting"
 	testVersion   = "v1"
 	testAPIPrefix = "/v1/ginsetting"
-	// testAppID / testAppHeader 仅用于隔离演示用例（挂 ginmiddleware.App + 组件 WithAppScope）。
-	testAppID     = "test-app"
-	testAppHeader = "X-App-Id"
 )
 
 // setupRouter 用内存 sqlite 建一个（默认非隔离的）gsetting 实例，挂到 ginserver 的
@@ -237,81 +233,4 @@ func TestUpdateStatusRoute(t *testing.T) {
 		"status": "disabled",
 	})
 	require.Equal(t, http.StatusNotFound, code)
-}
-
-// setupIsolationRouter 演示「多业务线（多 app）隔离」的接入方式：
-//  1. 组件以 gsetting.WithAppScope() 创建（开启 gormdao 租户回调）；
-//  2. 路由组显式挂载 ginmiddleware.App()（读 X-App-Id 注入请求级 app 上下文）。
-//
-// 这是 opt-in 的接入示例——默认 setupRouter 两者都不做，因此普通请求无需 app 头。
-func setupIsolationRouter(t *testing.T) *gin.Engine {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-
-	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
-	require.NoError(t, err)
-
-	setting, err := gsetting.New(db, gsetting.WithAppScope())
-	require.NoError(t, err)
-
-	engine := gin.New()
-	groups := ginserver.NewRouterGroups(engine, testAppName, []ginserver.VersionGroup{
-		{Version: testVersion},
-	}, ginserver.WithoutTrace())
-	group := groups.MustGetGroup(testVersion)
-	group.Use(ginmiddleware.App()) // 接入层自行挂载 app 中间件
-	Register(group, setting)
-	return engine
-}
-
-// doJSONAs 以指定 app（X-App-Id）发起请求，用于验证跨 app 隔离语义。
-func doJSONAs(t *testing.T, engine *gin.Engine, app, method, path string, body any) (int, map[string]any) {
-	t.Helper()
-	var buf bytes.Buffer
-	if body != nil {
-		require.NoError(t, json.NewEncoder(&buf).Encode(body))
-	}
-	req := httptest.NewRequest(method, testAPIPrefix+path, &buf)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(testAppHeader, app)
-	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, req)
-
-	var envelope map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &envelope)
-	return w.Code, envelope
-}
-
-// TestAppIsolation_OptIn 演示并验证 opt-in 隔离接入：ginmiddleware.App() +
-// gsetting.WithAppScope() 下，同 (group,key) 在不同 app 下互不可见：
-// app-a 创建的配置，app-b 列表查不到；各 app 各自 upsert 不互相覆盖。
-func TestAppIsolation_OptIn(t *testing.T) {
-	engine := setupIsolationRouter(t)
-
-	body := map[string]any{"group": "iso", "key": "k", "value_type": "string", "value": "from-a"}
-	code, env := doJSONAs(t, engine, "app-a", http.MethodPost, "/settings", body)
-	require.Equal(t, http.StatusOK, code)
-	require.EqualValues(t, 0, env["code"], "app-a 创建应成功: %v", env)
-
-	// app-b 看不到 app-a 的行
-	code, env = doJSONAs(t, engine, "app-b", http.MethodGet, "/settings?group=iso", nil)
-	require.Equal(t, http.StatusOK, code)
-	require.EqualValues(t, 0, dataMap(t, env)["total"], "app-b 不应看到 app-a 的配置")
-
-	// app-b 用同 (group,key) 写入自己的值，不覆盖 app-a
-	bodyB := map[string]any{"group": "iso", "key": "k", "value_type": "string", "value": "from-b"}
-	code, env = doJSONAs(t, engine, "app-b", http.MethodPost, "/settings", bodyB)
-	require.Equal(t, http.StatusOK, code)
-	require.EqualValues(t, 0, env["code"], "app-b 创建应成功: %v", env)
-
-	// 各看各的
-	_, env = doJSONAs(t, engine, "app-a", http.MethodGet, "/settings?group=iso", nil)
-	listA := dataMap(t, env)["list"].([]any)
-	require.Len(t, listA, 1)
-	require.Equal(t, "from-a", listA[0].(map[string]any)["value"], "app-a 的值不应被 app-b 覆盖")
-
-	_, env = doJSONAs(t, engine, "app-b", http.MethodGet, "/settings?group=iso", nil)
-	listB := dataMap(t, env)["list"].([]any)
-	require.Len(t, listB, 1)
-	require.Equal(t, "from-b", listB[0].(map[string]any)["value"])
 }

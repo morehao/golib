@@ -8,7 +8,7 @@ const (
 	KeyUserType = "userType"
 	KeyTenantID = "tenantID"
 	// KeyAppID 是业务线（app）标识在 gin Keys / 请求上下文中的键名。
-	// 与组件层 gormplugin.AppFrom 读取的 app 语义一致，由 ginmiddleware.App 中间件写入。
+	// 与组件层 gormplugin.AppFrom 读取的 app 语义一致，由调用方（接入层）在请求入口写入（gormplugin.WithApp 或 gcontext.WithTenantScope）。
 	KeyAppID      = "appID"
 	KeyDeptID     = "deptID"
 	KeyOrgID      = "orgID"
