@@ -27,7 +27,9 @@ type Task struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 	// Scope 执行期需要建立的作用域（隔离维度）。缺省（旧中心）按平台值处理。
-	Scope       string `json:"scope,omitempty"`
+	Scope string `json:"scope,omitempty"`
+	// AppID 业务线标识。执行期 worker 以它注入 handler ctx（gormdao.WithApp）。
+	AppID       string `json:"app_id,omitempty"`
 	Priority    int    `json:"priority"`
 	Payload     []byte `json:"payload"`
 	Attempt     int    `json:"attempt"`
@@ -46,6 +48,7 @@ func FromAsyncTask(t *gasync.AsyncTask) *Task {
 		ID:          t.ID,
 		Type:        t.Type,
 		Scope:       t.Scope,
+		AppID:       t.AppID,
 		Priority:    t.Priority,
 		Payload:     t.Payload,
 		Attempt:     t.Attempt,
@@ -73,6 +76,7 @@ func (w *Task) ToAsyncTask() *gasync.AsyncTask {
 		Type:        w.Type,
 		Status:      gasync.StatusRunning,
 		Scope:       scope,
+		AppID:       w.AppID,
 		Priority:    w.Priority,
 		Payload:     w.Payload,
 		Attempt:     w.Attempt,

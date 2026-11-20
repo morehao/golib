@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/morehao/golib/dbaccess/gormdao"
 	"github.com/morehao/golib/distlock"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
@@ -30,6 +31,10 @@ type TaskFunc func(ctx context.Context) error
 type Task struct {
 	// ID 任务唯一标识，同时作为任务定义表的主键（业务方指定，不可变更）。
 	ID string
+	// AppID 业务线（app）标识。定时触发无请求 ctx 时，app 取自任务自身持久化的该字段，
+	// 并注入 handler 的 ctx（gormdao.WithApp），使 handler 访问其它组件表时携带正确 app 上下文。
+	// 注册时若为空且创建者 ctx 携带 app（gormdao.WithApp），则从 ctx 取用。
+	AppID string
 	// BizID 业务 ID（如商户号、订单号），任务标识之外的业务维度，可为空。
 	BizID string
 	// BizType 业务类型（如 merchant、order），可为空。
@@ -360,7 +365,7 @@ func (s *Scheduler) addTask(t Task, upsert bool) error {
 			return fmt.Errorf("gcron: load task %q before upsert: %w", t.ID, perr)
 		}
 
-		taskEntity := &CronTask{ID: t.ID, BizID: t.BizID, BizType: t.BizType, Name: t.Name, TaskType: t.TaskType, Spec: t.Spec, Description: t.Description, Status: CronTaskEnabled}
+		taskEntity := &CronTask{ID: t.ID, AppID: t.AppID, BizID: t.BizID, BizType: t.BizType, Name: t.Name, TaskType: t.TaskType, Spec: t.Spec, Description: t.Description, Status: CronTaskEnabled}
 		if uerr := s.store.upsertTask(ctx, taskEntity); uerr != nil {
 			// 落库失败回滚调度，避免内存态与 DB 不一致
 			s.cron.Remove(entryID)
@@ -424,6 +429,12 @@ func (s *Scheduler) buildRunFunc(t Task, entrySlot *atomic.Int64, active *atomic
 		}
 
 		ctx := context.Background()
+		// 定时触发没有"创建者请求 ctx"：app 来自任务自身持久化的 AppID，注入执行 ctx，
+		// 使 handler（及其触达的其它组件表，如 dict/gsetting/...）携带正确的业务线标识，
+		// 避免下游 fail-closed 回调因缺 app 返回 ErrAppMissing。
+		if t.AppID != "" {
+			ctx = gormdao.WithApp(ctx, t.AppID)
+		}
 		runID := gutil.GenUUID()
 		ctx = context.WithValue(ctx, gconstant.KeyRunID, runID)
 		ctx = context.WithValue(ctx, gconstant.KeyTaskID, t.ID)
@@ -467,7 +478,7 @@ func (s *Scheduler) buildRunFunc(t Task, entrySlot *atomic.Int64, active *atomic
 			// skipped 行补齐 end_at/duration_ms，避免 UI 出现空值
 			now := time.Now()
 			if serr := s.store.insertRun(dbCtx, &CronTaskRun{
-				ID: runID, TaskID: t.ID,
+				ID: runID, TaskID: t.ID, AppID: t.AppID,
 				StartAt: now, EndAt: &now, DurationMS: 0,
 				Status: TaskRunSkipped, RequestID: gutil.GenUUID(),
 				ErrorMsg: gutil.TruncateString(reason, maxErrorMsgLen),
@@ -530,6 +541,7 @@ func (s *Scheduler) buildRunFunc(t Task, entrySlot *atomic.Int64, active *atomic
 		run := &CronTaskRun{
 			ID:        runID,
 			TaskID:    t.ID,
+			AppID:     t.AppID,
 			StartAt:   start,
 			Status:    TaskRunRunning,
 			RequestID: requestID,

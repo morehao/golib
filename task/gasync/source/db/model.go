@@ -20,6 +20,9 @@ const (
 //   - 索引名一律带表前缀（PG 索引名 schema 级唯一）。
 type CoreAsyncTask struct {
 	ID string `gorm:"column:id;primaryKey;type:varchar(36);comment:任务 ID（UUID v4）"`
+	// AppID 业务线标识：提交时从创建者 ctx（gormdao.WithApp）持久化；执行时 worker 以
+	// gormdao.WithApp 注入 handler ctx，使 handler 访问其它组件表时携带正确 app 上下文。
+	AppID string `gorm:"column:app_id;type:varchar(64);not null;default:'';comment:业务线标识"`
 	// created_at / updated_at 由 GORM 维护（可空）。created_at 单独参与两处索引：
 	// idx_core_async_task_task_type_status_created_at（管理面按类型+状态倒序分页）；
 	// idx_core_async_task_scope_created_by_created_at（「我的任务」按域+归属倒序，priority:3）。
@@ -80,6 +83,8 @@ func (CoreAsyncTask) TableName() string { return CoreAsyncTaskTableName }
 // (async_task_id, generation, attempt) 唯一，表示同一轮次第 N 次尝试只允许一行。
 type CoreAsyncTaskRun struct {
 	ID string `gorm:"column:id;primaryKey;type:varchar(36);comment:尝试 ID（UUID v4）"`
+	// AppID 业务线标识：与所属 async_task 一致，便于执行记录按 app 归属/排查。
+	AppID string `gorm:"column:app_id;type:varchar(64);not null;default:'';comment:业务线标识"`
 	// created_at 单独索引：兜底清理按范围删除。
 	CreatedAt time.Time `gorm:"column:created_at;index:idx_core_async_task_run_created_at;comment:创建时间"`
 

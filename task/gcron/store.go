@@ -57,6 +57,7 @@ func (s *store) upsertTask(ctx context.Context, t *CronTask) error {
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.Assignments(map[string]any{
+				"app_id":      t.AppID,
 				"biz_id":      t.BizID,
 				"biz_type":    t.BizType,
 				"name":        t.Name,

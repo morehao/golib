@@ -1,11 +1,10 @@
 package gsetting
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
-	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
+	"github.com/morehao/golib/dbaccess/gormdao"
 	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
@@ -13,25 +12,24 @@ import (
 )
 
 func TestStoreSet_Upsert(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&SettingEntity{}))
+	db := newTenantDB(t)
 
-	s := newStore(func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }, nil, nil)
-	ctx := context.Background()
+	s := newStore(gormdao.TenantGetter(db), nil, nil)
+	ctx := withApp(t)
 
-	// 首次 Set：插入，BeforeCreate 生成 UUID 主键
+	// 首次 Set：插入，BeforeCreate 生成 UUID 主键，租户回调补 app_id
 	e1 := &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v1", Status: StatusEnabled}
 	require.NoError(t, s.Set(ctx, e1))
 	require.NotEmpty(t, e1.ID)
+	require.Equal(t, testApp, e1.AppID, "Create 回调应写入 app_id")
 
-	// 同 (group,key) 重复 Set：应覆盖更新，而非撞 uk_group_key 唯一索引
+	// 同 (app,group,key) 重复 Set：应覆盖更新，而非撞 uk_app_group_key 唯一索引
 	e2 := &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v2", Status: StatusDisabled}
 	require.NoError(t, s.Set(ctx, e2))
 
 	// 仅一行，值已更新，主键保持首次插入的 ID
 	var count int64
-	require.NoError(t, db.Model(&SettingEntity{}).Count(&count).Error)
+	require.NoError(t, db.WithContext(ctx).Model(&SettingEntity{}).Count(&count).Error)
 	require.Equal(t, int64(1), count)
 
 	got, err := s.Get(ctx, "g", "k")
@@ -43,7 +41,7 @@ func TestStoreSet_Upsert(t *testing.T) {
 	// 不同 key 互不影响，仍为新插入
 	e3 := &SettingEntity{Group: "g", Key: "k2", ValueType: ValueTypeString, Value: "x"}
 	require.NoError(t, s.Set(ctx, e3))
-	require.NoError(t, db.Model(&SettingEntity{}).Count(&count).Error)
+	require.NoError(t, db.WithContext(ctx).Model(&SettingEntity{}).Count(&count).Error)
 	require.Equal(t, int64(2), count)
 
 	// SetEncrypted 复用 Set，同样幂等（重复设置同 (group,key) 不报唯一索引冲突）
@@ -60,17 +58,17 @@ func TestStoreSet_Upsert(t *testing.T) {
 	require.Equal(t, EncryptionModeEncrypted, got2.EncryptionMode)
 
 	var raw SettingEntity
-	require.NoError(t, db.Where(map[string]any{"group": "g", "key": "k"}).First(&raw).Error)
+	require.NoError(t, db.WithContext(ctx).Where(map[string]any{"group": "g", "key": "k"}).First(&raw).Error)
 	require.Equal(t, EncryptionModeEncrypted, raw.EncryptionMode)
 	require.Contains(t, raw.Value, "enc:")
 
-	require.NoError(t, db.Model(&SettingEntity{}).Count(&count).Error)
+	require.NoError(t, db.WithContext(ctx).Model(&SettingEntity{}).Count(&count).Error)
 	require.Equal(t, int64(2), count)
 }
 
 // TestStoreSet_UpsertPostgres 回归场景：store.Set 原用 Save + 空 ID 实体，
 // 重复 Set 在 PG 上报 "duplicate key value violates unique constraint"，
-// 现改为按 (group, key) ON CONFLICT upsert。事务内执行并回滚。
+// 现改为按 (app_id, group, key) ON CONFLICT upsert。事务内执行并回滚。
 func TestStoreSet_UpsertPostgres(t *testing.T) {
 	dsn := envOr(gtest.PostgresDSN, gtest.DefaultPostgresDSN)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
@@ -81,9 +79,10 @@ func TestStoreSet_UpsertPostgres(t *testing.T) {
 	db.Transaction(func(tx *gorm.DB) error {
 		require.NoError(t, tx.Migrator().DropTable(&SettingEntity{}))
 		require.NoError(t, tx.AutoMigrate(&SettingEntity{}))
+		require.NoError(t, gormdao.RegisterTenantScope(tx, tableName))
 
-		s := newStore(func(ctx context.Context) *gorm.DB { return tx.WithContext(ctx) }, nil, nil)
-		ctx := context.Background()
+		s := newStore(gormdao.TenantGetter(tx), nil, nil)
+		ctx := withApp(t)
 
 		e1 := &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v1"}
 		require.NoError(t, s.Set(ctx, e1))
@@ -92,7 +91,7 @@ func TestStoreSet_UpsertPostgres(t *testing.T) {
 		require.NoError(t, s.Set(ctx, e2))
 
 		var count int64
-		require.NoError(t, tx.Model(&SettingEntity{}).Count(&count).Error)
+		require.NoError(t, tx.WithContext(ctx).Model(&SettingEntity{}).Count(&count).Error)
 		require.Equal(t, int64(1), count)
 
 		got, err := s.Get(ctx, "g", "k")

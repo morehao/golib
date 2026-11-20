@@ -26,6 +26,7 @@ type storeOptions struct {
 	autoMigrate    bool
 	signSecret     string
 	maxUploadBytes int64
+	appScope       bool // 是否启用按 app（业务线）的数据隔离，默认 false
 }
 
 // defaultStoreOptions 只负责"零值不等于期望默认值"的字段。
@@ -50,6 +51,38 @@ func defaultStoreOptions() storeOptions {
 // 只影响 New 的隐式建表；显式调用 filestore.Migrate 永远执行。
 func WithoutAutoMigrate() StoreOption {
 	return func(o *storeOptions) { o.autoMigrate = false }
+}
+
+// WithAppScope 启用按 app（业务线）的数据隔离，由调用方显式 opt-in。
+//
+// 默认（不传本选项）filestore 是**单租户**语义：不注册租户回调，不隔离、不
+// fail-closed，Create 也不补 app_id；object key 为 files/<id[:2]>/<id>（无 app
+// 段），预签名 URL 不绑定 app。行为与未引入多业务线隔离前完全一致，无 app
+// 上下文亦可正常上传/查询。
+//
+// 传 WithAppScope() 后，New 会为 core_file / core_file_upload 注册 gormdao 租户
+// 回调，并启用 app 维度的存储落点与预签名绑定：
+//
+//   - 读/写/删自动按 ctx 中的 app 收敛，ctx 缺 app 时 fail-closed 返回
+//     gormdao.ErrAppMissing（上传路径在触达存储前即报错）；
+//
+//   - Create 自动把 ctx 中的 app 写入 app_id；
+//
+//   - object key 变为 files/<app>/<id[:2]>/<id>，不同业务线的物理对象落在各自
+//     前缀下；
+//
+//   - 预签名 token 绑定 app，消费端按 ctx app 校验，防跨 app 转发 URL 越权读写；
+//
+//   - 唯一键 uk_app_app_hash(app_id,content_hash) 把去重收敛到 app 内，跨 app
+//     同内容各存一份、互不共享。
+//
+// 多业务线接入示例：
+//
+//	fs, err := filestore.New(db, st, bucket, filestore.WithAppScope())
+//	ctx := gormdao.WithApp(context.Background(), "app-a")
+//	detail, err := fs.UploadAndRecord(ctx, req)
+func WithAppScope() StoreOption {
+	return func(o *storeOptions) { o.appScope = true }
 }
 
 func WithSignSecret(secret string) StoreOption {

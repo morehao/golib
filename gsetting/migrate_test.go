@@ -67,6 +67,9 @@ func TestSettingEntity_AutoMigratePostgres(t *testing.T) {
 
 	var migrateErr error
 	db.Transaction(func(tx *gorm.DB) error {
+		// 先删后建，避免库里残留旧版（无 app_id）的 core_setting 在
+		// ALTER 加 NOT NULL 列时因已有数据报 SQLSTATE 23502。
+		require.NoError(t, tx.Migrator().DropTable(&SettingEntity{}))
 		migrateErr = tx.AutoMigrate(&SettingEntity{})
 		// 无论成功与否都回滚，保持库干净
 		return fmt.Errorf("rollback:keep-clean")

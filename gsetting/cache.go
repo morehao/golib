@@ -36,10 +36,13 @@ type settingCacheValue struct {
 	Found  bool           `json:"found"`
 }
 
-// cacheKey 构造 (group, key) 的唯一缓存键。
+// cacheKey 构造 (app, group, key) 的唯一缓存键。
 //
 // 用 "setting:item:" 前缀与 dict 的 "dict:" 区分，避免多组件共用同一后端时撞键。
-// group/key 不含冒号（分组是业务隔离名、key 为配置键名），拼接无歧义。
-func cacheKey(group, key string) string {
-	return "setting:item:" + group + ":" + key
+// app 作为第二段参与键构造，使不同业务线的同名 (group,key) 在缓存层也互不可见/
+// 互不覆盖。app/group 不含冒号（业务线标识与分组是业务隔离名、key 为配置键名），
+// 拼接无歧义。app 为空时保留 "setting:item::<group>:<key>" 形态（空 app 段），
+// 与真实 app 不会撞键。
+func cacheKey(app, group, key string) string {
+	return "setting:item:" + app + ":" + group + ":" + key
 }

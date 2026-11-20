@@ -21,6 +21,9 @@ import (
 // 用法（在顶层组装期，group 通常来自 ginserver.NewRouterGroups 的版本分组）：
 //
 //	ginsetting.Register(group, setting)
+//
+// 本函数只把路由挂到传入的 group 上，不注入任何中间件；是否需要（如多业务线 app 注入）
+// 由调用方在拿到 group 时自行 group.Use(...) 决定。
 func Register(group *gin.RouterGroup, setting *gsetting.Setting) {
 	r := group.Group("/settings")
 	{

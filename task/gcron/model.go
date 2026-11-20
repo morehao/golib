@@ -49,7 +49,11 @@ const (
 // （等价于原 task_code 列，避免同一行同时存在 id 与 task_code 两个标识）。
 // biz_id / biz_type 为任务标识之外的业务维度（如商户号、订单场景），用于按业务过滤，可为空。
 type CronTask struct {
-	ID          string         `gorm:"column:id;primaryKey;type:varchar(128);comment:任务唯一标识（业务方注册时指定）"`
+	ID string `gorm:"column:id;primaryKey;type:varchar(128);comment:任务唯一标识（业务方注册时指定）"`
+	// AppID 业务线（app）标识：定时触发时以此把 app 注入 handler 的 ctx，使 handler 访问
+	// 其它组件（dict/gsetting/...）表时携带正确的 app 上下文。注册时从创建者 ctx 持久化，
+	// 无请求 ctx 的定时触发则直接取本列。
+	AppID       string         `gorm:"column:app_id;type:varchar(64);not null;default:'';comment:业务线标识"`
 	CreatedAt   time.Time      `gorm:"column:created_at"`
 	UpdatedAt   time.Time      `gorm:"column:updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;index"`
@@ -70,6 +74,8 @@ func (CronTask) TableName() string { return CronTaskTableName }
 // （等价于原 run_code 列）；task_id 为所属任务定义的主键 id。
 type CronTaskRun struct {
 	ID string `gorm:"column:id;primaryKey;type:varchar(36);comment:运行唯一标识（每次运行生成 UUID）"`
+	// AppID 业务线标识：与所属 CronTask.AppID 一致，使执行记录同样可按 app 归属/排查。
+	AppID string `gorm:"column:app_id;type:varchar(64);not null;default:'';comment:业务线标识"`
 	// CreatedAt 单独索引：保留策略清理按 created_at 范围删除，避免全表扫描。
 	CreatedAt  time.Time  `gorm:"column:created_at;index:idx_core_cron_task_run_created_at"`
 	TaskID     string     `gorm:"column:task_id;type:varchar(128);not null;index:idx_core_cron_task_run_task_id;comment:所属任务定义 ID"`

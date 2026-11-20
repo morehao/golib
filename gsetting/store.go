@@ -78,13 +78,17 @@ func (s *store) Set(ctx context.Context, entity *SettingEntity) error {
 		return errGroupAndKeyRequired
 	}
 
-	// 按 (group, key) 原子 upsert：不存在则插入，已存在则覆盖更新。
-	// 不能用 Save：传入的实体 ID 为空时 Save 退化为纯 INSERT，同一 (group,key)
-	// 重复 Set 会撞 uk_group_key 唯一索引（MySQL 报 Duplicate entry，PG 报
-	// duplicate key value violates unique constraint），Set 幂等性无法保证。
+	// 按 (app_id, group, key) 原子 upsert：不存在则插入，已存在则覆盖更新。
+	// 注意：冲突目标必须包含 app_id（与 uk_app_group_key 前导列一致），否则
+	// 不同 app 的同名 (group,key) 会被跨 app 覆盖；DoUpdates 绝不能含 app_id
+	// （否则 PG 会因更新冲突目标列报错，且违背"app 不可变"语义）。
+	// 不能用 Save：传入的实体 ID 为空时 Save 退化为纯 INSERT，同一
+	// (app,group,key) 重复 Set 会撞 uk_app_group_key 唯一索引（MySQL 报
+	// Duplicate entry，PG 报 duplicate key value violates unique constraint），
+	// Set 幂等性无法保证。
 	return s.dbGetter(ctx).Table(tableName).
 		Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "group"}, {Name: "key"}},
+			Columns: []clause.Column{{Name: "app_id"}, {Name: "group"}, {Name: "key"}},
 			DoUpdates: clause.Assignments(map[string]any{
 				"value_type":      entity.ValueType,
 				"value":           entity.Value,

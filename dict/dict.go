@@ -2,11 +2,13 @@
 // 类型级/项级扩展属性，读路径以"按类型整读 + 批量校验"为主形态。
 //
 // 设计要点（详见 .dsh/docs/specs/2026-09-24-dict-module-design.md）：
-//   - code 全表唯一标识类型，类型表不再有任何"分组/命名空间"列
-//     （主流实现 RuoYi/yudao/JeecgBoot 亦无此字段）：跨模块命名靠约定，
-//     共库即共享一个 code 命名空间（设计文档 D1 与 B1）；
+//   - 类型由 (app_id, code) 唯一标识：同一业务线（app，由 ctx 携带）内 code 唯一，
+//     不同业务线的同名 code 互不可见、互不冲突。类型表仍不含"分组/命名空间"列，
+//     app_id 由 gormdao 的租户回调按 ctx 自动注入；
 //   - 项表用 type_code 自然键关联类型，不用类型主键，保证数据自描述、可跨环境搬运；
-//   - **不内置缓存**：每次读 DB，读接口把典型请求压到 1 次查询；
+//   - 读路径"按类型整读 + 批量校验"：先按 app 取类型、再按 type_code+app 取项，
+//     两次单表查询（每次都由租户回调在单表 WHERE 上收敛 app，不依赖 JOIN 第二张表）；
+//   - **不内置缓存**：每次读 DB；缓存装饰器（NewCachingSource）的 key 亦带 app 前缀；
 //   - **默认自动建表**（幂等）：New/Init 会执行 Migrate。需要自己掌控 DDL（共库统一流程、
 //     或运行时账号无 DDL 权限）时传 WithoutAutoMigrate() 关掉隐式建表，再显式调 Migrate。
 package dict
@@ -16,6 +18,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/morehao/golib/dbaccess/gormdao"
 	"github.com/morehao/golib/gutil"
 	"gorm.io/gorm"
 )
@@ -64,8 +67,21 @@ func New(db *gorm.DB, opts ...Option) (*Dict, error) {
 		}
 	}
 
-	getDB := func(ctx context.Context) *gorm.DB {
-		return db.WithContext(ctx)
+	getDB := gormdao.TenantGetter(db)
+	// 业务线隔离为 opt-in（默认关闭）：仅当调用方显式传 WithAppScope() 时才注册租户回调。
+	//
+	//   - 开启（cfg.appScope=true）：core_dict_type / core_dict_item 的读/写会自动按 ctx
+	//     中的 app 收敛，ctx 缺 app 时 fail-closed 返回 gormdao.ErrAppMissing，避免跨业务线
+	//     读写，写入前自动回填 app_id。
+	//   - 关闭（默认）：不注册任何回调，读写退化为单租户行为（app_id 恒为空串，复合唯一键
+	//     因 app_id='' 退化为原 code / (type_code,value) 唯一），调用方无需携带 app 上下文。
+	//
+	// 注意 joinItems/findDanglingItems 用两次单表查询，每次查询都只命中一张表，隔离开启时
+	// 每次查询由回调在同一张表的 WHERE 上收敛 app；非隔离时两次查询同样正确（无 app 条件）。
+	if cfg.appScope {
+		if err := gormdao.RegisterTenantScope(db, tableNameType, tableNameItem); err != nil {
+			return nil, err
+		}
 	}
 	return &Dict{store: newStore(getDB, cfg.maxLevel, cfg.source)}, nil
 }

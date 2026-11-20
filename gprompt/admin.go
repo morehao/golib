@@ -22,9 +22,11 @@ type CreateReq struct {
 	Name        string
 	Status      Status
 	Description string
-	Content     string
-	Variables   []VariableSpec
-	Remark      string
+	// Group 业务分组标签（方案 A 纯标签，不进唯一键，可按 app 内分组过滤）。
+	Group     string
+	Content   string
+	Variables []VariableSpec
+	Remark    string
 }
 
 // UpdateReq 更新 Prompt 元信息；nil 字段表示不改动。Code 不在其中（不可变）。
@@ -32,6 +34,8 @@ type UpdateReq struct {
 	Name        *string
 	Description *string
 	Status      *Status
+	// Group 业务分组标签；nil 表示不改动。
+	Group *string
 }
 
 // PublishVersionReq 发布一个新版本（内容不可变，只能新增）。
@@ -47,6 +51,8 @@ type PublishVersionReq struct {
 type ListCond struct {
 	Code   string
 	Status Status
+	// Group 按业务分组标签精确过滤（空串表示不按 group 过滤）。
+	Group  string
 	Limit  int
 	Offset int
 }

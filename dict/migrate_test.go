@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/morehao/golib/dbaccess/gormdao"
 	"github.com/morehao/golib/gtest/gtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
@@ -46,6 +47,8 @@ func TestMigrate_SQLite_TablesAndIndexes(t *testing.T) {
 	require.False(t, db.Migrator().HasColumn(&DictType{}, "group_name"), "类型表不加分组/命名空间列")
 	require.False(t, db.Migrator().HasColumn(&DictItem{}, "group_name"))
 	require.False(t, db.Migrator().HasColumn(&DictItem{}, "domain"))
+	require.True(t, db.Migrator().HasColumn(&DictType{}, "app_id"), "类型表应有 app_id 隔离列")
+	require.True(t, db.Migrator().HasColumn(&DictItem{}, "app_id"), "项表应有 app_id 隔离列")
 
 	var indexes []string
 	require.NoError(t, db.Table("sqlite_master").
@@ -60,7 +63,7 @@ func TestMigrate_SQLite_TablesAndIndexes(t *testing.T) {
 	require.NoError(t, db.Table("sqlite_master").
 		Where("type = ? AND tbl_name = ?", "index", tableNameType).
 		Pluck("name", &indexes).Error)
-	require.Contains(t, indexes, "uk_code")
+	require.Contains(t, indexes, "uk_app_code")
 	require.NotContains(t, indexes, "idx_group_status", "类型表没有分组列，也不该有该索引")
 
 	// 幂等
@@ -86,7 +89,7 @@ func TestPostgres_RoundTrip(t *testing.T) {
 
 	var scenarioErr error
 	err := db.Transaction(func(tx *gorm.DB) error {
-		scenarioErr = postgresScenario(context.Background(), tx)
+		scenarioErr = postgresScenario(gormdao.WithApp(context.Background(), "app_pg"), tx)
 		return errRollback
 	})
 	require.ErrorIs(t, err, errRollback)

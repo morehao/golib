@@ -14,22 +14,37 @@
 package automigrateverify
 
 import (
+	"context"
 	"os"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/morehao/golib/dbaccess/gormdao"
 	"github.com/morehao/golib/dict"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/gsetting"
 	"github.com/morehao/golib/gtest/gtest"
 	"github.com/morehao/golib/gutil"
-	"github.com/morehao/golib/task/gcron"
 	gasyncmanager "github.com/morehao/golib/task/gasync/manager"
+	"github.com/morehao/golib/task/gcron"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+// verifyApp 本包模拟的「业务线标识」。真实部署里每个请求/任务都带 app 上下文，
+// 内置表在 app 缺失时会 fail-closed（gormdao.RegisterTenantScope 的租户回调返回
+// ErrAppMissing）。因此验证「默认自动建表 + 表可用」必须在带 app 的句柄上做，
+// 否则连 AutoMigrate 内部读取当前库名（SELECT DATABASE()）都会被租户 Row 回调
+// 的 fail-closed 打断（db.Error 被置位 → Row() 返回 nil → 空指针）。
+const verifyApp = "verify"
+
+// verifyDB 打开一个验证专用库并绑定固定 app 上下文，供各用例模拟真实请求作用域。
+func verifyDB(t *testing.T, d dialect) *gorm.DB {
+	t.Helper()
+	return d.open(t).WithContext(gormdao.WithApp(context.Background(), verifyApp))
+}
 
 func init() {
 	if s, err := gtest.LoadEnv("."); err == nil {
@@ -245,7 +260,7 @@ func TestAutoMigrateMechanism(t *testing.T) {
 	for _, d := range dialects {
 		d := d
 		t.Run(d.name, func(t *testing.T) {
-			db := d.open(t)
+			db := verifyDB(t, d)
 			// 每个方言跑完把自己的表清干净，验证库里不留数据表（库本身留着复用）。
 			t.Cleanup(func() {
 				for _, c := range components {
@@ -366,7 +381,7 @@ func TestMigrateNilSafety(t *testing.T) {
 // 选项是构造参数而非全局状态。
 func TestWithoutAutoMigrateOptionIsPerInstance(t *testing.T) {
 	d := postgresDialect
-	db := d.open(t)
+	db := verifyDB(t, d)
 	t.Cleanup(func() {
 		for _, c := range components {
 			dropComponent(t, db, c)
@@ -454,10 +469,15 @@ func assertModelSchema(t *testing.T, d dialect, db *gorm.DB, model any) {
 	}
 
 	// 纯净性：空库首建不应长出模型之外的列（多了说明建表逻辑与 tag 脱钩）。
+	extraCols, extraIdx := outOfBandSchema(table)
 	for name := range gotCols {
-		if _, ok := wantCols[name]; !ok {
-			assert.Fail(t, "库内存在模型未声明的列", "%s.%s", table, name)
+		if _, ok := wantCols[name]; ok {
+			continue
 		}
+		if extraCols[name] {
+			continue // AutoMigrate 之后由组件按方言补建的列，见 outOfBandSchema
+		}
+		assert.Fail(t, "库内存在模型未声明的列", "%s.%s", table, name)
 	}
 
 	// 索引：声明的索引必须存在、唯一性与列（含顺序）一致。
@@ -480,8 +500,27 @@ func assertModelSchema(t *testing.T, d dialect, db *gorm.DB, model any) {
 		if gotIdx[name].Primary {
 			continue
 		}
+		if extraIdx[name] {
+			continue // AutoMigrate 之后由组件按方言补建的索引，见 outOfBandSchema
+		}
 		assert.Fail(t, "库内存在模型未声明的索引", "%s.%s", table, name)
 	}
+}
+
+// outOfBandSchema 返回某些表在 AutoMigrate 之后由组件「按方言手工补建」的列与索引。
+//
+// 这类对象无法用 gorm tag 表达（如 gasync 的「活跃期唯一」约束：PG/SQLite 用部分唯一
+// 索引，MySQL 用 STORED 生成列 + 普通唯一索引，见 task/gasync/source/db/uniqindex.go），
+// 由 manager.AutoMigrate 代调 MigrateActiveUniqIndex 追加。它们不在模型 gorm tag 里，
+// 因此「纯净性」反向断言必须放行，否则会把正确的补建误报成漂移。
+func outOfBandSchema(table string) (cols, idx map[string]bool) {
+	cols, idx = map[string]bool{}, map[string]bool{}
+	if table == "core_async_task" {
+		// MySQL 生成列；PG/SQLite 无此列（下方索引两边都有）。
+		cols["uniq_key_active"] = true
+		idx["uk_core_async_task_active_uniq"] = true
+	}
+	return cols, idx
 }
 
 // pickDroppableColumn 选一个「非主键、且不参与任何索引」的列用于制造缺列。

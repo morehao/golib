@@ -105,6 +105,7 @@ func (s *store) createPrompt(ctx context.Context, req *CreateReq) (string, error
 			Name:        req.Name,
 			Status:      status,
 			Description: req.Description,
+			Group:       req.Group,
 		}
 		if err := tx.Create(prompt).Error; err != nil {
 			return fmt.Errorf("gprompt: create prompt: %w", err)
@@ -143,6 +144,9 @@ func (s *store) updatePrompt(ctx context.Context, code string, req *UpdateReq) e
 				return fmt.Errorf("%w: invalid status %q", ErrInvalidValue, *req.Status)
 			}
 			updateMap["status"] = *req.Status
+		}
+		if req.Group != nil {
+			updateMap["group"] = *req.Group
 		}
 		if len(updateMap) == 0 {
 			return nil
@@ -208,6 +212,9 @@ func (s *store) listPrompts(ctx context.Context, cond *ListCond) ([]*Prompt, int
 		}
 		if cond.Status != "" {
 			db = db.Where("status = ?", cond.Status)
+		}
+		if cond.Group != "" {
+			db = db.Where("`group` = ?", cond.Group)
 		}
 	}
 	var total int64

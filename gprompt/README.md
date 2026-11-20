@@ -139,18 +139,22 @@ CREATE TABLE `core_prompt` (
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
   `deleted_at` datetime(3) NULL,
-  `code` varchar(64) NOT NULL COMMENT 'Prompt 编码，全表唯一，创建后不可变',
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
+  `code` varchar(64) NOT NULL COMMENT 'Prompt 编码，同一 app 内唯一，创建后不可变',
   `name` varchar(128) NOT NULL DEFAULT '' COMMENT 'Prompt 名称',
   `status` varchar(32) NOT NULL DEFAULT 'enabled' COMMENT '状态 enabled/disabled',
   `current_version` bigint NOT NULL DEFAULT 0 COMMENT '当前生效版本号，0 表示尚无版本',
   `description` varchar(256) NOT NULL DEFAULT '' COMMENT '用途说明',
+  `group` varchar(64) NOT NULL DEFAULT '' COMMENT '业务分组标签，不进唯一键',
   PRIMARY KEY (`id`),
   INDEX `idx_core_prompt_deleted_at` (`deleted_at`),
-  UNIQUE INDEX `uk_code` (`code`)
+  UNIQUE INDEX `uk_app_code` (`app_id`,`code`),
+  INDEX `idx_app_group` (`group`)
 );
 
 CREATE TABLE `core_prompt_version` (
   `id` varchar(36),
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
   `prompt_id` varchar(36) NOT NULL COMMENT '所属 Prompt 主键 ID',
   `version` bigint NOT NULL COMMENT '版本号，同一 Prompt 内唯一递增',
   `content` mediumtext NOT NULL COMMENT '模板内容（text/template 语法）',
@@ -158,7 +162,7 @@ CREATE TABLE `core_prompt_version` (
   `remark` varchar(256) NOT NULL DEFAULT '' COMMENT '版本备注',
   `created_at` datetime(3) NULL,
   PRIMARY KEY (`id`),
-  UNIQUE INDEX `uk_prompt_version` (`prompt_id`,`version`)
+  UNIQUE INDEX `uk_prompt_version` (`app_id`,`prompt_id`,`version`)
 );
 ```
 
@@ -170,19 +174,25 @@ CREATE TABLE "core_prompt" (
   "created_at" timestamptz,
   "updated_at" timestamptz,
   "deleted_at" timestamptz,
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "code" varchar(64) NOT NULL,
   "name" varchar(128) NOT NULL DEFAULT '',
   "status" varchar(32) NOT NULL DEFAULT 'enabled',
   "current_version" bigint NOT NULL DEFAULT 0,
   "description" varchar(256) NOT NULL DEFAULT '',
+  "group" varchar(64) NOT NULL DEFAULT '',
   PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_code" ON "core_prompt" ("code");
+CREATE INDEX IF NOT EXISTS "idx_app_group" ON "core_prompt" ("group");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_app_code" ON "core_prompt" ("app_id","code");
 
 CREATE INDEX IF NOT EXISTS "idx_core_prompt_deleted_at" ON "core_prompt" ("deleted_at");
 
-COMMENT ON COLUMN "core_prompt"."code" IS 'Prompt 编码，全表唯一，创建后不可变';
+COMMENT ON COLUMN "core_prompt"."app_id" IS '业务线标识';
+
+COMMENT ON COLUMN "core_prompt"."code" IS 'Prompt 编码，同一 app 内唯一，创建后不可变';
 
 COMMENT ON COLUMN "core_prompt"."name" IS 'Prompt 名称';
 
@@ -192,8 +202,11 @@ COMMENT ON COLUMN "core_prompt"."current_version" IS '当前生效版本号，0 
 
 COMMENT ON COLUMN "core_prompt"."description" IS '用途说明';
 
+COMMENT ON COLUMN "core_prompt"."group" IS '业务分组标签，不进唯一键';
+
 CREATE TABLE "core_prompt_version" (
   "id" varchar(36),
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "prompt_id" varchar(36) NOT NULL,
   "version" bigint NOT NULL,
   "content" mediumtext NOT NULL,
@@ -203,7 +216,9 @@ CREATE TABLE "core_prompt_version" (
   PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_prompt_version" ON "core_prompt_version" ("prompt_id","version");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_prompt_version" ON "core_prompt_version" ("app_id","prompt_id","version");
+
+COMMENT ON COLUMN "core_prompt_version"."app_id" IS '业务线标识';
 
 COMMENT ON COLUMN "core_prompt_version"."prompt_id" IS '所属 Prompt 主键 ID';
 

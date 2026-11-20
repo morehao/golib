@@ -1,7 +1,6 @@
 package filestore
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -55,7 +54,7 @@ func TestMaxUploadBytes(t *testing.T) {
 func TestDeleteFile_RefcountedObjectCleanup(t *testing.T) {
 	dir := t.TempDir()
 	fs := newLocalFileStore(t, dir)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	content := "shared-content"
 	hash := sha256Of(content)
@@ -109,6 +108,6 @@ func TestDeleteFile_RefcountedObjectCleanup(t *testing.T) {
 // TestDeleteFile_NotFound 删除不存在的记录必须报错，而不是静默成功。
 func TestDeleteFile_NotFound(t *testing.T) {
 	fs := newLocalFileStore(t, t.TempDir())
-	err := fs.DeleteFile(context.Background(), "not-exist")
+	err := fs.DeleteFile(testCtx(), "not-exist")
 	require.ErrorIs(t, err, ErrFileNotFound)
 }

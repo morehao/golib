@@ -43,8 +43,8 @@ func (d *Dict) GetTypes(ctx context.Context, codes ...string) (map[string]*DictT
 
 // GetItems 取类型下的全部项（默认只 enabled，按 sort, id 升序）。
 //
-// 查询次数：类型有项时恒为 1 次（项表 JOIN 类型表，顺带判定类型状态）；
-// 仅当结果为空时补一次类型点查，用于区分 ErrTypeNotFound 与"类型下暂无项"。
+// 查询次数：恒为 2 次单表查询（先按 app 取类型判定状态，再按 type_code+app 取项），
+// 类型不存在时只发 1 次（类型查空即止）。两次查询均按 ctx 中的 app 收敛。
 func (d *Dict) GetItems(ctx context.Context, typeCode string, opts ...QueryOption) ([]*DictItem, error) {
 	if typeCode == "" {
 		return nil, ErrCodeRequired
@@ -117,7 +117,7 @@ func (d *Dict) Exists(ctx context.Context, typeCode, value string) (bool, error)
 	return true, nil
 }
 
-// BatchExists 批量校验码值，一次查询完成。
+// BatchExists 批量校验码值：两次单表查询（类型 + 批量项），均按 ctx 中的 app 收敛。
 //
 // 返回 map 覆盖**全部入参值**（含重复值与缺失值）：
 //   - 命中且启用 → true
@@ -155,7 +155,7 @@ func (d *Dict) BatchExists(ctx context.Context, typeCode string, values []string
 	return result, nil
 }
 
-// BuildTree 取整类型的项并在内存组装为树（1 次查询）。
+// BuildTree 取整类型的项并在内存组装为树（两次单表查询：类型 + 项）。
 // parent_id 指向集合外节点的项会被提升为根并标记 Orphan=true，不丢弃、不报错。
 func (d *Dict) BuildTree(ctx context.Context, typeCode string, opts ...QueryOption) ([]*TreeNode, error) {
 	items, err := d.GetItems(ctx, typeCode, opts...)

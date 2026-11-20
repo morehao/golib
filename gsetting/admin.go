@@ -2,6 +2,8 @@ package gsetting
 
 import (
 	"context"
+
+	"github.com/morehao/golib/dbaccess/gormdao"
 )
 
 type AdminAPI struct {
@@ -13,12 +15,14 @@ func newAdmin(store *store, cache cachePort) *AdminAPI {
 	return &AdminAPI{store: store, cache: cache}
 }
 
-// invalidate 写成功后按 (group,key) 失效读缓存（缓存尽力而为，失败不影响写结果）。
+// invalidate 写成功后按 (app,group,key) 失效读缓存（缓存尽力而为，失败不影响写结果）。
+// app 从 ctx 取，必须与读路径 cacheKey 的 app 段一致，否则失效的是错误业务线的缓存项。
 func (a *AdminAPI) invalidate(ctx context.Context, group, key string) {
 	if a.cache == nil {
 		return
 	}
-	_ = a.cache.Delete(ctx, cacheKey(group, key))
+	app, _ := gormdao.AppFrom(ctx)
+	_ = a.cache.Delete(ctx, cacheKey(app, group, key))
 }
 
 func (a *AdminAPI) Create(ctx context.Context, req *CreateReq) error {
