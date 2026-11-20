@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 700" role="img" aria-label="gasync 任务状态机">
+  <title>gasync 任务状态机</title>
+  <desc>任务在 pending、running 与终态（succeeded/failed/timeout/canceled/skipped）之间的流转：认领、失败重试回 pending、租约过期接管、Cancel（pending/running 均可）、Replay（succeeded/failed/canceled/skipped 可回 pending，timeout 不可）。</desc>
+  <style>
+    :root { --bg:#ffffff; --fg:#1f2733; --muted:#5b6572; --node:#eef2f8; --nodeStroke:#3f5670; --term:#eef7ee; --termStroke:#3f7a41; --edge:#5b6572; --accent:#b4451f; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#14181f; --fg:#e6ebf2; --muted:#9aa6b4; --node:#1e2733; --nodeStroke:#7d94b0; --term:#17301c; --termStroke:#67b26a; --edge:#9aa6b4; --accent:#e0794f; }
+    }
+    .box { fill:var(--node); stroke:var(--nodeStroke); stroke-width:1.6; }
+    .term { fill:var(--term); stroke:var(--termStroke); stroke-width:1.6; }
+    .lbl { fill:var(--fg); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; font-size:16px; font-weight:600; text-anchor:middle; dominant-baseline:middle; }
+    .sub { fill:var(--muted); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; font-size:12px; text-anchor:middle; dominant-baseline:middle; }
+    .edge { stroke:var(--edge); stroke-width:1.6; fill:none; }
+    .replay { stroke:var(--accent); stroke-width:1.5; fill:none; stroke-dasharray:6 4; }
+    .elabel { fill:var(--muted); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; font-size:12px; text-anchor:middle; dominant-baseline:middle; }
+    .accent { fill:var(--accent); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; font-size:12px; font-weight:600; text-anchor:middle; dominant-baseline:middle; }
+    marker path { fill:var(--edge); }
+    marker#acc path { fill:var(--accent); }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z"></path>
+    </marker>
+    <marker id="acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z"></path>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1120" height="700" fill="var(--bg)"/>
+
+  <!-- ===== edges first ===== -->
+  <!-- pending -> running 认领 -->
+  <line class="edge" x1="250" y1="220" x2="250" y2="330" marker-end="url(#arrow)"/>
+  <text class="elabel" x="302" y="278">认领</text>
+
+  <!-- running -> pending 重试/超时重试回退 -->
+  <path class="edge" d="M 190 340 C 95 340, 95 235, 190 228" marker-end="url(#arrow)"/>
+  <text class="elabel" x="86" y="276">失败或超时且还有次数</text>
+  <text class="accent" x="86" y="294">（退避回退）</text>
+
+  <!-- running -> succeeded -->
+  <path class="edge" d="M 330 345 C 500 345, 500 130, 700 130" marker-end="url(#arrow)"/>
+  <text class="elabel" x="500" y="110">成功</text>
+
+  <!-- running -> failed -->
+  <path class="edge" d="M 330 360 C 510 360, 510 265, 700 265" marker-end="url(#arrow)"/>
+  <text class="elabel" x="512" y="252">失败且次数用尽</text>
+
+  <!-- running -> timeout -->
+  <path class="edge" d="M 330 375 C 510 375, 510 400, 700 400" marker-end="url(#arrow)"/>
+  <text class="elabel" x="516" y="392">超时且次数用尽</text>
+
+  <!-- running -> canceled -->
+  <path class="edge" d="M 315 395 C 315 500, 510 535, 700 535" marker-end="url(#arrow)"/>
+  <text class="elabel" x="430" y="535">Cancel</text>
+
+  <!-- pending -> canceled（提交后未执行即撤） -->
+  <path class="edge" d="M 315 205 C 380 175, 560 540, 700 528" marker-end="url(#arrow)"/>
+  <text class="elabel" x="470" y="192">Cancel（pending 亦可）</text>
+
+  <!-- running -> skipped (BeforeExecute ErrSkip) -->
+  <path class="edge" d="M 195 395 C 150 600, 400 645, 700 645" marker-end="url(#arrow)"/>
+  <text class="elabel" x="400" y="662">BeforeExecute 返回 ErrSkip</text>
+
+  <!-- 租约过期接管 自回环 running -->
+  <path class="edge" d="M 230 330 C 205 300, 295 300, 270 330" marker-end="url(#arrow)"/>
+  <text class="accent" x="250" y="292">租约过期被他人接管</text>
+
+  <!-- ===== Replay 回边（虚线，从四个可重放终态回 pending） ===== -->
+  <!-- succeeded -> pending -->
+  <path class="edge replay" d="M 850 130 C 1010 130, 1040 240, 320 210" marker-end="url(#acc)"/>
+  <!-- failed -> pending -->
+  <path class="edge replay" d="M 850 265 C 1010 265, 1045 250, 320 214" marker-end="url(#acc)"/>
+  <!-- canceled -> pending -->
+  <path class="edge replay" d="M 850 535 C 1010 535, 1050 268, 320 218" marker-end="url(#acc)"/>
+  <!-- skipped -> pending -->
+  <path class="edge replay" d="M 850 645 C 1010 645, 1055 285, 320 222" marker-end="url(#acc)"/>
+  <text class="accent" x="470" y="70">Replay：generation+1 回 pending（timeout 不可 Replay）</text>
+
+  <!-- ===== nodes ===== -->
+  <rect class="box node" x="190" y="160" width="130" height="60" rx="8"/>
+  <text class="lbl" x="255" y="184">pending</text>
+  <text class="sub" x="255" y="204">待执行</text>
+
+  <rect class="box node" x="185" y="330" width="150" height="65" rx="8"/>
+  <text class="lbl" x="260" y="355">running</text>
+  <text class="sub" x="260" y="375">持有租约执行中</text>
+
+  <rect class="term node" x="700" y="103" width="150" height="54" rx="8"/>
+  <text class="lbl" x="775" y="130">succeeded</text>
+
+  <rect class="term node" x="700" y="238" width="150" height="54" rx="8"/>
+  <text class="lbl" x="775" y="265">failed</text>
+
+  <rect class="term node" x="700" y="373" width="150" height="54" rx="8"/>
+  <text class="lbl" x="775" y="400">timeout</text>
+
+  <rect class="term node" x="700" y="508" width="150" height="54" rx="8"/>
+  <text class="lbl" x="775" y="535">canceled</text>
+
+  <rect class="term node" x="700" y="618" width="150" height="54" rx="8"/>
+  <text class="lbl" x="775" y="645">skipped</text>
+</svg>

@@ -335,13 +335,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
 	return res.RowsAffected > 0, nil
 }
 
-// findByUniqKey 按 (scope_key, uniq_key) 回查任务，不存在返回 ErrAsyncTaskNotFound。
+// findByUniqKey 按 (scope_key, uniq_key) 回查**活跃期**任务，不存在返回 ErrAsyncTaskNotFound。
 //
-// 复合唯一键后同一 uniq_key 可在多个域各有一行，必须带作用域回查，否则幂等命中会
-// 返回任意域的任务（比全局唯一更糟，见设计 §5.2）。
+// 幂等语义为「活跃期域内唯一」：只有 pending/running 的那一行才算幂等命中；终态行一律
+// 视为可重建（Submit 冲突后会重试插入一次，让终态同键能建出新任务）。
+// 复合唯一键（部分索引/生成列）保证同域同键至多一条活跃行，故至多返回一行。
 func (c *Manager) findByUniqKey(ctx context.Context, scope, key string) (*gasync.AsyncTask, error) {
 	var row db.CoreAsyncTask
-	err := c.db.WithContext(ctx).Where("scope_key = ? AND uniq_key = ?", scope, key).Take(&row).Error
+	err := c.db.WithContext(ctx).
+		Where("scope_key = ? AND uniq_key = ? AND "+db.ActiveStatusesSQL, scope, key).
+		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, gasync.ErrAsyncTaskNotFound
 	}

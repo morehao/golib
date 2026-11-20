@@ -20,6 +20,11 @@ type Store interface {
 	Cleanup(ctx context.Context, before time.Time, batch int) (tasks int64, runs int64, err error)
 }
 
+// ActiveStatusesSQL 是「活跃期」状态谓词（pending / running），与活跃期唯一索引
+// uk_core_async_task_active_uniq 的 WHERE 口径一致。幂等回查、活跃行判定共用此常量，
+// 避免两处字面量漂移。导出供 manager 的 findByUniqKey 复用。
+const ActiveStatusesSQL = "status IN ('pending','running')"
+
 // GetAsyncTask 按 ID 取任务，不存在返回 ErrAsyncTaskNotFound。
 //
 // 作用域强制下按 (scope_key, id) 取；越权等价于不存在（同样返回 ErrAsyncTaskNotFound，

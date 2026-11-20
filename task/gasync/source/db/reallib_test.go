@@ -70,6 +70,10 @@ func resetRealDB(t *testing.T, db *gorm.DB) {
 	if err := db.AutoMigrate(&CoreAsyncTask{}, &CoreAsyncTaskRun{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	// 活跃期唯一约束由迁移后补建（GORM tag 表达不了部分索引/生成列），与 manager.AutoMigrate 一致。
+	if err := MigrateActiveUniqIndex(db); err != nil {
+		t.Fatalf("migrate active uniq index: %v", err)
+	}
 }
 
 // seedAsyncTasks 插入 n 条到点的 pending 任务。
