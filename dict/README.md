@@ -235,7 +235,8 @@ cities, _ := d.GetChildren(ctx, "region", provinceID)   // 市级
 ```sql
 CREATE TABLE `core_dict_type` (
   `id` varchar(36),
-  `code` varchar(64) NOT NULL COMMENT '类型编码，全表唯一，创建后不可变',
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
+  `code` varchar(64) NOT NULL COMMENT '类型编码，同一 app 内唯一，创建后不可变',
   `name` varchar(128) NOT NULL DEFAULT '' COMMENT '类型名称，如 订单状态',
   `status` varchar(32) NOT NULL DEFAULT 'enabled' COMMENT '状态 enabled/disabled',
   `extra` varchar(512) NOT NULL DEFAULT '' COMMENT '类型级扩展 JSON',
@@ -243,13 +244,14 @@ CREATE TABLE `core_dict_type` (
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
   PRIMARY KEY (`id`),
-  UNIQUE INDEX `uk_code` (`code`)
+  UNIQUE INDEX `uk_app_code` (`app_id`,`code`)
 );
 
 CREATE TABLE `core_dict_item` (
   `id` varchar(36),
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
   `type_code` varchar(64) NOT NULL COMMENT '所属类型 code',
-  `value` varchar(128) NOT NULL COMMENT '码值，同类型内唯一',
+  `value` varchar(128) NOT NULL COMMENT '码值，同 app 同类型内唯一',
   `label` varchar(128) NOT NULL DEFAULT '' COMMENT '展示文案',
   `parent_id` varchar(36) NOT NULL DEFAULT '' COMMENT '父项 ID，根节点为空串',
   `path` varchar(512) NOT NULL DEFAULT '' COMMENT '物化路径 /祖/父/自身/，根节点为 /自身/',
@@ -261,9 +263,9 @@ CREATE TABLE `core_dict_item` (
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
   PRIMARY KEY (`id`),
-  UNIQUE INDEX `uk_type_value` (`type_code`,`value`),
-  INDEX `idx_type_status_sort` (`type_code`,`status`,`sort`),
-  INDEX `idx_type_parent` (`type_code`,`parent_id`)
+  UNIQUE INDEX `uk_type_value` (`app_id`,`type_code`,`value`),
+  INDEX `idx_type_status_sort` (`app_id`,`type_code`,`status`,`sort`),
+  INDEX `idx_type_parent` (`app_id`,`type_code`,`parent_id`)
 );
 ```
 
@@ -272,6 +274,7 @@ CREATE TABLE `core_dict_item` (
 ```sql
 CREATE TABLE "core_dict_type" (
   "id" varchar(36),
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "code" varchar(64) NOT NULL,
   "name" varchar(128) NOT NULL DEFAULT '',
   "status" varchar(32) NOT NULL DEFAULT 'enabled',
@@ -282,16 +285,23 @@ CREATE TABLE "core_dict_type" (
   PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_code" ON "core_dict_type" ("code");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_app_code" ON "core_dict_type" ("app_id","code");
 
-COMMENT ON COLUMN "core_dict_type"."code" IS '类型编码，全表唯一，创建后不可变';
+COMMENT ON COLUMN "core_dict_type"."app_id" IS '业务线标识';
+
+COMMENT ON COLUMN "core_dict_type"."code" IS '类型编码，同一 app 内唯一，创建后不可变';
+
 COMMENT ON COLUMN "core_dict_type"."name" IS '类型名称，如 订单状态';
+
 COMMENT ON COLUMN "core_dict_type"."status" IS '状态 enabled/disabled';
+
 COMMENT ON COLUMN "core_dict_type"."extra" IS '类型级扩展 JSON';
+
 COMMENT ON COLUMN "core_dict_type"."description" IS '类型说明';
 
 CREATE TABLE "core_dict_item" (
   "id" varchar(36),
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "type_code" varchar(64) NOT NULL,
   "value" varchar(128) NOT NULL,
   "label" varchar(128) NOT NULL DEFAULT '',
@@ -307,18 +317,31 @@ CREATE TABLE "core_dict_item" (
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX IF NOT EXISTS "idx_type_parent" ON "core_dict_item" ("type_code","parent_id");
-CREATE INDEX IF NOT EXISTS "idx_type_status_sort" ON "core_dict_item" ("type_code","status","sort");
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_type_value" ON "core_dict_item" ("type_code","value");
+CREATE INDEX IF NOT EXISTS "idx_type_parent" ON "core_dict_item" ("app_id","type_code","parent_id");
+
+CREATE INDEX IF NOT EXISTS "idx_type_status_sort" ON "core_dict_item" ("app_id","type_code","status","sort");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_type_value" ON "core_dict_item" ("app_id","type_code","value");
+
+COMMENT ON COLUMN "core_dict_item"."app_id" IS '业务线标识';
 
 COMMENT ON COLUMN "core_dict_item"."type_code" IS '所属类型 code';
-COMMENT ON COLUMN "core_dict_item"."value" IS '码值，同类型内唯一';
+
+COMMENT ON COLUMN "core_dict_item"."value" IS '码值，同 app 同类型内唯一';
+
 COMMENT ON COLUMN "core_dict_item"."label" IS '展示文案';
+
 COMMENT ON COLUMN "core_dict_item"."parent_id" IS '父项 ID，根节点为空串';
+
 COMMENT ON COLUMN "core_dict_item"."path" IS '物化路径 /祖/父/自身/，根节点为 /自身/';
+
 COMMENT ON COLUMN "core_dict_item"."level" IS '层级，根为 1';
+
 COMMENT ON COLUMN "core_dict_item"."sort" IS '同层排序，升序';
+
 COMMENT ON COLUMN "core_dict_item"."status" IS '状态 enabled/disabled';
+
 COMMENT ON COLUMN "core_dict_item"."extra" IS '项级扩展 JSON';
+
 COMMENT ON COLUMN "core_dict_item"."description" IS '项说明';
 ```

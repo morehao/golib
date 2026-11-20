@@ -184,13 +184,13 @@ func (s *store) insertRunningRuns(tx *gorm.DB, rows []*CoreAsyncTask, workerID s
 	prefix, suffix := s.dialect.insertIgnoreClause()
 	nowVal := s.dialect.nowValueExpr()
 	sql := fmt.Sprintf(`INSERT %sINTO %s
-(id, created_at, async_task_id, generation, attempt, status, failure_kind, worker_id,
+(id, app_id, created_at, async_task_id, generation, attempt, status, failure_kind, worker_id,
  started_at, finished_at, duration_ms, result, error_msg, request_id, trace_id)
-VALUES (?, %s, ?, ?, ?, 'running', '', ?, %s, NULL, 0, NULL, '', ?, ?)%s`,
+VALUES (?, ?, %s, ?, ?, ?, 'running', '', ?, %s, NULL, 0, NULL, '', ?, ?)%s`,
 		prefix, CoreAsyncTaskRunTableName, nowVal, nowVal, suffix)
 	for _, r := range rows {
 		if err := tx.Exec(sql,
-			genUUID(), r.ID, r.Generation, r.Attempt, workerID,
+			genUUID(), r.AppID, r.ID, r.Generation, r.Attempt, workerID,
 			r.RequestID, r.TraceID,
 		).Error; err != nil {
 			return err

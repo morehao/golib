@@ -21,8 +21,11 @@ const (
 	testAPIPrefix = "/v1/ginsetting"
 )
 
-// setupRouter 用内存 sqlite 建一个 gsetting 实例，挂到 ginserver 的版本分组上，
-// 返回 gin engine 供 httptest 使用。
+// setupRouter 用内存 sqlite 建一个（默认非隔离的）gsetting 实例，挂到 ginserver 的
+// 版本分组上，返回 gin engine 供 httptest 使用。
+//
+// 关键点：示例 router 不再默认挂载 ginmiddleware.App()、组件也不传 WithAppScope()，
+// 因此普通 CRUD 不需要任何 app 头即可跑通（默认非隔离语义）。
 func setupRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -30,7 +33,7 @@ func setupRouter(t *testing.T) *gin.Engine {
 	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
 	require.NoError(t, err)
 
-	setting, err := gsetting.New(db)
+	setting, err := gsetting.New(db) // 默认非隔离，不传 WithAppScope()
 	require.NoError(t, err)
 
 	engine := gin.New()
@@ -50,6 +53,7 @@ func doJSON(t *testing.T, engine *gin.Engine, method, path string, body any) (in
 	}
 	req := httptest.NewRequest(method, testAPIPrefix+path, &buf)
 	req.Header.Set("Content-Type", "application/json")
+	// 默认示例 router 不挂 app 中间件、组件非隔离：不发 X-App-Id 也应跑通。
 	w := httptest.NewRecorder()
 	engine.ServeHTTP(w, req)
 

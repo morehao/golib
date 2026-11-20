@@ -14,7 +14,7 @@ import (
 // 阶段三的缓存装饰器在此接口上叠加（写入路径永不走缓存，因此不在本接口内）。
 //
 // 约定：读方法返回的 typeStatusResult 表示"所属类型是否存在、是否停用"，
-// 由项查询的同一次往返一并取得，避免为了区分四态而多发一次查询。
+// 由 joinItems 的第一次类型查询取得（见下）；项查询紧随其后，两次均按 app 收敛。
 type Source interface {
 	// GetType 按 code 点查类型；不存在返回 (nil, nil)。
 	GetType(ctx context.Context, code string) (*DictType, error)
@@ -41,7 +41,7 @@ type Source interface {
 	CountItems(ctx context.Context, typeCode string) (int64, error)
 }
 
-// typeStatusResult 类型存在性与状态，与项查询同一次往返取得。
+// typeStatusResult 类型存在性与状态，由 joinItems 的第一次类型查询取得。
 type typeStatusResult struct {
 	status Status
 	found  bool
@@ -61,55 +61,46 @@ func newDBSource(dbGetter gormdao.DBGetter) *dbSource {
 	return &dbSource{dbGetter: dbGetter}
 }
 
-// itemRow 项 + 所属类型状态。用 INNER JOIN 取类型状态，i.* 保证非空，无需处理 NULL 扫描。
-type itemRow struct {
-	DictItem
-	TypeStatus Status `gorm:"column:type_status"`
-}
-
-// joinItems 以项表为驱动表 JOIN 类型表：一次往返同时拿到项与类型状态。
+// joinItems 取某类型下的项，并同时返回所属类型状态。
 //
-// 为什么用 JOIN 而不是"先查类型再查项"：字典读是业务高频路径（无缓存），
-// 每次多一次往返会直接翻倍共库聚合 QPS（见设计文档「共库后的读放大预算与接入准入」）。
+// 实现刻意用**两次独立查询**而不是项表 JOIN 类型表：
+//   - 先按 code 取类型（类型表自身的 app 过滤由 gormdao 回调注入到单表 WHERE）；
+//   - 若类型存在，再按 type_code 取项（项表自身的 app 过滤同样由回调注入）。
+//
+// 为什么不再 JOIN：gormdao 的租户回调只对**单张受控表**追加 app 条件，不解析 JOIN
+// 里的第二张表（见 gormplugin.EnableAppScope 注释）。把类型状态塞进 JOIN 的第二张
+// 表时，那张表的 app 条件无法被回调收敛，存在跨 app 串数据的隐患。改成两次单表查询后，
+// 每次查询都由回调在同表 WHERE 上收敛 app，从根消除"别名/JOIN 不收敛"问题。
+//
+// 代价是常规读多一次往返（字典读是高频路径）。但类型点查结果稳定、可被上层缓存装饰器
+// 直接命中（GetType 走缓存），且正确性优先于一次往返——原设计文档中的"JOIN 省一次
+// 往返"取舍在多 app 隔离下不再成立。
 func (s *dbSource) joinItems(ctx context.Context, typeCode string, extraWhere string, extraArgs []any, includeDisabled bool) ([]*DictItem, typeStatusResult, error) {
-	db := s.dbGetter(ctx).
-		Table(tableNameItem+" AS i").
-		Select("i.*, t.status AS type_status").
-		Joins("JOIN "+tableNameType+" AS t ON t.code = i.type_code").
-		Where("i.type_code = ?", typeCode)
+	// 第一次：取类型（app 由回调收敛到类型表 WHERE）；类型不存在即返回空集，
+	// 调用方据 typeStatusResult.found 区分"类型不存在"与"类型下无项/无命中"。
+	entity, err := s.GetType(ctx, typeCode)
+	if err != nil {
+		return nil, typeStatusResult{}, err
+	}
+	if entity == nil {
+		return nil, typeStatusResult{}, nil
+	}
+	ts := typeStatusResult{status: entity.Status, found: true}
+
+	// 第二次：按 type_code 取项（app 由回调收敛到项表 WHERE）。
+	db := s.dbGetter(ctx).Table(tableNameItem).Where("type_code = ?", typeCode)
 	if !includeDisabled {
-		db = db.Where("i.status = ?", StatusEnabled)
+		db = db.Where("status = ?", StatusEnabled)
 	}
 	if extraWhere != "" {
 		db = db.Where(extraWhere, extraArgs...)
 	}
 
-	var rows []*itemRow
-	if err := db.Order("i.sort ASC, i.id ASC").Find(&rows).Error; err != nil {
-		return nil, typeStatusResult{}, err
-	}
-
-	items := make([]*DictItem, 0, len(rows))
-	ts := typeStatusResult{}
-	for _, row := range rows {
-		items = append(items, &row.DictItem)
-		// JOIN 命中即类型存在；同一类型的状态在结果集内一致。
-		ts = typeStatusResult{status: row.TypeStatus, found: true}
+	var items []*DictItem
+	if err := db.Order("sort ASC, id ASC").Find(&items).Error; err != nil {
+		return nil, ts, err
 	}
 	return items, ts, nil
-}
-
-// resolveEmptyType 仅在 JOIN 结果为空时调用：区分"类型不存在"与"类型存在但无项/无命中"。
-// 热路径（类型有项）不会走到这里，因此不增加常规读的往返次数。
-func (s *dbSource) resolveEmptyType(ctx context.Context, code string) (typeStatusResult, error) {
-	entity, err := s.GetType(ctx, code)
-	if err != nil {
-		return typeStatusResult{}, err
-	}
-	if entity == nil {
-		return typeStatusResult{}, nil
-	}
-	return typeStatusResult{status: entity.Status, found: true}, nil
 }
 
 func (s *dbSource) GetType(ctx context.Context, code string) (*DictType, error) {
@@ -169,51 +160,44 @@ func (s *dbSource) GetItems(ctx context.Context, typeCode string, includeDisable
 	if err != nil {
 		return nil, ts, err
 	}
-	if len(items) > 0 {
-		return items, ts, nil
+	if items == nil {
+		items = []*DictItem{}
 	}
-	ts, err = s.resolveEmptyType(ctx, typeCode)
 	// 类型存在但暂无项：返回空切片而非 nil，避免调用方/JSON 出现 null
-	return []*DictItem{}, ts, err
+	return items, ts, nil
 }
 
 func (s *dbSource) GetChildren(ctx context.Context, typeCode, parentID string, includeDisabled bool) ([]*DictItem, typeStatusResult, error) {
-	items, ts, err := s.joinItems(ctx, typeCode, "i.parent_id = ?", []any{parentID}, includeDisabled)
+	items, ts, err := s.joinItems(ctx, typeCode, "parent_id = ?", []any{parentID}, includeDisabled)
 	if err != nil {
 		return nil, ts, err
 	}
-	if len(items) > 0 {
-		return items, ts, nil
+	if items == nil {
+		items = []*DictItem{}
 	}
-	ts, err = s.resolveEmptyType(ctx, typeCode)
-	return []*DictItem{}, ts, err
+	return items, ts, nil
 }
 
 func (s *dbSource) GetItemByValue(ctx context.Context, typeCode, value string) (*DictItem, typeStatusResult, error) {
-	items, ts, err := s.joinItems(ctx, typeCode, "i.value = ?", []any{value}, true)
+	items, ts, err := s.joinItems(ctx, typeCode, "value = ?", []any{value}, true)
 	if err != nil {
 		return nil, ts, err
 	}
 	if len(items) > 0 {
 		return items[0], ts, nil
 	}
-	ts, err = s.resolveEmptyType(ctx, typeCode)
-	return nil, ts, err
+	return nil, ts, nil
 }
 
 func (s *dbSource) GetItemsByValues(ctx context.Context, typeCode string, values []string) ([]*DictItem, typeStatusResult, error) {
 	if len(values) == 0 {
 		return nil, typeStatusResult{}, nil
 	}
-	items, ts, err := s.joinItems(ctx, typeCode, "i.value IN ?", []any{values}, true)
+	items, ts, err := s.joinItems(ctx, typeCode, "value IN ?", []any{values}, true)
 	if err != nil {
 		return nil, ts, err
 	}
-	if len(items) > 0 {
-		return items, ts, nil
-	}
-	ts, err = s.resolveEmptyType(ctx, typeCode)
-	return nil, ts, err
+	return items, ts, nil
 }
 
 func (s *dbSource) GetItemByID(ctx context.Context, id string) (*DictItem, error) {
@@ -572,12 +556,26 @@ type danglingRow struct {
 
 // findDanglingItems 找出 type_code 下所有"归属类型不存在"的项：
 // 类型被直删后残留的行对读接口不可见，属于沉默的数据损坏。
+//
+// 实现用两次单表查询而非 LEFT JOIN：
+//   - 先按 code 查类型（app 由 gormdao 回调收敛到类型表 WHERE）；
+//   - 类型存在 → 无残留（同 app 同 code 的项都归属该类型），直接返回空；
+//   - 类型不存在 → 该 code 下所有项都是残留（再按 type_code 查项，app 同样由回调收敛）。
+//
+// 这样每次查询都只命中一张受控表，避免了 LEFT JOIN 中第二张类型表的 app 条件
+// 无法被回调收敛的问题（与 joinItems 的改造同理）。
 func (s *store) findDanglingItems(ctx context.Context, typeCode string) ([]danglingRow, error) {
+	entity, err := s.source.GetType(ctx, typeCode)
+	if err != nil {
+		return nil, err
+	}
+	if entity != nil {
+		return nil, nil
+	}
 	var rows []danglingRow
-	err := s.dbGetter(ctx).Table(tableNameItem+" AS i").
-		Select("i.id AS id, i.value AS value").
-		Joins("LEFT JOIN "+tableNameType+" AS t ON t.code = i.type_code").
-		Where("i.type_code = ? AND t.id IS NULL", typeCode).
+	err = s.dbGetter(ctx).Table(tableNameItem).
+		Select("id AS id, value AS value").
+		Where("type_code = ?", typeCode).
 		Find(&rows).Error
 	if err != nil {
 		return nil, err

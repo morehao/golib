@@ -49,7 +49,11 @@ func handlePresignedPut(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		payload, err := filestore.ParsePresignedToken(fs.SignSecret(), bucket, key, token, expires)
+		// 校验 token 的同时校验 app 绑定：app 隔离开启时，若 token 携带的 app 与当前
+		// 请求 ctx 的 app 不符（跨 app 转发）即拒绝，防止凭泄露的 URL 越权读写他业务线对象。
+		// op 传空：同一端点承载 put / put_part 两种 op，由下方 switch 按载荷分发。
+		// 未启用 app 隔离（Token 无 app 绑定，<4 段）时退回原 storage 协议校验，行为不变。
+		payload, err := filestore.VerifyPresignedTokenForContext(c.Request.Context(), fs.SignSecret(), bucket, key, "", token, expires)
 		if err != nil {
 			c.String(http.StatusForbidden, presignErrorMessage(err))
 			return
@@ -103,7 +107,9 @@ func handlePresignedGet(fs *filestore.FileStore) gin.HandlerFunc {
 			return
 		}
 
-		payload, err := filestore.ParsePresignedToken(fs.SignSecret(), bucket, key, token, expires)
+		// 与 PUT 端点同样校验 app 绑定：token.app 必须与请求 ctx 的 app 一致
+		//（op 传 get，直接在此处完成 op 校验）；无 app 绑定的老 token 退回原协议校验。
+		payload, err := filestore.VerifyPresignedTokenForContext(c.Request.Context(), fs.SignSecret(), bucket, key, storage.PresignOpGet, token, expires)
 		if err != nil {
 			c.String(http.StatusForbidden, presignErrorMessage(err))
 			return

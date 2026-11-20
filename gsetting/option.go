@@ -9,6 +9,7 @@ type options struct {
 	autoMigrate bool
 	cache       cachePort
 	cacheTTL    time.Duration
+	appScope    bool // 是否启用按 app（业务线）的数据隔离，默认 false
 }
 
 func defaultOptions() *options {
@@ -55,4 +56,29 @@ func WithCache(c cachePort, ttl time.Duration) Option {
 // 只影响 New/Init 的隐式建表；显式调用 gsetting.Migrate 永远执行。
 func WithoutAutoMigrate() Option {
 	return func(o *options) { o.autoMigrate = false }
+}
+
+// WithAppScope 启用按 app（业务线）的数据隔离，由调用方显式 opt-in。
+//
+// 默认（不传本选项）gsetting 是**单租户**语义：不注册租户回调，不隔离、不
+// fail-closed，Create 也不补 app_id——行为与未引入多业务线隔离前完全一致，
+// 无 app 上下文亦可正常增删改查。
+//
+// 传 WithAppScope() 后，New 会为 core_setting 注册 gormdao 租户回调：
+//
+//   - 读/写/删自动按 ctx 中的 app 收敛，ctx 缺 app 时 fail-closed 返回
+//     gormplugin.ErrAppMissing；
+//
+//   - Create 自动把 ctx 中的 app 写入 app_id；
+//
+//   - 唯一键 uk_app_group_key(app_id,group,key) 保证不同业务线的同名
+//     (group,key) 互不覆盖、互不可见。
+//
+// 多业务线接入示例：
+//
+//	k, err := gsetting.New(db, gsetting.WithAppScope())
+//	ctx := gormplugin.WithApp(context.Background(), "app-a")
+//	v, err := k.GetString(ctx, "payment", "timeout")
+func WithAppScope() Option {
+	return func(o *options) { o.appScope = true }
 }

@@ -48,6 +48,9 @@ type AsyncTask struct {
 	ID     string
 	Type   string
 	Status Status
+	// AppID 业务线（app）标识。提交时从创建者 ctx 持久化；执行时 worker 把它注入 handler
+	// ctx（gormplugin.WithApp），使 handler 访问其它组件表时携带正确 app 上下文。
+	AppID string
 	// Scope 作用域分区键（隔离维度）。取值来自提交时的 ScopeResolver；平台任务为保留值
 	// ScopePlatform。空串为非法（写入侧强制后不得出现）。
 	Scope    string
@@ -150,6 +153,9 @@ type AsyncTaskSpec struct {
 	// Scope 可选：作用域分区键。通常由 manager 从 ctx 的 ScopeResolver 解析填入；
 	// 显式设置会被覆盖（口径以 resolver 为准）。空串且 RequireScope 时提交被拒。
 	Scope string
+	// AppID 可选：业务线标识。通常由 manager 从创建者 ctx（gormplugin.AppFrom）填入；显式设置
+	// 会被 ctx 值覆盖。为空表示未声明（不强制，与无 app 的旧调用兼容）。
+	AppID string
 	// ActorID 可选：本次触发的操作者（归属快照）。manager 写入 created_by 与 last_actor_id；
 	// 为空时 created_by/last_actor_id 取空（系统/内部触发）。
 	ActorID string

@@ -286,13 +286,13 @@ WHERE async_task_id = ? AND generation = ? AND attempt = ?`,
 	}
 	prefix, suffix := s.dialect.insertIgnoreClause()
 	ins := fmt.Sprintf(`INSERT %sINTO %s
-(id, created_at, async_task_id, generation, attempt, status, failure_kind, worker_id,
+(id, app_id, created_at, async_task_id, generation, attempt, status, failure_kind, worker_id,
  started_at, finished_at, duration_ms, result, error_msg, request_id, trace_id)
-VALUES (?, %s, ?, ?, ?, ?, ?, ?, %s, %s, ?, ?, ?, ?, ?)%s`,
+VALUES (?, ?, %s, ?, ?, ?, ?, ?, ?, %s, %s, ?, ?, ?, ?, ?)%s`,
 		prefix, CoreAsyncTaskRunTableName, nowExpr,
 		s.dialect.beforeExpr(), nowExpr, suffix)
 	return tx.Exec(ins,
-		genUUID(), task.ID, task.Generation, task.Attempt, status, failure, task.WorkerID,
+		genUUID(), task.AppID, task.ID, task.Generation, task.Attempt, status, failure, task.WorkerID,
 		s.dialect.beforeArg(r.Duration), r.Duration.Milliseconds(), resultText(r.Payload), errMsg,
 		task.RequestID, task.TraceID,
 	).Error

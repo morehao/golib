@@ -131,6 +131,7 @@ CREATE TABLE `core_setting` (
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
   `deleted_at` datetime(3) NULL,
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
   `group` varchar(64) NOT NULL DEFAULT 'default' COMMENT '配置分组，用于业务隔离，如 payment、notification，默认 default',
   `key` varchar(128) NOT NULL COMMENT '配置键名，同一分组内唯一',
   `value_type` varchar(32) NOT NULL DEFAULT 'string' COMMENT '值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string',
@@ -140,7 +141,7 @@ CREATE TABLE `core_setting` (
   `status` varchar(32) NOT NULL DEFAULT 'enabled' COMMENT '状态，可选 enabled/disabled，默认 enabled',
   PRIMARY KEY (`id`),
   INDEX `idx_core_setting_deleted_at` (`deleted_at`),
-  UNIQUE INDEX `uk_group_key` (`group`,`key`)
+  UNIQUE INDEX `uk_app_group_key` (`app_id`,`group`,`key`)
 );
 ```
 
@@ -152,6 +153,7 @@ CREATE TABLE "core_setting" (
   "created_at" timestamptz,
   "updated_at" timestamptz,
   "deleted_at" timestamptz,
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "group" varchar(64) NOT NULL DEFAULT 'default',
   "key" varchar(128) NOT NULL,
   "value_type" varchar(32) NOT NULL DEFAULT 'string',
@@ -162,14 +164,23 @@ CREATE TABLE "core_setting" (
   PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_group_key" ON "core_setting" ("group","key");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_app_group_key" ON "core_setting" ("app_id","group","key");
+
 CREATE INDEX IF NOT EXISTS "idx_core_setting_deleted_at" ON "core_setting" ("deleted_at");
 
+COMMENT ON COLUMN "core_setting"."app_id" IS '业务线标识';
+
 COMMENT ON COLUMN "core_setting"."group" IS '配置分组，用于业务隔离，如 payment、notification，默认 default';
+
 COMMENT ON COLUMN "core_setting"."key" IS '配置键名，同一分组内唯一';
+
 COMMENT ON COLUMN "core_setting"."value_type" IS '值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string';
+
 COMMENT ON COLUMN "core_setting"."value" IS '配置值，明文或密文';
+
 COMMENT ON COLUMN "core_setting"."encryption_mode" IS '加密模式，可选 plain/encrypted，默认 plain';
+
 COMMENT ON COLUMN "core_setting"."description" IS '配置项描述，说明用途及可选值等';
+
 COMMENT ON COLUMN "core_setting"."status" IS '状态，可选 enabled/disabled，默认 enabled';
 ```

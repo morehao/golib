@@ -40,14 +40,19 @@ var (
 	valuePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 )
 
-// DictType 字典类型：一组同类码值的集合，由 code 全局唯一标识。
+// DictType 字典类型：一组同类码值的集合，由 (app_id, code) 唯一标识：
+// 同一业务线（app）内 code 唯一，不同业务线的同名 code 互不可见、互不冲突。
 //
 // 内嵌 gormdao.StringID 而**不内嵌 BaseEntity**：字典表是硬删表，
 // 不需要（也不应留下恒为 NULL 的）deleted_at 列，见设计文档「技术选型」。
 type DictType struct {
 	gormdao.StringID
 
-	Code string `gorm:"column:code;type:varchar(64);not null;uniqueIndex:uk_code;comment:类型编码，全表唯一，创建后不可变"`
+	// AppID 是业务线判别列，由 gormdao 的 Create 回调在写入前自动注入；uk_app_code
+	// 把 app_id 作为前导列，使 (app_id, code) 共同唯一：不同业务线的同名 code 互不
+	// 覆盖、互不可见（隔离收敛到 app 内），而在同一 app 内 code 仍是全表唯一标识。
+	AppID string `gorm:"column:app_id;type:varchar(64);not null;default:'';uniqueIndex:uk_app_code,priority:1;comment:业务线标识"`
+	Code  string `gorm:"column:code;type:varchar(64);not null;uniqueIndex:uk_app_code,priority:2;comment:类型编码，同一 app 内唯一，创建后不可变"`
 	// 类型表刻意不加"分组"列：主流实现（RuoYi/system_dict_type、yudao、JeecgBoot）都没有该字段，
 	// 类型身份就是 code 本身。跨模块命名靠约定（如 order.order_status），见设计文档 D1 与 B1。
 	Name        string    `gorm:"column:name;type:varchar(128);not null;default:'';comment:类型名称，如 订单状态"`
@@ -66,14 +71,18 @@ func (DictType) TableName() string { return tableNameType }
 type DictItem struct {
 	gormdao.StringID
 
-	TypeCode    string    `gorm:"column:type_code;type:varchar(64);not null;uniqueIndex:uk_type_value,priority:1;index:idx_type_status_sort,priority:1;index:idx_type_parent,priority:1;comment:所属类型 code"`
-	Value       string    `gorm:"column:value;type:varchar(128);not null;uniqueIndex:uk_type_value,priority:2;comment:码值，同类型内唯一"`
+	// AppID 是业务线判别列，由 gormdao 的 Create 回调在写入前自动注入。
+	// 所有以 app 为前导的索引（uk_type_value / idx_type_status_sort / idx_type_parent）
+	// 让"按 app 收敛"的查询能直接命中索引前导列。
+	AppID       string    `gorm:"column:app_id;type:varchar(64);not null;default:'';uniqueIndex:uk_type_value,priority:1;index:idx_type_status_sort,priority:1;index:idx_type_parent,priority:1;comment:业务线标识"`
+	TypeCode    string    `gorm:"column:type_code;type:varchar(64);not null;uniqueIndex:uk_type_value,priority:2;index:idx_type_status_sort,priority:2;index:idx_type_parent,priority:2;comment:所属类型 code"`
+	Value       string    `gorm:"column:value;type:varchar(128);not null;uniqueIndex:uk_type_value,priority:3;comment:码值，同 app 同类型内唯一"`
 	Label       string    `gorm:"column:label;type:varchar(128);not null;default:'';comment:展示文案"`
-	ParentID    string    `gorm:"column:parent_id;type:varchar(36);not null;default:'';index:idx_type_parent,priority:2;comment:父项 ID，根节点为空串"`
+	ParentID    string    `gorm:"column:parent_id;type:varchar(36);not null;default:'';index:idx_type_parent,priority:3;comment:父项 ID，根节点为空串"`
 	Path        string    `gorm:"column:path;type:varchar(512);not null;default:'';comment:物化路径 /祖/父/自身/，根节点为 /自身/"`
 	Level       int       `gorm:"column:level;not null;default:1;comment:层级，根为 1"`
-	Sort        int       `gorm:"column:sort;not null;default:0;index:idx_type_status_sort,priority:4;comment:同层排序，升序"`
-	Status      Status    `gorm:"column:status;type:varchar(32);not null;default:'enabled';index:idx_type_status_sort,priority:3;comment:状态 enabled/disabled"`
+	Sort        int       `gorm:"column:sort;not null;default:0;index:idx_type_status_sort,priority:5;comment:同层排序，升序"`
+	Status      Status    `gorm:"column:status;type:varchar(32);not null;default:'enabled';index:idx_type_status_sort,priority:4;comment:状态 enabled/disabled"`
 	Extra       string    `gorm:"column:extra;type:varchar(512);not null;default:'';comment:项级扩展 JSON"`
 	Description string    `gorm:"column:description;type:varchar(256);not null;default:'';comment:项说明"`
 	CreatedAt   time.Time `gorm:"column:created_at"`

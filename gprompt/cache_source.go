@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/morehao/golib/dbaccess/gormplugin"
 )
 
 // defaultSourceCacheTTL 是 CachingSource 的默认缓存 TTL。
@@ -74,7 +76,8 @@ type CachingSource struct {
 	cfg   cacheConfig
 
 	mu sync.Mutex
-	// versionKeys 记录每个 code 在进程内「已读取过」的版本 key，供 Invalidate 一并清理。
+	// versionKeys 记录每个 (app, code) 在进程内「已读取过」的版本 key，供 Invalidate 一并清理。
+	// 以 app 与 code 组成的复合键登记，避免不同 app 的同名 code 缓存互相误清。
 	versionKeys map[string][]string
 }
 
@@ -94,29 +97,44 @@ func NewCachingSource(src Source, c cachePort, opts ...CacheOption) Source {
 	}
 }
 
-// codeKey 生成 code 维度缓存 key："gprompt:code:{code}"。
-func (s *CachingSource) codeKey(code string) string {
-	return s.cfg.prefix + "code:" + code
+// appKeySegment 从 ctx 取业务线标识，用于缓存 key 的 app 前缀维。
+//
+// 取不到 app 时用 "_" 占位（而非空串），保证：
+//   - 无 app 上下文（如纯内存/示例场景）仍能正常读写，只是落在同一个占位桶；
+//   - 不同 app 的 key 一定不同，Invalidate 不会跨 app 误清。
+func appKeySegment(ctx context.Context) string {
+	if app, ok := gormplugin.AppFrom(ctx); ok {
+		return app
+	}
+	return "_"
 }
 
-// versionKey 生成 code+version 维度缓存 key："gprompt:ver:{code}:{version}"。
-func (s *CachingSource) versionKey(code string, version int) string {
-	return s.cfg.prefix + "ver:" + code + ":" + strconv.Itoa(version)
+// codeKey 生成 code 维度缓存 key："gprompt:{app}:code:{code}"。
+//
+// app 前缀避免同一份 redis/memory 缓存被多业务线共享时，按 code 维度命中他 app 的数据，
+// 也避免 Invalidate 跨 app 误清。
+func (s *CachingSource) codeKey(ctx context.Context, code string) string {
+	return s.cfg.prefix + appKeySegment(ctx) + ":code:" + code
+}
+
+// versionKey 生成 code+version 维度缓存 key："gprompt:{app}:ver:{code}:{version}"。
+func (s *CachingSource) versionKey(ctx context.Context, code string, version int) string {
+	return s.cfg.prefix + appKeySegment(ctx) + ":ver:" + code + ":" + strconv.Itoa(version)
 }
 
 // GetPromptByCode 读当前生效版本，经 GetOrLoad 包裹。
 //
 // 命中直接返回缓存快照；未命中回源 src 并写回。回源返回 error 时透传且不缓存。
 func (s *CachingSource) GetPromptByCode(ctx context.Context, code string) (*PromptSnapshot, error) {
-	return s.load(ctx, s.codeKey(code), func(ctx context.Context) (*PromptSnapshot, error) {
+	return s.load(ctx, s.codeKey(ctx, code), func(ctx context.Context) (*PromptSnapshot, error) {
 		return s.src.GetPromptByCode(ctx, code)
 	})
 }
 
 // GetVersion 读指定版本，经 GetOrLoad 包裹。
 func (s *CachingSource) GetVersion(ctx context.Context, code string, version int) (*PromptSnapshot, error) {
-	key := s.versionKey(code, version)
-	s.rememberVersionKey(code, key)
+	key := s.versionKey(ctx, code, version)
+	s.rememberVersionKey(appKeySegment(ctx)+":"+code, key)
 	return s.load(ctx, key, func(ctx context.Context) (*PromptSnapshot, error) {
 		return s.src.GetVersion(ctx, code, version)
 	})
@@ -148,17 +166,18 @@ func (s *CachingSource) load(ctx context.Context, key string, fetch func(context
 // 为避免依赖后端 SCAN/前缀枚举（内存/redis 语义不一），版本 key 由本装饰器在读取时登记；
 // 未曾在本次进程内读取过的版本 key 不会被枚举，可由 TTL 兜底或调用方用 InvalidateVersion 精确清理。
 func (s *CachingSource) Invalidate(ctx context.Context, code string) error {
-	keys := []string{s.codeKey(code)}
+	keys := []string{s.codeKey(ctx, code)}
+	track := appKeySegment(ctx) + ":" + code
 	s.mu.Lock()
-	keys = append(keys, s.versionKeys[code]...)
-	delete(s.versionKeys, code)
+	keys = append(keys, s.versionKeys[track]...)
+	delete(s.versionKeys, track)
 	s.mu.Unlock()
 	return s.cache.Delete(ctx, keys...)
 }
 
 // InvalidateVersion 精确使 code+version 的缓存失效。
 func (s *CachingSource) InvalidateVersion(ctx context.Context, code string, version int) error {
-	return s.cache.Delete(ctx, s.versionKey(code, version))
+	return s.cache.Delete(ctx, s.versionKey(ctx, code, version))
 }
 
 // rememberVersionKey 记录某个 code 已读取过的版本 key，供 Invalidate 一并清理。

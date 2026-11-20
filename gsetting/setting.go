@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"gorm.io/gorm"
 )
 
@@ -60,8 +61,15 @@ func New(db *gorm.DB, opts ...Option) (*Setting, error) {
 		return nil, fmt.Errorf("gsetting: init crypto: %w", err)
 	}
 
-	getDB := func(ctx context.Context) *gorm.DB {
-		return db.WithContext(ctx)
+	getDB := gormplugin.TenantGetter(db)
+	// app 隔离由调用方 opt-in：仅当传了 WithAppScope() 才注册租户回调。
+	// 默认不注册（无回调=无隔离=无 fail-closed，Create 不补 app_id），退回
+	// 原单租户语义，无 app 上下文亦可正常增删改查。
+	// 注册是幂等的（gormdao 内部按 *gorm.DB 去重）。
+	if cfg.appScope {
+		if err := gormplugin.EnableAppScope(db, tableName); err != nil {
+			return nil, fmt.Errorf("gsetting: register tenant scope: %w", err)
+		}
 	}
 	s := newStore(getDB, registry, c)
 	adminAPI = newAdmin(s, cfg.cache)
@@ -75,12 +83,16 @@ func (k *Setting) GetStore() *store {
 // getEntity 是读路径的统一入口：有缓存走 read-through（缓存 DB 原值），
 // 无缓存直连 store.Get。返回的实体均已解密（副本），与无缓存路径语义一致。
 func (k *Setting) getEntity(ctx context.Context, group, key string) (*SettingEntity, error) {
+	// 缓存键必须带 app：不同业务线的同名 (group,key) 是不同配置，不能共用缓存项。
+	// 这里从 ctx 取 app（与 gormdao 回调同一来源）；无 app 时传空串，最终由
+	// 底层 store 的 fail-closed 回调返回 ErrAppMissing。
+	app, _ := gormplugin.AppFrom(ctx)
 	if k.cache == nil {
 		return k.store.Get(ctx, group, key)
 	}
 
 	var out settingCacheValue
-	err := k.cache.GetOrLoad(ctx, cacheKey(group, key), &out, k.cacheTTL, func(ctx context.Context) (any, error) {
+	err := k.cache.GetOrLoad(ctx, cacheKey(app, group, key), &out, k.cacheTTL, func(ctx context.Context) (any, error) {
 		entity, err := k.store.getRaw(ctx, group, key)
 		if err != nil {
 			return nil, err
@@ -166,6 +178,11 @@ func Init(db *gorm.DB, opts ...Option) (*Setting, error) {
 	return instance, nil
 }
 
+// 包级便捷函数（GetValue/GetString/GetInt64/GetFloat64/GetBool）依赖 Init 初始化的
+// 单例 defaultSetting。它们把 ctx 原样透传到实例方法，因此业务线（app）隔离同样
+// 从 ctx 生效：调用方的 ctx 必须携带 app（gormplugin.WithApp(ctx, appID)），否则底层
+// 会因缺 app 上下文返回 gormplugin.ErrAppMissing。多 app 场景建议直接用 New 得到的
+// 实例 + 带 app 的 ctx，避免共享单例。
 func GetValue(ctx context.Context, group, key string, dest any) error {
 	if defaultSetting == nil {
 		return errNotInitialized

@@ -1,7 +1,6 @@
 package filestore
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -9,16 +8,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// assertServerGeneratedKey 断言 key 符合服务端生成规则：files/ 前缀、
+// assertServerGeneratedKey 断言 key 符合服务端生成规则：files/<app>/ 前缀、
 // 按 ID 前两位分目录、且不含调用方提供的任何字符串。
 func assertServerGeneratedKey(t *testing.T, key, clientSupplied string) {
 	t.Helper()
 	require.True(t, strings.HasPrefix(key, objectKeyPrefix), "key 必须带 files/ 前缀: %s", key)
 	rest := strings.TrimPrefix(key, objectKeyPrefix)
+	// files/<app>/<id[:2]>/<id>：先剥掉 app 段，再校验分目录与 UUID。
 	parts := strings.SplitN(rest, "/", 2)
-	require.Len(t, parts, 2, "key 必须按 ID 前两位分目录: %s", key)
-	require.Len(t, parts[1], 36, "ID 应为 UUID(v7) 字符串: %s", parts[1])
-	require.Equal(t, parts[1][:2], parts[0], "目录名必须等于 ID 前两位: %s", key)
+	require.Len(t, parts, 2, "key 必须形如 files/<app>/<id[:2]>/<id>: %s", key)
+	require.Equal(t, testApp, parts[0], "app 目录段必须等于 ctx 中的 app: %s", key)
+	idParts := strings.SplitN(parts[1], "/", 2)
+	require.Len(t, idParts, 2, "key 必须按 ID 前两位分目录: %s", key)
+	require.Len(t, idParts[1], 36, "ID 应为 UUID(v7) 字符串: %s", idParts[1])
+	require.Equal(t, idParts[1][:2], idParts[0], "目录名必须等于 ID 前两位: %s", key)
 	if clientSupplied != "" {
 		require.NotContains(t, key, clientSupplied, "客户端字符串不得出现在 key 中")
 	}
@@ -29,9 +32,9 @@ func assertServerGeneratedKey(t *testing.T, key, clientSupplied string) {
 func TestUploadAndRecord_ServerGeneratedKey(t *testing.T) {
 	db := newTestDB(t)
 	mock := &mockStorage{}
-	fs, err := New(db, mock, "test-bucket")
+	fs, err := New(db, mock, "test-bucket", WithAppScope())
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	first, err := fs.UploadAndRecord(ctx, UploadAndRecordRequest{
 		ContentHash: "key-a",
@@ -61,10 +64,10 @@ func TestUploadAndRecord_ServerGeneratedKey(t *testing.T) {
 func TestInitMultipartUpload_ServerGeneratedKey(t *testing.T) {
 	db := newTestDB(t)
 	mock := &mockStorage{}
-	fs, err := New(db, mock, "test-bucket")
+	fs, err := New(db, mock, "test-bucket", WithAppScope())
 	require.NoError(t, err)
 
-	first, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+	first, err := fs.InitMultipartUpload(testCtx(), InitMultipartUploadRequest{
 		ContentHash: "mp-key-a",
 		Name:        "a.mp4",
 		Size:        1024,
@@ -74,7 +77,7 @@ func TestInitMultipartUpload_ServerGeneratedKey(t *testing.T) {
 	firstKey := mock.lastKey
 	assertServerGeneratedKey(t, firstKey, "a.mp4")
 
-	second, err := fs.InitMultipartUpload(context.Background(), InitMultipartUploadRequest{
+	second, err := fs.InitMultipartUpload(testCtx(), InitMultipartUploadRequest{
 		ContentHash: "mp-key-b",
 		Name:        "b.mp4",
 		Size:        2048,
@@ -99,7 +102,7 @@ func TestInitMultipartUpload_DedupDoesNotCreateSession(t *testing.T) {
 	mock := &mockStorage{}
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	// 预置同 content_hash 的已有文件。
 	_, err = fs.UploadAndRecord(ctx, UploadAndRecordRequest{
@@ -137,7 +140,7 @@ func TestInitMultipartUpload_RollbackOnCreateFailure(t *testing.T) {
 	mock := &mockStorage{multipartFail: true}
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	_, err = fs.InitMultipartUpload(ctx, InitMultipartUploadRequest{
 		ContentHash: "rollback-hash",
@@ -155,7 +158,7 @@ func TestInitMultipartUpload_RollbackOnCreateFailure(t *testing.T) {
 func TestInitMultipartUpload_RejectsInvalidArgs(t *testing.T) {
 	fs, err := New(newTestDB(t), &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	_, err = fs.InitMultipartUpload(ctx, InitMultipartUploadRequest{Size: 1})
 	require.ErrorIs(t, err, ErrInvalidArgument)
@@ -171,7 +174,7 @@ func TestCompleteMultipartUpload_SizeMismatch(t *testing.T) {
 	mock := &mockStorage{completeSize: 10}
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	detail, err := fs.InitMultipartUpload(ctx, InitMultipartUploadRequest{
 		ContentHash: "size-mismatch",
@@ -204,7 +207,7 @@ func TestCompleteMultipartUpload_SizeMatch(t *testing.T) {
 	mock := &mockStorage{completeSize: 1000}
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	detail, err := fs.InitMultipartUpload(ctx, InitMultipartUploadRequest{
 		ContentHash: "size-match",
@@ -226,7 +229,7 @@ func TestCompleteMultipartUpload_SizeMatch(t *testing.T) {
 func TestUploadAndRecord_RejectsDeclaredHashMismatch(t *testing.T) {
 	dir := t.TempDir()
 	fs := newLocalFileStore(t, dir)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	declared := sha256Of("expected-content")
 	_, err := fs.UploadAndRecord(ctx, UploadAndRecordRequest{
@@ -258,7 +261,7 @@ func TestListParts(t *testing.T) {
 	}
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	detail, err := fs.InitMultipartUpload(ctx, InitMultipartUploadRequest{
 		ContentHash: "list-parts",
@@ -284,7 +287,7 @@ func TestListParts_NotSupported(t *testing.T) {
 	mock := &mockStorage{caps: storage.Caps{ListParts: false}}
 	fs, err := New(db, mock, "test-bucket")
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	detail, err := fs.InitMultipartUpload(ctx, InitMultipartUploadRequest{
 		ContentHash: "list-parts-unsupported",
@@ -301,7 +304,7 @@ func TestListParts_NotSupported(t *testing.T) {
 func TestListParts_NotMultipart(t *testing.T) {
 	fs, err := New(newTestDB(t), &mockStorage{}, "test-bucket")
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := testCtx()
 
 	detail, err := fs.UploadAndRecord(ctx, UploadAndRecordRequest{
 		ContentHash: "list-parts-non-mp",

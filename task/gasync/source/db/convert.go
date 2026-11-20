@@ -32,6 +32,7 @@ func asyncTaskRowToDomain(r *CoreAsyncTask) *gasync.AsyncTask {
 		ID:          r.ID,
 		Type:        r.TaskType,
 		Status:      gasync.Status(r.Status),
+		AppID:       r.AppID,
 		Scope:       r.ScopeKey,
 		Priority:    int(r.Priority),
 		UniqKey:     uniq,

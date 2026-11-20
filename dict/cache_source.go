@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/morehao/golib/dbaccess/gormplugin"
 )
 
 // 本文件在 dict 包内实现 Source 的缓存装饰器（阶段三读路径 read-through）。
@@ -75,35 +77,46 @@ func NewCachingSource(src Source, c cachePort, opts ...CacheOption) Source {
 	return &cachingSource{src: src, c: c, cfg: cfg}
 }
 
-// 缓存 key 设计：统一前缀 "dict:"，维度按方法区分。
+// 缓存 key 设计：统一前缀 "dict:"，第二段固定为 app（业务线），再按方法维度区分。
+//
+// app 前缀必须放在 code/typeCode 之前：不同业务线的同名 code 是不同字典，不能共用
+// 缓存项，否则会跨 app 读到对方数据（隔离在缓存层也必须成立）。app 取自 ctx
+// （gormplugin.AppFrom，与 DB 回调同一来源）；无 app 时为空段，最终由底层 store 的
+// fail-closed 回调返回 ErrAppMissing。
 // 版本号 ver 当前尚未引入（模型无版本列），预留为空段以兼容后续加 ver 仍可失效。
 
-func keyType(code string) string {
-	return "dict:type:" + code
+func keyType(app, code string) string {
+	return "dict:" + app + ":type:" + code
 }
 
-func keyItemByID(id string) string {
-	return "dict:item:id:" + id
+func keyItemByID(app, id string) string {
+	return "dict:" + app + ":item:id:" + id
 }
 
-func keySubtree(typeCode, pathPrefix string) string {
-	return "dict:subtree:" + typeCode + ":" + pathPrefix
+func keySubtree(app, typeCode, pathPrefix string) string {
+	return "dict:" + app + ":subtree:" + typeCode + ":" + pathPrefix
 }
 
-func keyItems(typeCode string, includeDisabled bool) string {
-	return "dict:items:" + typeCode + ":" + strconv.FormatBool(includeDisabled)
+func keyItems(app, typeCode string, includeDisabled bool) string {
+	return "dict:" + app + ":items:" + typeCode + ":" + strconv.FormatBool(includeDisabled)
 }
 
-func keyChildren(typeCode, parentID string, includeDisabled bool) string {
-	return "dict:children:" + typeCode + ":" + parentID + ":" + strconv.FormatBool(includeDisabled)
+func keyChildren(app, typeCode, parentID string, includeDisabled bool) string {
+	return "dict:" + app + ":children:" + typeCode + ":" + parentID + ":" + strconv.FormatBool(includeDisabled)
 }
 
-func keyItemByValue(typeCode, value string) string {
-	return "dict:item:value:" + typeCode + ":" + value
+func keyItemByValue(app, typeCode, value string) string {
+	return "dict:" + app + ":item:value:" + typeCode + ":" + value
 }
 
-func keyItemsByValues(typeCode string) string {
-	return "dict:itemsvalues:" + typeCode
+func keyItemsByValues(app, typeCode string) string {
+	return "dict:" + app + ":itemsvalues:" + typeCode
+}
+
+// appFromCtx 取 ctx 中的业务线标识；缺失时返回空串（由底层 fail-closed 拦截）。
+func appFromCtx(ctx context.Context) string {
+	app, _ := gormplugin.AppFrom(ctx)
+	return app
 }
 
 // ---- 内部可序列化承载结构：把未导出的 typeStatusResult 拍平为可 JSON 序列化字段 ----
@@ -144,7 +157,8 @@ type itemPtrResult struct {
 
 func (s *cachingSource) GetType(ctx context.Context, code string) (*DictType, error) {
 	var out typeCacheValue
-	if err := s.c.GetOrLoad(ctx, keyType(code), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
+	app := appFromCtx(ctx)
+	if err := s.c.GetOrLoad(ctx, keyType(app, code), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
 		v, err := s.src.GetType(ctx, code)
 		if err != nil {
 			return nil, err
@@ -168,7 +182,7 @@ func (s *cachingSource) ListTypes(ctx context.Context, cond *TypeCond) ([]*DictT
 
 func (s *cachingSource) GetItems(ctx context.Context, typeCode string, includeDisabled bool) ([]*DictItem, typeStatusResult, error) {
 	var out itemsResult
-	if err := s.c.GetOrLoad(ctx, keyItems(typeCode, includeDisabled), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
+	if err := s.c.GetOrLoad(ctx, keyItems(appFromCtx(ctx), typeCode, includeDisabled), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
 		items, ts, err := s.src.GetItems(ctx, typeCode, includeDisabled)
 		if err != nil {
 			return nil, err
@@ -182,7 +196,7 @@ func (s *cachingSource) GetItems(ctx context.Context, typeCode string, includeDi
 
 func (s *cachingSource) GetChildren(ctx context.Context, typeCode, parentID string, includeDisabled bool) ([]*DictItem, typeStatusResult, error) {
 	var out itemsResult
-	if err := s.c.GetOrLoad(ctx, keyChildren(typeCode, parentID, includeDisabled), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
+	if err := s.c.GetOrLoad(ctx, keyChildren(appFromCtx(ctx), typeCode, parentID, includeDisabled), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
 		items, ts, err := s.src.GetChildren(ctx, typeCode, parentID, includeDisabled)
 		if err != nil {
 			return nil, err
@@ -196,7 +210,7 @@ func (s *cachingSource) GetChildren(ctx context.Context, typeCode, parentID stri
 
 func (s *cachingSource) GetItemByValue(ctx context.Context, typeCode, value string) (*DictItem, typeStatusResult, error) {
 	var out itemResult
-	if err := s.c.GetOrLoad(ctx, keyItemByValue(typeCode, value), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
+	if err := s.c.GetOrLoad(ctx, keyItemByValue(appFromCtx(ctx), typeCode, value), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
 		item, ts, err := s.src.GetItemByValue(ctx, typeCode, value)
 		if err != nil {
 			return nil, err
@@ -216,7 +230,7 @@ func (s *cachingSource) GetItemsByValues(ctx context.Context, typeCode string, v
 		return s.src.GetItemsByValues(ctx, typeCode, values)
 	}
 	var out itemsResult
-	key := keyItemsByValues(typeCode) + ":" + stableValuesKey(values)
+	key := keyItemsByValues(appFromCtx(ctx), typeCode) + ":" + stableValuesKey(values)
 	if err := s.c.GetOrLoad(ctx, key, &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
 		items, ts, err := s.src.GetItemsByValues(ctx, typeCode, values)
 		if err != nil {
@@ -231,7 +245,7 @@ func (s *cachingSource) GetItemsByValues(ctx context.Context, typeCode string, v
 
 func (s *cachingSource) GetItemByID(ctx context.Context, id string) (*DictItem, error) {
 	var out itemPtrResult
-	if err := s.c.GetOrLoad(ctx, keyItemByID(id), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
+	if err := s.c.GetOrLoad(ctx, keyItemByID(appFromCtx(ctx), id), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
 		v, err := s.src.GetItemByID(ctx, id)
 		if err != nil {
 			return nil, err
@@ -245,7 +259,7 @@ func (s *cachingSource) GetItemByID(ctx context.Context, id string) (*DictItem, 
 
 func (s *cachingSource) GetSubtree(ctx context.Context, typeCode, pathPrefix string) ([]*DictItem, error) {
 	var out itemSliceResult
-	if err := s.c.GetOrLoad(ctx, keySubtree(typeCode, pathPrefix), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
+	if err := s.c.GetOrLoad(ctx, keySubtree(appFromCtx(ctx), typeCode, pathPrefix), &out, s.cfg.ttl, func(ctx context.Context) (any, error) {
 		items, err := s.src.GetSubtree(ctx, typeCode, pathPrefix)
 		if err != nil {
 			return nil, err
@@ -265,15 +279,17 @@ func (s *cachingSource) CountItems(ctx context.Context, typeCode string) (int64,
 // ---- 失效入口（写路径由业务在 dict 写入完成后调用；写路径本身永不走缓存） ----
 
 // InvalidateType 失效某类型相关的全部缓存 key：类型元信息、该类型下的整读/分段/子树/批量。
+// 失效范围限定在 ctx 携带的 app 内（app 是 key 的第二段），不会误清其它业务线的同名 code。
 //
 // 注意：GetItemByID 以主键为 key、与类型 code 无直接关联，无法凭 code 反查失效，
 // 因此 InvalidateType 不覆盖按主键的点查缓存；这类缓存依赖 TTL 自然过期。
 // 需要更精细的一致性请改用 InvalidateAll，或在调用方维护 id→code 映射后自行删 key。
 func (s *cachingSource) InvalidateType(ctx context.Context, code string) error {
+	app := appFromCtx(ctx)
 	keys := []string{
-		keyType(code),
-		keyItems(code, true),
-		keyItems(code, false),
+		keyType(app, code),
+		keyItems(app, code, true),
+		keyItems(app, code, false),
 	}
 	return s.c.Delete(ctx, keys...)
 }

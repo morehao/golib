@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/task/gasync"
 	"github.com/morehao/golib/task/gasync/source/db"
 	"gorm.io/gorm"
@@ -198,6 +199,10 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 		return nil, false, err
 	}
 	row.ScopeKey = scope
+	// 业务线 app：从创建者 ctx 取（gormplugin.WithApp）。无 app 时留空串，与旧调用兼容。
+	if app, ok := gormplugin.AppFrom(ctx); ok {
+		row.AppID = app
+	}
 	// 归属快照：created_by 与 last_actor_id 均写本次触发者；空表示系统/内部触发。
 	row.CreatedBy = spec.ActorID
 	row.LastActorID = spec.ActorID
@@ -310,18 +315,18 @@ func (c *Manager) insertAsyncTask(ctx context.Context, row *db.CoreAsyncTask, de
 	}
 
 	sql := fmt.Sprintf(`INSERT %sINTO %s
-(id, created_at, updated_at, scope_key, task_type, status, priority, payload, uniq_key,
+(id, app_id, created_at, updated_at, scope_key, task_type, status, priority, payload, uniq_key,
  created_by, last_actor_id,
  biz_type, biz_id, chain_id, step, prev_step, generation, attempt, max_attempts, timeout_ms, next_run_at,
  worker_id, duration_ms, request_id, trace_id, labels)
-VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
  ?, ?,
  ?, ?, ?, ?, ?, ?, ?, ?, ?,
  %s, '', 0, ?, '', NULLIF(?, ''))%s`,
 		prefix, db.CoreAsyncTaskTableName, c.dialect.EmptyKeyExpr(), nextRunExpr, suffix)
 
 	res := c.db.WithContext(ctx).Exec(sql,
-		row.ID, row.CreatedAt, row.UpdatedAt, row.ScopeKey, row.TaskType, row.Status, row.Priority,
+		row.ID, row.AppID, row.CreatedAt, row.UpdatedAt, row.ScopeKey, row.TaskType, row.Status, row.Priority,
 		payloadOrEmpty(row), // NULLIF(?, '')
 		row.UniqKey,
 		row.CreatedBy, row.LastActorID,

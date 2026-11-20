@@ -393,6 +393,7 @@ defer w.Shutdown(shutdownCtx)
 ```sql
 CREATE TABLE `core_cron_task` (
   `id` varchar(128) COMMENT '任务唯一标识（业务方注册时指定）',
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
   `deleted_at` datetime(3) NULL,
@@ -412,6 +413,7 @@ CREATE TABLE `core_cron_task` (
 
 CREATE TABLE `core_cron_task_run` (
   `id` varchar(36) COMMENT '运行唯一标识（每次运行生成 UUID）',
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
   `created_at` datetime(3) NULL,
   `task_id` varchar(128) NOT NULL COMMENT '所属任务定义 ID',
   `start_at` datetime(3) NOT NULL COMMENT '开始时间',
@@ -433,6 +435,7 @@ CREATE TABLE `core_cron_task_run` (
 ```sql
 CREATE TABLE "core_cron_task" (
   "id" varchar(128),
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "created_at" timestamptz,
   "updated_at" timestamptz,
   "deleted_at" timestamptz,
@@ -454,6 +457,8 @@ CREATE INDEX IF NOT EXISTS "idx_core_cron_task_deleted_at" ON "core_cron_task" (
 
 COMMENT ON COLUMN "core_cron_task"."id" IS '任务唯一标识（业务方注册时指定）';
 
+COMMENT ON COLUMN "core_cron_task"."app_id" IS '业务线标识';
+
 COMMENT ON COLUMN "core_cron_task"."biz_id" IS '业务 ID（如商户号、订单号），可为空';
 
 COMMENT ON COLUMN "core_cron_task"."biz_type" IS '业务类型（如 merchant、order），可为空';
@@ -474,6 +479,7 @@ COMMENT ON COLUMN "core_cron_task"."next_run_at" IS '下次执行时间';
 
 CREATE TABLE "core_cron_task_run" (
   "id" varchar(36),
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "created_at" timestamptz,
   "task_id" varchar(128) NOT NULL,
   "start_at" timestamptz NOT NULL,
@@ -495,6 +501,8 @@ CREATE INDEX IF NOT EXISTS "idx_core_cron_task_run_created_at" ON "core_cron_tas
 
 COMMENT ON COLUMN "core_cron_task_run"."id" IS '运行唯一标识（每次运行生成 UUID）';
 
+COMMENT ON COLUMN "core_cron_task_run"."app_id" IS '业务线标识';
+
 COMMENT ON COLUMN "core_cron_task_run"."task_id" IS '所属任务定义 ID';
 
 COMMENT ON COLUMN "core_cron_task_run"."start_at" IS '开始时间';
@@ -515,6 +523,7 @@ COMMENT ON COLUMN "core_cron_task_run"."request_id" IS '请求 ID';
 ```sql
 CREATE TABLE `core_async_task` (
   `id` varchar(36) COMMENT '任务 ID（UUID v4）',
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
   `scope_key` varchar(64) NOT NULL DEFAULT '' COMMENT '作用域分区键',
@@ -558,6 +567,7 @@ CREATE TABLE `core_async_task` (
 
 CREATE TABLE `core_async_task_run` (
   `id` varchar(36) COMMENT '尝试 ID（UUID v4）',
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
   `created_at` datetime(3) NULL COMMENT '创建时间',
   `async_task_id` varchar(36) NOT NULL COMMENT '所属任务 ID',
   `generation` int NOT NULL DEFAULT 1 COMMENT '所属重放轮次',
@@ -594,6 +604,7 @@ CREATE TABLE `core_async_task_type` (
 ```sql
 CREATE TABLE "core_async_task" (
   "id" varchar(36),
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "created_at" timestamptz,
   "updated_at" timestamptz,
   "scope_key" varchar(64) NOT NULL DEFAULT '',
@@ -644,6 +655,8 @@ CREATE INDEX IF NOT EXISTS "idx_core_async_task_scope_created_by_created_at" ON 
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_task_type_status_created_at" ON "core_async_task" ("task_type","status","created_at");
 
 COMMENT ON COLUMN "core_async_task"."id" IS '任务 ID（UUID v4）';
+
+COMMENT ON COLUMN "core_async_task"."app_id" IS '业务线标识';
 
 COMMENT ON COLUMN "core_async_task"."scope_key" IS '作用域分区键';
 
@@ -703,6 +716,7 @@ COMMENT ON COLUMN "core_async_task"."labels" IS '业务维度标签（JSON）';
 
 CREATE TABLE "core_async_task_run" (
   "id" varchar(36),
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "created_at" timestamptz,
   "async_task_id" varchar(36) NOT NULL,
   "generation" integer NOT NULL DEFAULT 1,
@@ -729,6 +743,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uk_core_async_task_run_async_task_id_generati
 CREATE INDEX IF NOT EXISTS "idx_core_async_task_run_created_at" ON "core_async_task_run" ("created_at");
 
 COMMENT ON COLUMN "core_async_task_run"."id" IS '尝试 ID（UUID v4）';
+
+COMMENT ON COLUMN "core_async_task_run"."app_id" IS '业务线标识';
 
 COMMENT ON COLUMN "core_async_task_run"."created_at" IS '创建时间';
 

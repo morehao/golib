@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gutil"
 	"github.com/morehao/golib/storage"
 	"gorm.io/gorm"
@@ -27,6 +28,10 @@ type FileStore struct {
 	bucket         string
 	signSecret     string
 	maxUploadBytes int64
+	// appScope 表示是否启用了按 app（业务线）的数据隔离（WithAppScope opt-in）。
+	// 开启时 object key 带 files/<app>/ 段、预签名 token 绑 app、且要求 ctx 有 app；
+	// 默认关闭，退回原单租户行为（files/<id[:2]>/<id>、不绑 app、无 app 也可用）。
+	appScope bool
 }
 
 // New 创建文件存储组件。
@@ -52,7 +57,18 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...StoreOption) (*
 		}
 	}
 
-	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
+	getDB := gormplugin.TenantGetter(db)
+	// app 隔离由调用方 opt-in：仅当传了 WithAppScope() 才注册租户回调。
+	// 未注册时 core_file / core_file_upload 的读/写不做 app 收敛、Create 不补
+	// app_id（app_id 恒为 ''），退回单租户行为——无 app 上下文亦可正常使用。
+	if o.appScope {
+		// 注册租户隔离回调（幂等）：core_file / core_file_upload 的读/写会自动按
+		// ctx 中的 app 收敛；ctx 缺 app 时 fail-closed 返回 ErrAppMissing，避免跨
+		// 业务线读写。两表由装配层一次性传入，共享同一份回调配置。
+		if err := gormplugin.EnableAppScope(db, FileEntity{}.TableName(), FileUploadEntity{}.TableName()); err != nil {
+			return nil, fmt.Errorf("filestore.New: register tenant scope: %w", err)
+		}
+	}
 	return &FileStore{
 		fileDao:        gormdao.NewDao[FileEntity, []FileEntity, string](FileEntity{}.TableName(), "filestore.file", getDB, gormdao.WithoutSoftDelete()),
 		uploadDao:      gormdao.NewDao[FileUploadEntity, []FileUploadEntity, string](FileUploadEntity{}.TableName(), "filestore.upload", getDB, gormdao.WithoutSoftDelete()),
@@ -60,6 +76,7 @@ func New(db *gorm.DB, st storage.Storage, bucket string, opts ...StoreOption) (*
 		bucket:         bucket,
 		signSecret:     o.signSecret,
 		maxUploadBytes: maxUploadBytes,
+		appScope:       o.appScope,
 	}, nil
 }
 
@@ -105,15 +122,42 @@ func (s *FileStore) parseStorageURI(uri string) (scheme, bucket, key string, err
 	return scheme, bucket, key, nil
 }
 
-// newObjectKey 生成服务端对象 key。客户端无法影响其取值，
-// 因此不存在"指定 key 覆盖他人对象"的越权面。
-// 按 ID 前两位分目录，避免单一前缀下对象过度集中。
-func (s *FileStore) newObjectKey() (string, error) {
+// newObjectKey 生成服务端对象 key。客户端无法影响其取值，因此不存在"指定 key
+// 覆盖他人对象"的越权面。按 ID 前两位分目录，避免单一前缀下对象过度集中。
+//
+// 落点按 appScope 分支：
+//   - appScope 开：files/<app>/<id[:2]>/<id>，app 是业务线目录段，不同 app 的物理
+//     对象落在各自前缀下，便于按前缀做生命周期/清理策略，也与"去重不跨 app 共享"
+//     的决策保持一致；
+//   - appScope 关：files/<id[:2]>/<id>，无 app 段，退回原单租户行为（app 被忽略）。
+func (s *FileStore) newObjectKey(app string) (string, error) {
 	id := gutil.GenUUID()
 	if len(id) < 2 {
 		return "", fmt.Errorf("filestore.newObjectKey: generated id too short: %q", id)
 	}
+	if s.appScope {
+		return objectKeyPrefix + app + "/" + id[:2] + "/" + id, nil
+	}
 	return objectKeyPrefix + id[:2] + "/" + id, nil
+}
+
+// requireApp 按是否启用 app 隔离决定要不要强制 ctx 带 app：
+//
+//   - appScope 关：不需要 app，直接返回空串、nil——单租户语义下上传/查询都不依赖
+//     ctx 中的 app；
+//   - appScope 开：从 ctx 取出业务线标识。filestore 的所有写路径都会触达受租户隔离
+//     的表（core_file / core_file_upload），缺失 app 时写入必被 gormdao 回调
+//     fail-closed 拒绝；这里提前取出是为了给 newObjectKey 提供 app 目录段，并在
+//     触达存储（产生物理对象）之前就给出明确错误，避免先写对象再回滚。
+func (s *FileStore) requireApp(ctx context.Context) (string, error) {
+	if !s.appScope {
+		return "", nil
+	}
+	app, ok := gormplugin.AppFrom(ctx)
+	if !ok {
+		return "", gormplugin.ErrAppMissing
+	}
+	return app, nil
 }
 
 func (s *FileStore) fillFileDetail(ctx context.Context, upload *FileUploadEntity) (*FileDetail, error) {
@@ -243,8 +287,13 @@ func (s *FileStore) UploadAndRecord(ctx context.Context, req UploadAndRecordRequ
 	hit := err == nil && fh != nil
 
 	if !hit {
-		// 对象 key 完全由服务端生成，客户端无法指定落点。
-		key, keyErr := s.newObjectKey()
+		// 对象 key 完全由服务端生成，客户端无法指定落点。app 从 ctx 取，
+		// 既用于 key 的业务线目录段，也提前对"缺 app"fail-closed。
+		app, appErr := s.requireApp(ctx)
+		if appErr != nil {
+			return nil, fmt.Errorf("filestore.UploadAndRecord: %w", appErr)
+		}
+		key, keyErr := s.newObjectKey(app)
 		if keyErr != nil {
 			return nil, fmt.Errorf("filestore.UploadAndRecord: %w", keyErr)
 		}
@@ -336,7 +385,9 @@ func (s *FileStore) PresignGetFileURL(ctx context.Context, id string, opts ...Pr
 	if err != nil {
 		return nil, fmt.Errorf("filestore.PresignGetFileURL: %w", err)
 	}
-	return presigned, nil
+	// token 绑 app：在驱动返回的 URL 上附加 app 绑定签名，消费端按 ctx app 校验，
+	// 防跨 app 转发该 URL 越权读取（无 app 上下文时原样返回）。
+	return s.applyPresignAppBound(ctx, presigned)
 }
 
 // DeleteFile 删除一条上传记录，并在该物理文件不再被任何记录引用时回收存储对象，
@@ -465,7 +516,11 @@ func (s *FileStore) InitMultipartUpload(ctx context.Context, req InitMultipartUp
 		return nil, fmt.Errorf("%w: size must be positive", ErrInvalidArgument)
 	}
 
-	key, err := s.newObjectKey()
+	app, appErr := s.requireApp(ctx)
+	if appErr != nil {
+		return nil, fmt.Errorf("filestore.InitMultipartUpload: %w", appErr)
+	}
+	key, err := s.newObjectKey(app)
 	if err != nil {
 		return nil, fmt.Errorf("filestore.InitMultipartUpload: %w", err)
 	}
@@ -538,7 +593,8 @@ func (s *FileStore) PresignUploadPartURL(ctx context.Context, id string, partNum
 	if err != nil {
 		return nil, fmt.Errorf("filestore.PresignUploadPartURL: presign: %w", err)
 	}
-	return presigned, nil
+	// token 绑 app：分片 URL 同样绑定 app，防止跨 app 转发分片上传覆盖他人对象。
+	return s.applyPresignAppBound(ctx, presigned)
 }
 
 func (s *FileStore) CompleteMultipartUpload(ctx context.Context, req CompleteMultipartUploadRequest) (*FileDetail, error) {

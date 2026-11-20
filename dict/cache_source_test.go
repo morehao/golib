@@ -92,7 +92,7 @@ func newTestCache(t *testing.T) gcache.Cache {
 // 并把 Dict 的 source 换成该装饰器，返回计数源与装饰器句柄。
 func newCachingFixture(t *testing.T) (*fixture, *countingSource, Source) {
 	t.Helper()
-	f := newFixture(t)
+	f := newFixture(t, WithAppScope())
 	counting := &countingSource{inner: f.d.store.source}
 	cache := newTestCache(t)
 	caching := NewCachingSource(counting, cache)

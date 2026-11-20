@@ -7,6 +7,9 @@ type options struct {
 	autoMigrate bool
 	maxLevel    int
 	source      Source
+	// appScope 控制是否启用业务线（app）隔离，默认 false（单租户行为）。
+	// 仅当调用方显式传 WithAppScope() 时才注册 gormdao 的租户回调。
+	appScope bool
 }
 
 func defaultOptions() *options {
@@ -42,6 +45,22 @@ func WithMaxLevel(maxLevel int) Option {
 // WithSource 注入自定义数据源（阶段三的缓存装饰器接缝；默认使用直读 DB 的 dbSource）。
 func WithSource(source Source) Option {
 	return func(o *options) { o.source = source }
+}
+
+// WithAppScope 开启业务线（app）数据隔离（opt-in，默认关闭）。
+//
+// 不传本选项时（默认）：不注册 gormdao 租户回调，所有读写退回单租户行为——
+// app_id 恒为空串，uk_app_code / uk_type_value 实际退化为 (code) / (type_code,value)，
+// 与原来的单租户语义等价，调用方无需携带 app 上下文。
+//
+// 显式传入本选项时：注册 gormplugin.EnableAppScope，所有读写按 ctx 中的 app 收敛，
+// ctx 缺 app 时 fail-closed 返回 gormplugin.ErrAppMissing，写入前自动回填 app_id。
+// 同一 app 内 code 唯一，不同业务线的同名 code 互不可见、互不冲突。
+//
+//	d, err := dict.New(db)                    // 默认：单租户，不隔离
+//	d, err := dict.New(db, dict.WithAppScope()) // 开启：多业务线隔离（ctx 需带 app）
+func WithAppScope() Option {
+	return func(o *options) { o.appScope = true }
 }
 
 // QueryOption 读接口的可选参数。

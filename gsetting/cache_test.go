@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/gcache"
 	_ "github.com/morehao/golib/gcache/driver/memory"
 	_ "github.com/morehao/golib/gcache/driver/redis"
 	_ "github.com/morehao/golib/glog/driver/slog"
 	_ "github.com/morehao/golib/glog/driver/zap"
-	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -20,8 +20,8 @@ import (
 // countingPort 包一层 cachePort，统计回源次数（GetOrLoad 的 load 被调用次数）
 // 与 Delete 次数，用于断言"命中不回表"与"写后失效"。
 type countingPort struct {
-	inner  cachePort
-	loads  atomic.Int64
+	inner   cachePort
+	loads   atomic.Int64
 	deletes atomic.Int64
 }
 
@@ -59,17 +59,14 @@ func newRedisCache(t *testing.T) gcache.Cache {
 
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&SettingEntity{}))
-	return db
+	return newTenantDB(t)
 }
 
 // newSettingWithCache 建一个带 countingPort 的 Setting 与其底层 store。
 func newSettingWithCache(t *testing.T, c cachePort) (*Setting, *store, *countingPort) {
 	t.Helper()
 	db := newTestDB(t)
-	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
+	getDB := gormplugin.TenantGetter(db)
 	registry := map[ValueType]Codec{
 		ValueTypeJson: &JSONCodec{}, ValueTypeToml: &TOMLCodec{}, ValueTypeYaml: &YAMLCodec{},
 	}
@@ -83,7 +80,7 @@ func newSettingWithCache(t *testing.T, c cachePort) (*Setting, *store, *counting
 // TestCache_HitLoadsOnce 同一 key 连读两次，回源只 1 次。
 func TestCache_HitLoadsOnce(t *testing.T) {
 	k, _, cp := newSettingWithCache(t, newMemCache(t))
-	ctx := context.Background()
+	ctx := withApp(t)
 	err := k.GetStore().Set(ctx, &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
 	require.NoError(t, err)
 
@@ -100,7 +97,7 @@ func TestCache_HitLoadsOnce(t *testing.T) {
 // TestCache_EmptyNegativeCaching 读不存在的 key 两次，回源只 1 次且返回零值无 error。
 func TestCache_EmptyNegativeCaching(t *testing.T) {
 	k, _, cp := newSettingWithCache(t, newMemCache(t))
-	ctx := context.Background()
+	ctx := withApp(t)
 
 	v, err := k.GetString(ctx, "g", "missing")
 	require.NoError(t, err)
@@ -114,7 +111,7 @@ func TestCache_EmptyNegativeCaching(t *testing.T) {
 func TestCache_CiphertextCached(t *testing.T) {
 	mc := newMemCache(t)
 	k, st, _ := newSettingWithCache(t, mc)
-	ctx := context.Background()
+	ctx := withApp(t)
 
 	require.NoError(t, st.SetEncrypted(ctx, "g", "secret", ValueTypeString, "plain-123"))
 
@@ -125,7 +122,8 @@ func TestCache_CiphertextCached(t *testing.T) {
 
 	// 直接查缓存：应是 settingCacheValue，Entity.Value 为带 enc: 前缀的密文
 	var cached settingCacheValue
-	require.NoError(t, mc.Get(ctx, cacheKey("g", "secret"), &cached))
+	app, _ := gormplugin.AppFrom(ctx)
+	require.NoError(t, mc.Get(ctx, cacheKey(app, "g", "secret"), &cached))
 	require.True(t, cached.Found)
 	require.NotNil(t, cached.Entity)
 	require.NotEqual(t, "plain-123", cached.Entity.Value, "缓存中不应出现明文")
@@ -134,10 +132,10 @@ func TestCache_CiphertextCached(t *testing.T) {
 
 // TestCache_NoCacheRegression 不传缓存时行为与现状一致。
 func TestCache_NoCacheRegression(t *testing.T) {
-	db := newTestDB(t)
+	db := newPlainDB(t) // New 内部会 Migrate + RegisterTenantScope
 	k, err := New(db)
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := withApp(t)
 
 	err = k.GetStore().Set(ctx, &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
 	require.NoError(t, err)
@@ -153,7 +151,7 @@ func TestCache_NoCacheRegression(t *testing.T) {
 
 // TestWithCache_NilSafe WithCache(nil) 不 panic 且等价无缓存。
 func TestWithCache_NilSafe(t *testing.T) {
-	db := newTestDB(t)
+	db := newPlainDB(t)
 	k, err := New(db, WithCache(nil, time.Minute))
 	require.NoError(t, err)
 	require.Nil(t, k.cache)
@@ -164,7 +162,7 @@ func TestCache_WriteInvalidation(t *testing.T) {
 	mc := newMemCache(t)
 	k, st, cp := newSettingWithCache(t, mc)
 	admin := newAdmin(st, cp)
-	ctx := context.Background()
+	ctx := withApp(t)
 
 	// Create → 读为新值
 	delsBefore := cp.deletes.Load()
@@ -196,7 +194,7 @@ func TestCache_WriteInvalidation(t *testing.T) {
 func TestCache_RedisBackend(t *testing.T) {
 	rc := newRedisCache(t)
 	k, _, cp := newSettingWithCache(t, rc)
-	ctx := context.Background()
+	ctx := withApp(t)
 
 	err := k.GetStore().Set(ctx, &SettingEntity{Group: "g", Key: "k", ValueType: ValueTypeString, Value: "v", Status: StatusEnabled})
 	require.NoError(t, err)

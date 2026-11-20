@@ -7,6 +7,7 @@ import (
 
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
 	"github.com/morehao/golib/dbaccess/gormdao"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -76,7 +77,12 @@ func newFixtureWithDB(t *testing.T, db *gorm.DB, opts ...Option) *fixture {
 	return &fixture{t: t, db: db, d: d, counter: counter}
 }
 
-func (f *fixture) ctx() context.Context { return context.Background() }
+// testApp 是测试默认业务线标识：绝大多数用例在单一 app 内验证既有语义。
+const testApp = "app_test"
+
+func (f *fixture) ctx() context.Context {
+	return gormplugin.WithApp(context.Background(), testApp)
+}
 
 func (f *fixture) admin() *AdminAPI { return f.d.Admin() }
 
@@ -132,8 +138,12 @@ func (f *fixture) rawInsertItem(item *DictItem) {
 	if item.ID == "" {
 		item.StringID = gormdao.StringID{ID: newID()}
 	}
-	require.NoError(f.t, f.db.Table(tableNameItem).Create(item).Error)
+	require.NoError(f.t, f.rawDB().Table(tableNameItem).Create(item).Error)
 }
+
+// rawDB 返回带测试 app 上下文的原始 *gorm.DB：用于绕过 AdminAPI 直插/直改构造脏数据。
+// 仍走 gormdao 的租户回调（app 由 ctx 注入），确保脏数据落在同一业务线内。
+func (f *fixture) rawDB() *gorm.DB { return f.db.WithContext(f.ctx()) }
 
 func valuesOf(items []*DictItem) []string {
 	values := make([]string, 0, len(items))
@@ -151,7 +161,7 @@ func labelsOf(items []*DictItem) []string {
 	return labels
 }
 
-func contextTODO() context.Context { return context.Background() }
+func contextTODO() context.Context { return gormplugin.WithApp(context.Background(), testApp) }
 
 // openRawSQLite 打开一个不含任何表的 sqlite 库，用于验证 DDL 纪律。
 func openRawSQLite(t *testing.T) (*gorm.DB, error) {

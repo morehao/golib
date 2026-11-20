@@ -33,8 +33,12 @@ var ErrEmptyScopeValue = errors.New("gormplugin: scope value is empty while inje
 type ScopeResolver func(ctx context.Context) (value any, inject bool, declared bool)
 
 type ScopePlugin struct {
-	fieldName    string
-	skipTables   map[string]struct{}
+	fieldName  string
+	skipTables map[string]struct{}
+	onlyTables map[string]struct{}
+	// sharedOnly 非空时优先于 onlyTables：多个组件共享同一 *gorm.DB 时，EnableAppScope
+	// 让所有已注册插件共用同一个可变白名单集合，后调用者追加的表名也能被已有回调看到。
+	sharedOnly   *sharedTableSet
 	resolver     ScopeResolver
 	missingScope func(db *gorm.DB, tableName string) error
 }
@@ -60,6 +64,13 @@ type ScopeConfig struct {
 	MissingScope func(db *gorm.DB, tableName string) error
 	// SkipTables 指定跳过条件注入的表名列表，可选。
 	SkipTables []string
+	// OnlyTables 指定「仅对这些表」注入作用域（白名单），可选。
+	// 非空时启用白名单语义：只有列出的表会被注入，其余表一律豁免；与 SkipTables 互斥。
+	// 共享同一 *gorm.DB 的组件用它把隔离限定在自有表，避免误伤同库其它表。
+	OnlyTables []string
+	// sharedOnly 由 EnableAppScope 内部注入：同一 db 上多次注册时共享同一份可变白名单，
+	// 保证后来的组件追加的表名也被隔离（合并非覆盖）。外部调用方无需设置。
+	sharedOnly *sharedTableSet
 }
 
 // New 创建 ScopePlugin。FieldName 与（Resolver 或 ExtractFunc）为必填配置，
@@ -87,6 +98,10 @@ func New(cfg *ScopeConfig) (*ScopePlugin, error) {
 		}
 	}
 
+	if len(cfg.SkipTables) > 0 && len(cfg.OnlyTables) > 0 {
+		return nil, fmt.Errorf("gormplugin: ScopeConfig.SkipTables and OnlyTables are mutually exclusive")
+	}
+
 	skipTables := make(map[string]struct{})
 	for _, t := range cfg.SkipTables {
 		normalized := normalizeTableName(t)
@@ -94,10 +109,19 @@ func New(cfg *ScopeConfig) (*ScopePlugin, error) {
 			skipTables[normalized] = struct{}{}
 		}
 	}
+	onlyTables := make(map[string]struct{})
+	for _, t := range cfg.OnlyTables {
+		normalized := normalizeTableName(t)
+		if normalized != "" {
+			onlyTables[normalized] = struct{}{}
+		}
+	}
 
 	return &ScopePlugin{
 		fieldName:    cfg.FieldName,
 		skipTables:   skipTables,
+		onlyTables:   onlyTables,
+		sharedOnly:   cfg.sharedOnly,
 		resolver:     resolver,
 		missingScope: cfg.MissingScope,
 	}, nil
@@ -160,7 +184,7 @@ func (p *ScopePlugin) addScope(db *gorm.DB) {
 		return
 	}
 
-	if p.isSkipped(tableName) {
+	if p.isSkipped(tableName) || !p.inOnly(tableName) {
 		return
 	}
 
@@ -222,6 +246,22 @@ func isEmptyScopeValue(value any) bool {
 		return s == ""
 	}
 	return false
+}
+
+// inOnly 实现白名单语义：白名单为空时返回 true（不限制）；非空时仅命中白名单的表注入。
+// 优先使用 sharedOnly（多组件共享同一 db 时的合并白名单），否则用插件自身的 onlyTables。
+func (p *ScopePlugin) inOnly(tableName string) bool {
+	if p.sharedOnly != nil {
+		if p.sharedOnly.empty() {
+			return true
+		}
+		return p.sharedOnly.has(tableName)
+	}
+	if len(p.onlyTables) == 0 {
+		return true
+	}
+	_, ok := p.onlyTables[normalizeTableName(tableName)]
+	return ok
 }
 
 func (p *ScopePlugin) isSkipped(tableName string) bool {

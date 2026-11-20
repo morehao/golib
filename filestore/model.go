@@ -20,12 +20,18 @@ const (
 	FileStatusAborted   FileStatus = "aborted"
 )
 
-// FileEntity 物理文件的元数据记录，按内容哈希去重。
+// FileEntity 物理文件的元数据记录，按 (app_id, content_hash) 去重。
+//
+// AppID 是业务线判别列，由 gormdao 的 Create 回调在写入前自动注入；唯一键
+// uk_app_app_hash 把 app_id 作为前导列，使去重收敛到单个 app 内：
+// 不同业务线的相同内容各存独立物理对象，**不跨 app 共享**（避免 A 业务线删除
+// 对象时把 B 业务线仍在用的文件一并回收，也避免跨业务线可推断内容存在性）。
 type FileEntity struct {
 	gormdao.StringID
 	CreatedAt   time.Time `gorm:"column:created_at;not null;autoCreateTime"`
 	UpdatedAt   time.Time `gorm:"column:updated_at;not null;autoUpdateTime"`
-	ContentHash string    `gorm:"column:content_hash;type:varchar(64);not null;default:'';uniqueIndex:uk_content_hash"`
+	AppID       string    `gorm:"column:app_id;type:varchar(64);not null;default:'';uniqueIndex:uk_app_app_hash,priority:1;comment:业务线标识"`
+	ContentHash string    `gorm:"column:content_hash;type:varchar(64);not null;default:'';uniqueIndex:uk_app_app_hash,priority:2;comment:内容哈希（app 内唯一）"`
 	Size        int64     `gorm:"column:size;not null;default:0"`
 	StorageURI  string    `gorm:"column:storage_uri;type:varchar(512);not null;default:''"`
 }
@@ -36,6 +42,9 @@ func (FileEntity) TableName() string { return "core_file" }
 // 内容相关信息（哈希/大小/存储路径）不冗余存储，需要时按 FileID 查 File 表。
 type FileUploadEntity struct {
 	gormdao.BaseEntity
+	// AppID 业务线判别列：由 gormdao 的 Create 回调自动注入，读/写均由回调按
+	// ctx 中的 app 收敛（core_file_upload 已注册 RegisterTenantScope）。
+	AppID    string     `gorm:"column:app_id;type:varchar(64);not null;default:'';comment:业务线标识"`
 	FileID   string     `gorm:"column:file_id;type:varchar(36);not null;default:'';index"`
 	UploadID string     `gorm:"column:upload_id;type:varchar(128);not null;default:'';index"`
 	Name     string     `gorm:"column:name;type:varchar(256);not null;default:''"`

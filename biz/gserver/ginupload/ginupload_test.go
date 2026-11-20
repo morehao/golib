@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/morehao/golib/biz/gserver/ginserver"
 	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/morehao/golib/filestore"
 	"github.com/morehao/golib/storage"
 	"github.com/stretchr/testify/require"
@@ -32,9 +33,15 @@ const (
 	testAppName   = "ginupload"
 	testVersion   = "v1"
 	testAPIPrefix = "/v1/ginupload"
+	// testAppID 是直接调用组件 API 的用例所用的测试业务线标识（testAppContext 使用）。
+	testAppID = "test-app"
 )
 
 var bg = context.Background()
+
+// testAppContext 返回带测试 app 的 context，仅供直接调用组件 API 的用例以及
+// opt-in 隔离演示使用；默认非隔离路径用 bg 即可。保留以简化既有调用点。
+func testAppContext() context.Context { return gormplugin.WithApp(context.Background(), testAppID) }
 
 type mockStorage struct {
 	storage.Storage
@@ -271,7 +278,7 @@ func TestHandleUpload(t *testing.T) {
 // reader 长度与 size 一致，保证落库 size 等于声明值。
 func seedUpload(t *testing.T, fs *filestore.FileStore, hash, name string, size int64) *filestore.FileDetail {
 	t.Helper()
-	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
+	detail, err := fs.UploadAndRecord(testAppContext(), filestore.UploadAndRecordRequest{
 		ContentHash: hash,
 		Name:        name,
 		Size:        size,
@@ -398,7 +405,7 @@ func TestHandleListParts(t *testing.T) {
 	require.NoError(t, err)
 	router := setupRouter(fs)
 
-	detail, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(testAppContext(), filestore.InitMultipartUploadRequest{
 		ContentHash: "parts-fp",
 		Name:        "parts.mp4",
 		Size:        1000,
@@ -435,7 +442,7 @@ func TestHandlePresignUploadPartURL(t *testing.T) {
 	router := setupRouter(fs)
 
 	// init first
-	detail, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(testAppContext(), filestore.InitMultipartUploadRequest{
 		ContentHash: "presign-fp",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -484,7 +491,7 @@ func TestHandleCompleteMultipartUpload(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(testAppContext(), filestore.InitMultipartUploadRequest{
 		ContentHash: "complete-fp",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -531,7 +538,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.InitMultipartUpload(bg, filestore.InitMultipartUploadRequest{
+	detail, err := fs.InitMultipartUpload(testAppContext(), filestore.InitMultipartUploadRequest{
 		ContentHash: "abort-fp",
 		Name:        "test.mp4",
 		Size:        1000,
@@ -549,7 +556,7 @@ func TestHandleAbortMultipartUpload(t *testing.T) {
 	require.Equal(t, 0, resp.Code)
 
 	// verify status changed
-	updated, err := fs.GetFile(bg, detail.FileUploadID)
+	updated, err := fs.GetFile(testAppContext(), detail.FileUploadID)
 	require.NoError(t, err)
 	require.Equal(t, filestore.FileStatusAborted, updated.Status)
 }
@@ -558,7 +565,7 @@ func TestHandleGetFileDetail(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
+	detail, err := fs.UploadAndRecord(testAppContext(), filestore.UploadAndRecordRequest{
 		ContentHash: "rec-fp",
 		Name:        "rec.txt",
 		Size:        100,
@@ -601,7 +608,7 @@ func TestHandlePresignGetFileURL(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
+	detail, err := fs.UploadAndRecord(testAppContext(), filestore.UploadAndRecordRequest{
 		ContentHash: "dl-fp",
 		Name:        "download.txt",
 		Size:        100,
@@ -664,7 +671,7 @@ func TestHandleDeleteFile(t *testing.T) {
 	require.Equal(t, 0, resp.Code)
 
 	// verify deleted
-	_, err = fs.GetFile(bg, detail.FileUploadID)
+	_, err = fs.GetFile(testAppContext(), detail.FileUploadID)
 	require.Error(t, err)
 }
 
@@ -712,7 +719,7 @@ func TestHandleRedirectGetFileURL(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
+	detail, err := fs.UploadAndRecord(testAppContext(), filestore.UploadAndRecordRequest{
 		ContentHash: "redirect-fp",
 		Name:        "img.png",
 		Size:        1024,
@@ -805,7 +812,7 @@ func TestHandleServeFileByID(t *testing.T) {
 	fs := newTestFileStore(t)
 	router := setupRouter(fs)
 
-	detail, err := fs.UploadAndRecord(bg, filestore.UploadAndRecordRequest{
+	detail, err := fs.UploadAndRecord(testAppContext(), filestore.UploadAndRecordRequest{
 		ContentHash: "serve-fp",
 		Name:        "hello.txt",
 		Size:        11,
@@ -958,7 +965,14 @@ func assertStorageError(t *testing.T, w *httptest.ResponseRecorder, status int, 
 
 // --- presign token helpers ---
 
+// buildPresignToken 构造标准 token（2 段，不带 app 绑定）。
+// 默认示例 router 不挂 app 中间件、组件非隔离（不绑定 app），故用不带 app 的 token；
 func buildPresignToken(signSecret, bucket, key, op string, expires int64) string {
+	return buildInnerPresignToken(signSecret, bucket, key, op, expires)
+}
+
+// buildInnerPresignToken 构造不带 app 绑定的内层标准 token（2 段）。
+func buildInnerPresignToken(signSecret, bucket, key, op string, expires int64) string {
 	payloadBytes, _ := json.Marshal(map[string]interface{}{
 		"key": bucket + "/" + key,
 		"op":  op,
@@ -969,6 +983,11 @@ func buildPresignToken(signSecret, bucket, key, op string, expires int64) string
 	mac.Write([]byte(payloadB64))
 	sigB64 := base64.URLEncoding.EncodeToString(mac.Sum(nil))
 	return payloadB64 + "." + sigB64
+}
+
+// buildPresignTokenNoApp 构造**不携带** app 绑定的 token，用于验证历史/无 app 上下文兼容路径。
+func buildPresignTokenNoApp(signSecret, bucket, key, op string, expires int64) string {
+	return buildInnerPresignToken(signSecret, bucket, key, op, expires)
 }
 
 const testSignSecret = "test-sign-secret"

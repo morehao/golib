@@ -38,8 +38,12 @@ const (
 // SettingEntity 配置项
 type SettingEntity struct {
 	gormdao.BaseEntity
-	Group     string    `gorm:"column:group;type:varchar(64);not null;default:'default';uniqueIndex:uk_group_key;comment:配置分组，用于业务隔离，如 payment、notification，默认 default"`
-	Key       string    `gorm:"column:key;type:varchar(128);not null;uniqueIndex:uk_group_key;comment:配置键名，同一分组内唯一"`
+	// AppID 是业务线判别列，由 gormdao 的 Create 回调在写入前自动注入；唯一键
+	// uk_app_group_key 把 app 作为前导列，使 (app, group, key) 三者共同唯一，
+	// 不同业务线的同名 (group, key) 互不覆盖、互不可见。
+	AppID     string    `gorm:"column:app_id;type:varchar(64);not null;default:'';uniqueIndex:uk_app_group_key,priority:1;comment:业务线标识"`
+	Group     string    `gorm:"column:group;type:varchar(64);not null;default:'default';uniqueIndex:uk_app_group_key,priority:2;comment:配置分组，用于业务隔离，如 payment、notification，默认 default"`
+	Key       string    `gorm:"column:key;type:varchar(128);not null;uniqueIndex:uk_app_group_key,priority:3;comment:配置键名，同一分组内唯一"`
 	ValueType ValueType `gorm:"column:value_type;type:varchar(32);not null;default:'string';comment:值的数据类型，可选 json/toml/yaml/string/int/bool/float，默认 string"`
 	// Value 不指定 type，由 GORM 按方言选择列类型：
 	// MySQL 映射为 longtext（约 4GB），PostgreSQL/SQLite 映射为 text（无长度上限），

@@ -2,7 +2,6 @@ package ginupload
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -85,7 +84,7 @@ func TestHandleUpload_ServerGeneratedKey(t *testing.T) {
 		code, fileID, msg := parseUploadResp(t, w)
 		require.Equal(t, 0, code, "upload %q failed: %s", content, msg)
 
-		detail, err := fs.GetFile(context.Background(), fileID)
+		detail, err := fs.GetFile(testAppContext(), fileID)
 		require.NoError(t, err)
 		require.True(t, strings.HasPrefix(detail.StorageURI, "file:///"+streamTestBucket+"/files/"),
 			"key 必须由服务端生成: %s", detail.StorageURI)
@@ -93,7 +92,7 @@ func TestHandleUpload_ServerGeneratedKey(t *testing.T) {
 		require.EqualValues(t, len(content), detail.Size)
 
 		// 对象内容必须与本次上传一致，不能被后一次上传覆盖
-		rc, _, err := fs.Open(context.Background(), fileID)
+		rc, _, err := fs.Open(testAppContext(), fileID)
 		require.NoError(t, err)
 		got, err := io.ReadAll(rc)
 		rc.Close()
@@ -128,7 +127,7 @@ func TestHandleUpload_FieldOrderIndependent(t *testing.T) {
 	code, fileID, msg := parseUploadResp(t, w)
 	require.Equal(t, 0, code, "msg=%s", msg)
 
-	detail, err := fs.GetFile(context.Background(), fileID)
+	detail, err := fs.GetFile(testAppContext(), fileID)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(detail.StorageURI, "file:///"+streamTestBucket+"/files/"), detail.StorageURI)
 	require.EqualValues(t, len("hello"), detail.Size)
@@ -223,7 +222,7 @@ func TestHandleUpload_LargeFileMemoryBounded(t *testing.T) {
 	code, fileID, msg := parseUploadResp(t, w)
 	require.Equal(t, 0, code, "msg=%s", msg)
 
-	detail, err := fs.GetFile(context.Background(), fileID)
+	detail, err := fs.GetFile(testAppContext(), fileID)
 	require.NoError(t, err)
 	require.EqualValues(t, bodySize, detail.Size, "落库大小应为实际写入字节数")
 
@@ -295,7 +294,7 @@ func TestMultipartDirectUpload_E2E(t *testing.T) {
 	fileID := initResp.Data.FileID
 
 	// key 由服务端生成，客户端无法指定：从文件详情读取实际 key。
-	detail, err := fs.GetFile(context.Background(), fileID)
+	detail, err := fs.GetFile(testAppContext(), fileID)
 	require.NoError(t, err)
 	_, _, key, err := storage.ParseURI(detail.StorageURI)
 	require.NoError(t, err)
@@ -384,7 +383,7 @@ func TestMultipartDirectUpload_CompleteValidatesParts(t *testing.T) {
 	require.Equal(t, 0, initResp.Code, initResp.Msg)
 	fileID := initResp.Data.FileID
 	require.NotEmpty(t, fileID)
-	detail, err := fs.GetFile(context.Background(), fileID)
+	detail, err := fs.GetFile(testAppContext(), fileID)
 	require.NoError(t, err)
 	_, _, key, err := storage.ParseURI(detail.StorageURI)
 	require.NoError(t, err)

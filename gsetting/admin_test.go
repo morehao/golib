@@ -1,23 +1,18 @@
 package gsetting
 
 import (
-	"context"
 	"testing"
 
-	"github.com/morehao/golib/dbaccess/dbgorm/driver/sqlite"
+	"github.com/morehao/golib/dbaccess/gormplugin"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // newTestAdmin 构造一个挂内存 sqlite 的 AdminAPI，不依赖外部 PG/Redis。
+// 底层 db 已注册租户隔离回调，且使用 TenantGetter，因此读写按 ctx 中的 app 收敛。
 func newTestAdmin(t *testing.T) (*AdminAPI, *store) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("sqlite://:memory:"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&SettingEntity{}))
-
-	getDB := func(ctx context.Context) *gorm.DB { return db.WithContext(ctx) }
-	st := newStore(getDB, nil, nil)
+	db := newTenantDB(t)
+	st := newStore(gormplugin.TenantGetter(db), nil, nil)
 	return newAdmin(st, nil), st
 }
 
@@ -25,7 +20,7 @@ func newTestAdmin(t *testing.T) (*AdminAPI, *store) {
 // 历史缺陷：任意字符串会被原样落库，状态机被破坏。
 func TestAdminCreate_InvalidStatus(t *testing.T) {
 	admin, st := newTestAdmin(t)
-	ctx := context.Background()
+	ctx := withApp(t)
 
 	err := admin.Create(ctx, &CreateReq{Group: "g", Key: "k", Value: "v", Status: "weird"})
 	require.ErrorIs(t, err, errInvalidStatus)
@@ -43,7 +38,7 @@ func TestAdminCreate_InvalidStatus(t *testing.T) {
 // TestAdminUpdate_InvalidStatus 更新时同样禁止脏状态写入。
 func TestAdminUpdate_InvalidStatus(t *testing.T) {
 	admin, st := newTestAdmin(t)
-	ctx := context.Background()
+	ctx := withApp(t)
 	require.NoError(t, admin.Create(ctx, &CreateReq{Group: "g", Key: "k", Value: "v"}))
 
 	entity, err := st.Get(ctx, "g", "k")
@@ -62,7 +57,7 @@ func TestAdminUpdate_InvalidStatus(t *testing.T) {
 // 而不是拿到零值实体后报出 "group and key are required" 这种误导性错误。
 func TestAdminGetByID_NotFound(t *testing.T) {
 	admin, _ := newTestAdmin(t)
-	ctx := context.Background()
+	ctx := withApp(t)
 
 	info, err := admin.GetByID(ctx, "not-exist-id")
 	require.ErrorIs(t, err, ErrSettingNotFound)
@@ -73,7 +68,7 @@ func TestAdminGetByID_NotFound(t *testing.T) {
 func TestAdminUpdate_NotFound(t *testing.T) {
 	admin, _ := newTestAdmin(t)
 
-	err := admin.Update(context.Background(), "not-exist-id", &UpdateReq{Description: "x"})
+	err := admin.Update(withApp(t), "not-exist-id", &UpdateReq{Description: "x"})
 	require.ErrorIs(t, err, ErrSettingNotFound)
 }
 
@@ -81,7 +76,7 @@ func TestAdminUpdate_NotFound(t *testing.T) {
 // 非法与空状态一律拒绝，不存在的 ID 返回 ErrSettingNotFound。
 func TestAdminUpdateStatus(t *testing.T) {
 	admin, st := newTestAdmin(t)
-	ctx := context.Background()
+	ctx := withApp(t)
 
 	require.NoError(t, admin.Create(ctx, &CreateReq{
 		Group: "g", Key: "k", Value: "v", Description: "说明",

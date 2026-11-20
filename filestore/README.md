@@ -118,11 +118,12 @@ CREATE TABLE `core_file` (
   `id` varchar(36),
   `created_at` datetime(3) NOT NULL,
   `updated_at` datetime(3) NOT NULL,
-  `content_hash` varchar(64) NOT NULL DEFAULT '',
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
+  `content_hash` varchar(64) NOT NULL DEFAULT '' COMMENT '内容哈希（app 内唯一）',
   `size` bigint NOT NULL DEFAULT 0,
   `storage_uri` varchar(512) NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
-  UNIQUE INDEX `uk_content_hash` (`content_hash`)
+  UNIQUE INDEX `uk_app_app_hash` (`app_id`,`content_hash`)
 );
 
 CREATE TABLE `core_file_upload` (
@@ -130,6 +131,7 @@ CREATE TABLE `core_file_upload` (
   `created_at` datetime(3) NULL,
   `updated_at` datetime(3) NULL,
   `deleted_at` datetime(3) NULL,
+  `app_id` varchar(64) NOT NULL DEFAULT '' COMMENT '业务线标识',
   `file_id` varchar(36) NOT NULL DEFAULT '',
   `upload_id` varchar(128) NOT NULL DEFAULT '',
   `name` varchar(256) NOT NULL DEFAULT '',
@@ -152,19 +154,25 @@ CREATE TABLE "core_file" (
   "id" varchar(36),
   "created_at" timestamptz NOT NULL,
   "updated_at" timestamptz NOT NULL,
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "content_hash" varchar(64) NOT NULL DEFAULT '',
   "size" bigint NOT NULL DEFAULT 0,
   "storage_uri" varchar(512) NOT NULL DEFAULT '',
   PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "uk_content_hash" ON "core_file" ("content_hash");
+CREATE UNIQUE INDEX IF NOT EXISTS "uk_app_app_hash" ON "core_file" ("app_id","content_hash");
+
+COMMENT ON COLUMN "core_file"."app_id" IS '业务线标识';
+
+COMMENT ON COLUMN "core_file"."content_hash" IS '内容哈希（app 内唯一）';
 
 CREATE TABLE "core_file_upload" (
   "id" varchar(36),
   "created_at" timestamptz,
   "updated_at" timestamptz,
   "deleted_at" timestamptz,
+  "app_id" varchar(64) NOT NULL DEFAULT '',
   "file_id" varchar(36) NOT NULL DEFAULT '',
   "upload_id" varchar(128) NOT NULL DEFAULT '',
   "name" varchar(256) NOT NULL DEFAULT '',
@@ -175,8 +183,14 @@ CREATE TABLE "core_file_upload" (
 );
 
 CREATE INDEX IF NOT EXISTS "idx_core_file_upload_scene" ON "core_file_upload" ("scene");
+
 CREATE INDEX IF NOT EXISTS "idx_core_file_upload_status" ON "core_file_upload" ("status");
+
 CREATE INDEX IF NOT EXISTS "idx_core_file_upload_upload_id" ON "core_file_upload" ("upload_id");
+
 CREATE INDEX IF NOT EXISTS "idx_core_file_upload_file_id" ON "core_file_upload" ("file_id");
+
 CREATE INDEX IF NOT EXISTS "idx_core_file_upload_deleted_at" ON "core_file_upload" ("deleted_at");
+
+COMMENT ON COLUMN "core_file_upload"."app_id" IS '业务线标识';
 ```

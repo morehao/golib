@@ -31,7 +31,7 @@ func TestCheckIntegrity_ReportsDirtyData(t *testing.T) {
 	items := f.seedRegionType()
 
 	// 1) path 与父节点不一致 + level 不符 + 超过 MaxLevel
-	require.NoError(t, f.db.Table(tableNameItem).Where("id = ?", items["330102"].ID).
+	require.NoError(t, f.rawDB().Table(tableNameItem).Where("id = ?", items["330102"].ID).
 		Updates(map[string]any{"path": "/wrong/", "level": 7}).Error)
 
 	// 2) 孤儿：parent_id 指向不存在的项
@@ -41,7 +41,7 @@ func TestCheckIntegrity_ReportsDirtyData(t *testing.T) {
 	})
 
 	// 3) 成环：把根节点的 parent_id 指向自己的子节点
-	require.NoError(t, f.db.Table(tableNameItem).Where("id = ?", items["330000"].ID).
+	require.NoError(t, f.rawDB().Table(tableNameItem).Where("id = ?", items["330000"].ID).
 		Updates(map[string]any{"parent_id": items["330100"].ID}).Error)
 
 	report, err := f.admin().CheckIntegrity(f.ctx(), "region")
@@ -71,7 +71,7 @@ func TestCheckIntegrity_DetectsResidueAfterRawDelete(t *testing.T) {
 	f.mustCreateType("order_status", StatusEnabled)
 	f.mustCreateItem("order_status", "pending", "", 1)
 
-	require.NoError(t, f.db.Table(tableNameType).Where("code = ?", "order_status").Delete(&DictType{}).Error)
+	require.NoError(t, f.rawDB().Table(tableNameType).Where("code = ?", "order_status").Delete(&DictType{}).Error)
 
 	// 读接口已经看不到这个类型了
 	_, err := f.d.GetItems(f.ctx(), "order_status")

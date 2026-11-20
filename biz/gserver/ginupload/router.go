@@ -7,6 +7,9 @@ import (
 
 // Register 注册文件服务路由到指定路由组。
 // 路由风格规范见 docs/router-style.md §3：RESTful 资源式。
+//
+// 本函数只把路由挂到传入的 group 上，不注入任何中间件；是否需要（如多业务线 app 注入）
+// 由调用方在拿到 group 时自行 group.Use(...) 决定。
 func Register(group *gin.RouterGroup, fs *filestore.FileStore) {
 	// files 资源
 	f := group.Group("/files")
