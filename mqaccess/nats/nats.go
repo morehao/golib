@@ -7,7 +7,9 @@ package nats
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/morehao/golib/gconstant"
@@ -15,13 +17,22 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// defaultCallerSkip 是本引擎的 caller 校准值：
+// NATS 的调用链是 Record ← Client.Publish ← 业务，因此 2 帧即落到业务调用行。
+// （RocketMQ 同步发送链路更深，默认值为 4，见 rocketmq 子包。）
+const defaultCallerSkip = 2
+
 // Client 是 NATS 客户端封装，内嵌底层 *nats.Conn 并附带记录层 Logger。
 type Client struct {
-	conn    *nats.Conn
-	logger  *mqaccess.Logger
-	cfg     *Config
-	service string
-	url     string
+	conn   *nats.Conn
+	logger *mqaccess.Logger
+	cfg    *Config
+
+	// closed 在连接真正关闭后（Drain 完成或被关闭）被关闭，用于让 Close 等待排空结束。
+	closed chan struct{}
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // New 构造 NATS 客户端。
@@ -37,7 +48,8 @@ func New(cfg *Config, opts ...mqaccess.Option) (*Client, error) {
 	}
 
 	options := mqaccess.ApplyOptions(opts...)
-	logger, err := mqaccess.NewLogger(cfg.Service, cfg.URL, options.LoggerConfig(), options.CallerSkip())
+	logger, err := mqaccess.NewLogger(cfg.Service, cfg.URL, options.LoggerConfig(),
+		mqaccess.ResolveCallerSkip(options.CallerSkip(), defaultCallerSkip))
 	if err != nil {
 		return nil, err
 	}
@@ -47,9 +59,13 @@ func New(cfg *Config, opts ...mqaccess.Option) (*Client, error) {
 		name = cfg.Service
 	}
 
+	// closed 由 ClosedHandler 在连接真正进入 CLOSED 时关闭，Close 用它等待 Drain 完成。
+	closed := make(chan struct{})
+
 	natsOpts := []nats.Option{
 		nats.Name(name),
 		nats.Timeout(connectTimeout(cfg)),
+		nats.ClosedHandler(func(*nats.Conn) { close(closed) }),
 	}
 	if cfg.User != "" {
 		natsOpts = append(natsOpts, nats.UserInfo(cfg.User, cfg.Password))
@@ -57,10 +73,10 @@ func New(cfg *Config, opts ...mqaccess.Option) (*Client, error) {
 	if cfg.Token != "" {
 		natsOpts = append(natsOpts, nats.Token(cfg.Token))
 	}
-	if cfg.NKeySeed != "" {
-		opt, nErr := nats.NkeyOptionFromSeed(cfg.NKeySeed)
+	if cfg.NKeySeedFile != "" {
+		opt, nErr := nats.NkeyOptionFromSeed(cfg.NKeySeedFile)
 		if nErr != nil {
-			return nil, fmt.Errorf("nats: load nkey seed: %w", nErr)
+			return nil, fmt.Errorf("nats: load nkey seed file %q: %w", cfg.NKeySeedFile, nErr)
 		}
 		natsOpts = append(natsOpts, opt)
 	}
@@ -85,11 +101,10 @@ func New(cfg *Config, opts ...mqaccess.Option) (*Client, error) {
 	// TODO: cfg.JetStream 为 true 时初始化 JetStream 上下文与相关 API。
 
 	return &Client{
-		conn:    conn,
-		logger:  logger,
-		cfg:     cfg,
-		service: cfg.Service,
-		url:     cfg.URL,
+		conn:   conn,
+		logger: logger,
+		cfg:    cfg,
+		closed: closed,
 	}, nil
 }
 
@@ -161,18 +176,48 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	return c.conn.FlushWithContext(ctx)
 }
 
-// Close 优雅关闭：先 Drain 把缓冲区消息刷出，再 Close。
+// Close 优雅关闭：先 Drain（排空订阅回调与待发消息），等连接真正关闭后再返回。
+//
+// Drain 是异步的：它只把连接切到 draining 状态并起一个后台 goroutine，随后立刻返回。
+// 因此这里必须等待 ClosedHandler 触发的 closed 信号，否则紧接着 Close 会打断排空。
+// 二次调用 Close 是幂等的（返回首次关闭的结果）。
 func (c *Client) Close() error {
-	if c.conn == nil {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	c.closeOnce.Do(func() {
+		c.closeErr = c.drainAndClose()
+	})
+	return c.closeErr
+}
+
+func (c *Client) drainAndClose() error {
+	// 连接已经关闭（例如服务端断开或被别处 Close）：无需再 Drain。
+	if c.conn.IsClosed() {
 		return nil
 	}
 	if err := c.conn.Drain(); err != nil {
-		// Drain 失败时仍尝试 Close，返回 Drain 的错误。
+		// Drain 失败（重连中等）时直接关闭，避免连接悬空。
 		c.conn.Close()
+		if errors.Is(err, nats.ErrConnectionClosed) {
+			return nil
+		}
 		return fmt.Errorf("nats: drain: %w", err)
 	}
-	c.conn.Close()
-	return nil
+
+	if c.closed == nil {
+		// 理论上不会走到（Client 只由 New 构造），兜底避免无限等待。
+		c.conn.Close()
+		return nil
+	}
+
+	select {
+	case <-c.closed:
+		return nil
+	case <-time.After(defaultDrainTimeout):
+		c.conn.Close()
+		return fmt.Errorf("nats: drain timed out after %s", defaultDrainTimeout)
+	}
 }
 
 // connectTimeout 返回生效的建连超时。

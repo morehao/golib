@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+// defaultCallerSkip 是本引擎的 caller 校准值：
+// 同步发送链路是 Record ← 拦截器闭包 ← lib.SendSync ← SendSyncWithTrace ← 业务，共 4 帧。
+// 消费回调运行在引擎 goroutine 上，caller 无法落到业务行（README 已说明），沿用同一默认值。
+const defaultCallerSkip = 4
+
 // Config 是 RocketMQ 引擎的专属配置。
 //
 // 跨引擎一致的配置（日志、callerSkip）走 mqaccess.Option，不放在这里。
@@ -12,7 +17,7 @@ import (
 type Config struct {
 	// Service 服务名，必填；落日志 service 字段，也用于日志身份区分。
 	Service string
-	// NameServer RocketMQ NameServer 地址，逗号分隔可多个（如 "ns1:9876;ns2:9876"），必填。
+	// NameServer RocketMQ NameServer 地址，必填；多条用 ";" 分隔，如 "ns1:9876;ns2:9876"。
 	NameServer string
 	// GroupName 生产者 / 消费者组名，必填。
 	GroupName string
