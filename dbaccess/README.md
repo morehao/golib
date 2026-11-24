@@ -359,7 +359,11 @@ client, err := dbredis.New(cfg, dbredis.WithLogConfig(customLogCfg))
 
 ### 3. dbes - Elasticsearch 客户端
 
-Elasticsearch 客户端封装，提供简单客户端和类型安全客户端，以及 DSL 构建器。
+Elasticsearch 客户端封装（基于官方 `go-elasticsearch` **v9**），提供简单客户端和类型安全客户端，内置统一日志/耗时/caller 追踪。
+
+> **查询 DSL 统一使用官方 `esdsl` 包**（`github.com/elastic/go-elasticsearch/v9/typedapi/esdsl`）。
+> 官方 builder 是编译期类型安全的、由 ES specification 自动生成、覆盖全部查询/聚合/mapping/sort 类型。
+> 早期自研的 `Builder`/`BuildMap`/`BuildSortField` 已移除，请迁移到 `esdsl` 或 typed API。
 
 #### 安装
 
@@ -428,65 +432,71 @@ func main() {
 }
 ```
 
-**使用 DSL 构建器：**
+**使用 esdsl 构建查询（推荐）：**
+
+官方 `esdsl` 提供链式、类型安全的 DSL 构造器，直接传给 typed client，无需手写 map 或手动 JSON 序列化：
 
 ```go
-// 构建查询
-builder := dbes.NewBuilder().
-    SetQuery(dbes.BuildMap("match", dbes.BuildMap("firstname", "Amber"))).
-    SetAggs(dbes.BuildMap("avg_balance", dbes.BuildMap("avg", dbes.BuildMap("field", "balance")))).
-    SetSort([]dbes.Map{
-        dbes.BuildSortField("balance", "desc"),
-        dbes.BuildSortScore("asc"),
-    }).
-    SetSize(20).
-    SetFrom(10).
-    SetSource([]string{"firstname", "lastname", "email"}).
-    SetHighlight(dbes.BuildHighlightField([]string{"address"},
-        dbes.WithFragmentSize(200),
-        dbes.WithNumberOfFragments(3),
-        dbes.WithPreTags([]string{"<highlight>"}),
-        dbes.WithPostTags([]string{"</highlight>"}),
-    ))
+import (
+    "context"
 
-// 获取查询体
-body := builder.Build()
-bodyReader, _ := builder.BuildReader()
-
-// 执行搜索
-res, err := simpleClient.Search(
-    simpleClient.Search.WithContext(ctx),
-    simpleClient.Search.WithIndex("accounts"),
-    simpleClient.Search.WithBody(bodyReader),
+    "github.com/elastic/go-elasticsearch/v9/typedapi/esdsl"
+    "github.com/elastic/go-elasticsearch/v9/typedapi/types"
+    "github.com/elastic/go-elasticsearch/v9/typedapi/types/enums/sortorder"
 )
+
+func ptr[T any](v T) *T { return &v }
+
+func search(ctx context.Context, typedClient *elasticsearch.TypedClient) error {
+    res, err := typedClient.Search().
+        Index("accounts").
+        Size(20).
+        From(10).
+        Source_(esdsl.NewSourceConfig().
+            SourceFilter(esdsl.NewSourceFilter().Includes("firstname", "lastname", "email"))).
+        Query(esdsl.NewMatchQuery("firstname", "Amber")).
+        AddAggregation("avg_balance", esdsl.NewAverageAggregation().Field("balance")).
+        Sort(
+            esdsl.NewSortOptions().
+                AddSortOption("balance", esdsl.NewFieldSort(sortorder.Desc)).
+                AddSortOption("_score", esdsl.NewFieldSort(sortorder.Asc)),
+        ).
+        Highlight(esdsl.NewHighlight().
+            Fields([]map[string]types.HighlightField{
+                {"address": {FragmentSize: ptr(200), NumberOfFragments: ptr(3)}},
+            })).
+        Do(ctx)
+    if err != nil {
+        return err
+    }
+    _ = res
+    return nil
+}
 ```
 
-#### DSL 构建器详细说明
+生成的 DSL（与手写等价，但编译期校验字段名、枚举、嵌套层级）：
 
-**Builder 方法：**
+```json
+{"aggregations":{"avg_balance":{"avg":{"field":"balance"}}},"from":10,
+ "highlight":{"fields":[{"address":{"fragment_size":200,"number_of_fragments":3}}]},
+ "query":{"match":{"firstname":{"query":"Amber"}}},"size":20,
+ "sort":[{"_score":{"order":"asc"},"balance":{"order":"desc"}}],
+ "_source":{"includes":["firstname","lastname","email"]}}
+```
 
-- `Set(key string, value any)`: 通用设置方法
-- `SetQuery(query Map)`: 设置查询条件
-- `SetAggs(aggs any)`: 设置聚合
-- `SetSort(sort any)`: 设置排序
-- `SetSize(size int)`: 设置返回数量
-- `SetFrom(from int)`: 设置偏移量
-- `SetSource(fields []string)`: 设置返回字段
-- `SetHighlight(highlight any)`: 设置高亮
+**底层 JSON 逃生口（少数场景）：**
 
-**辅助函数：**
+复杂布尔查询等结构首选 `esdsl`；若确需完全手控 JSON，用 typed API 的 `Raw(...)` 或简单客户端的 `Search.WithBody(strings.NewReader(...))`。
 
-- `BuildMap(kvs ...any) Map`: 构建 map，接受 key-value 对
-- `BuildSortField(field string, order string) Map`: 构建字段排序
-- `BuildSortScore(order string) Map`: 构建分数排序
-- `BuildHighlightField(fields []string, options ...HighlightOption) Map`: 构建高亮配置
+#### 常见 esdsl 构造器
 
-**高亮配置选项：**
+- 查询：`esdsl.NewMatchQuery`、`NewTermQuery`、`NewNumberRangeQuery(...).Gte/Lt`、`NewBoolQuery().Must/Filter/Should/MustNot`、`NewMatchAllQuery`
+- 聚合：`esdsl.NewTermsAggregation().Field().Size()`、`NewAverageAggregation()`、`NewSumAggregation()`、`NewDateHistogramAggregation()`
+- 排序：`esdsl.NewSortOptions().AddSortOption(field, esdsl.NewFieldSort(order))`
+- 高亮：`esdsl.NewHighlight().Fields(...)`
+- 字段映射：`esdsl.NewTypeMapping().AddProperty(name, esdsl.NewTextProperty())` 等
 
-- `WithFragmentSize(size int)`: 设置片段大小（默认 1500）
-- `WithNumberOfFragments(number int)`: 设置片段数量（默认 5）
-- `WithPreTags(tags []string)`: 设置前置标签（默认 `<em>`）
-- `WithPostTags(tags []string)`: 设置后置标签（默认 `</em>`）
+> 完整列表见 [官方 esdsl 文档](https://www.elastic.co/docs/reference/elasticsearch/clients/go/typed-api/esdsl)。
 
 #### 自定义日志配置
 
@@ -570,7 +580,7 @@ client.Get(ctx, "key")
 - `gorm.io/driver/postgres` - PostgreSQL 驱动
 - `github.com/ncruces/go-sqlite3` + `.../gormlite` - SQLite 驱动（纯 Go，间接依赖 `go-sqlite3-wasm/v2`、`julianday`）
 - `github.com/redis/go-redis/v9` - Redis 客户端
-- `github.com/elastic/go-elasticsearch/v8` - Elasticsearch 客户端
+- `github.com/elastic/go-elasticsearch/v9` - Elasticsearch 官方客户端（含 typed API 与 esdsl DSL 构造器）
 - `github.com/morehao/golib/glog` - 日志库
 
 > **SQLite 与 CGO**：本方言为**纯 Go 实现**（SQLite 编译为 wasm 后翻译成 Go），

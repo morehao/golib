@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elastic/go-elasticsearch/v8/typedapi/types"
+	"github.com/elastic/go-elasticsearch/v9/typedapi/types"
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/glog"
 	"github.com/morehao/golib/gtest/gtest"
