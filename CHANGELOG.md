@@ -26,6 +26,32 @@
 
 ## [Unreleased]
 
+### Dependencies：批量升级第三方依赖（允许破坏性）
+
+全仓直接依赖统一升级到最新稳定版（`go build ./...` / `go vet ./...` 全绿，83 个测试包通过）：
+
+- **存储/AWS SDK**：`aws-sdk-go-v2` v1.41.7→v1.48.0、`config` →v1.33.21、`credentials` →v1.21.3、`service/s3` v1.101.0→v1.116.0、`smithy-go` →v1.28.9。（Retry 2.1 成为默认重试策略。）
+- **LLM**：`cloudwego/eino` v0.9.14→v0.9.23（纯增量，gllm 无需改动）。
+- **校验/中间件**：`validator/v10` →v10.30.6、`locales` →v0.14.2、`universal-translator` →v0.18.2、`gin-contrib/cors` v1.7.2→v1.7.11。
+- **数据库/ORM**：`go-sql-driver/mysql` →v1.10.2（安全修复）、`jackc/pgx/v5` v5.9.1→v5.13.0（高危 CVE 修复）、`gorm.io/gorm` →v1.31.2、`driver/postgres` →v1.6.3、`ncruces/go-sqlite3` v0.34.0→v0.38.0（wasm v2→v6；gormlite 保持 v0.34.0）、`miniredis/v2` →v2.40.0。
+- **可观测性**：`go.opentelemetry.io/otel` 全家桶 →v1.47.0、`zap` →v1.28.0。
+- **基础库**：`tencentcloud .../common` →v1.3.219、`golang.org/x/{crypto,sync,time}` 各升一档。
+
+保持不升级：`resty.dev/v3`（上游仍无正式版，维持 rc.4）、`go-elasticsearch/v9`、`gorm.io/driver/mysql`、`alibabacloud-go/*`、`eino-ext/*`（均已是上游最新）。
+
+### Features（storage）：S3 校验和归一化扩展新算法
+
+`storage/driver/s3base` 的 `checksumFrom` 由「认 5 种」扩展为覆盖 AWS SDK v1.116 新增的
+`MD5`/`SHA512`/`XXHASH3`/`XXHASH64`/`XXHASH128`，按强度优先级归一返回 `storage.Checksum`。
+Get/Head 响应返回即用，向后兼容。
+
+### Fixes（gvalidate）：中文校验整体失效
+
+`gvalidate.Check()` 曾对任意入参都返回 `validate: translator zh_Hans_CN not found`（`AsErrors`
+拿不到），中文校验整体 fail-closed 不可用。根因：`unTrans.New(zh_Hans_CN.New())` 只把该 locale
+注册为 fallback，未注册进 supported-locales，`GetTranslator("zh_Hans_CN")` 查表（小写化后
+`zh_hans_cn`）永远落空。改为 `unTrans.New(zhLocale, zhLocale)` 显式注册，并补回归测试。
+
 ### Features（gasync）：worker 交回执行结果快照
 
 `worker` 此前只把 `Execute` 的错误交回 Source，结果快照无回传通道——`safeExecute` 的首返回值

@@ -125,9 +125,13 @@ SQLite 的 URL 处理遵循以下约定：
 - 文件库默认注入 `_pragma=busy_timeout(5000)`，对齐旧引擎 `mattn/go-sqlite3` 隐式的 5000ms。
   该参数必须排在所有 PRAGMA 之前（驱动会把所有 `_pragma` 按顺序拼成一段脚本执行），
   因此总会被提到最前；自行传入 `busy_timeout` 时以传入值为准。
+  > 注：ncruces/go-sqlite3 **v0.38 起**驱动已在执行任何 PRAGMA 前无条件设置默认 60s
+  > busy timeout，本注入遂成为显式兜底（保留以兼容旧驱动，且显式优于隐式）。
 - 文件库默认注入 `_txlock=immediate`（事务以 `BEGIN IMMEDIATE` 开始）。SQLite 默认的
   `BEGIN DEFERRED` 在读写锁升级时不会被 `busy_timeout` 重试，会直接报
   `database is locked`；如需改回，显式传入 `_txlock=deferred` 覆盖即可。
+  > 注：v0.38 起驱动缺省 `txLock` 即为 `immediate`，本注入同样冗余但无害；且 **v0.38 起
+  > 传入非法的 `_txlock` 值会在 `Open` 期直接报错**（旧版静默接受）。
 - 内存库（`:memory:`）会被改写为 `file:/mem_<N>?vfs=memdb`。驱动编译时带
   `SQLITE_OMIT_SHARED_CACHE`（[SQLite 官方推荐](https://sqlite.org/compile.html#omit_shared_cache)），
   `cache=shared` 已经是空操作，共享内存库统一走官方
@@ -578,7 +582,7 @@ client.Get(ctx, "key")
 - `gorm.io/gorm` - GORM ORM
 - `gorm.io/driver/mysql` - MySQL 驱动
 - `gorm.io/driver/postgres` - PostgreSQL 驱动
-- `github.com/ncruces/go-sqlite3` + `.../gormlite` - SQLite 驱动（纯 Go，间接依赖 `go-sqlite3-wasm/v2`、`julianday`）
+- `github.com/ncruces/go-sqlite3` + `.../gormlite` - SQLite 驱动（纯 Go，间接依赖 `go-sqlite3-wasm/v6`、`julianday`）
 - `github.com/redis/go-redis/v9` - Redis 客户端
 - `github.com/elastic/go-elasticsearch/v9` - Elasticsearch 官方客户端（含 typed API 与 esdsl DSL 构造器）
 - `github.com/morehao/golib/glog` - 日志库

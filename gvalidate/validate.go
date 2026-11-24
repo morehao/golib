@@ -66,7 +66,12 @@ type gvalidator struct {
 func (ins *gvalidator) init() error {
 	ins.once.Do(func() {
 		v := validator.New()
-		uni := unTrans.New(zh_Hans_CN.New())
+		// 必须把 zh_Hans_CN 显式注册为 supported locale（作为第 2 个参数再传一次），
+		// 否则它只会作为 fallback 存在；GetTranslator 内部按 strings.ToLower(key) 查
+		// supportedLocales（"zh_hans_cn"）会查不到，导致 init 直接失败、
+		// gvalidate.Check() 对任何入参都报 "translator zh_Hans_CN not found"。
+		zhLocale := zh_Hans_CN.New()
+		uni := unTrans.New(zhLocale, zhLocale)
 
 		trans, found := uni.GetTranslator("zh_Hans_CN")
 		if !found {
