@@ -76,3 +76,15 @@ const (
 	GLLMOpenAIModel   = "GLLM_OPENAI_MODEL"
 	GLLMOpenAIRequire = "GLLM_OPENAI_REQUIRE"
 )
+
+// mqaccess 集成测试环境变量名。
+const (
+	NATSURL            = "NATS_URL"
+	RocketMQNameServer = "ROCKETMQ_NAMESERVER"
+	RocketMQGroupName  = "ROCKETMQ_GROUP_NAME"
+	RocketMQTopic      = "ROCKETMQ_TOPIC"
+
+	// 默认连接串（本机 docker 约定对齐 .env.example）。
+	DefaultNATSURL            = "nats://127.0.0.1:4222"
+	DefaultRocketMQNameServer = "127.0.0.1:9876"
+)
