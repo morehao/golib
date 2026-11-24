@@ -450,20 +450,41 @@ func isArchived(storageClass string) bool {
 	return archiveStorageClasses[strings.ToUpper(storageClass)]
 }
 
-// checksumFrom 提取服务端返回的校验和；都没有时返回 nil（而不是空结构体，
-// 以免上层以为"有校验和但值为空"）。
-func checksumFrom(crc32, crc32c, crc64, sha1, sha256 *string) *storage.Checksum {
+// s3Checksums 汇总 S3 响应可能返回的各算法校验和字段（全部为指针，nil/空表示未返回）。
+// v1.116.0 起 S3 在 Get/Head/CompleteMultipart 响应上新增 MD5/SHA512/XXHASH3/64/128，
+// 与既有 CRC32/CRC32C/CRC64NVME/SHA1/SHA256 一起归一到 storage.Checksum。
+type s3Checksums struct {
+	crc32, crc32c, crc64 *string
+	sha1, sha256, sha512 *string
+	md5                  *string
+	xxh3, xxh64, xxh128  *string
+}
+
+// checksumFrom 按"越强越优先"的顺序挑选服务端返回的校验和；都没有时返回 nil
+// （而不是空结构体，以免上层以为"有校验和但值为空"）。优先级：SHA512 > SHA256 >
+// SHA1 > MD5 > CRC64NVME > CRC32C > CRC32 > XXHASH128 > XXHASH64 > XXHASH3。
+func checksumFrom(c s3Checksums) *storage.Checksum {
 	switch {
-	case aws.ToString(sha256) != "":
-		return &storage.Checksum{Algorithm: "SHA256", Value: aws.ToString(sha256)}
-	case aws.ToString(sha1) != "":
-		return &storage.Checksum{Algorithm: "SHA1", Value: aws.ToString(sha1)}
-	case aws.ToString(crc32) != "":
-		return &storage.Checksum{Algorithm: "CRC32", Value: aws.ToString(crc32)}
-	case aws.ToString(crc32c) != "":
-		return &storage.Checksum{Algorithm: "CRC32C", Value: aws.ToString(crc32c)}
-	case aws.ToString(crc64) != "":
-		return &storage.Checksum{Algorithm: "CRC64NVME", Value: aws.ToString(crc64)}
+	case aws.ToString(c.sha512) != "":
+		return &storage.Checksum{Algorithm: "SHA512", Value: aws.ToString(c.sha512)}
+	case aws.ToString(c.sha256) != "":
+		return &storage.Checksum{Algorithm: "SHA256", Value: aws.ToString(c.sha256)}
+	case aws.ToString(c.sha1) != "":
+		return &storage.Checksum{Algorithm: "SHA1", Value: aws.ToString(c.sha1)}
+	case aws.ToString(c.md5) != "":
+		return &storage.Checksum{Algorithm: "MD5", Value: aws.ToString(c.md5)}
+	case aws.ToString(c.crc64) != "":
+		return &storage.Checksum{Algorithm: "CRC64NVME", Value: aws.ToString(c.crc64)}
+	case aws.ToString(c.crc32c) != "":
+		return &storage.Checksum{Algorithm: "CRC32C", Value: aws.ToString(c.crc32c)}
+	case aws.ToString(c.crc32) != "":
+		return &storage.Checksum{Algorithm: "CRC32", Value: aws.ToString(c.crc32)}
+	case aws.ToString(c.xxh128) != "":
+		return &storage.Checksum{Algorithm: "XXHASH128", Value: aws.ToString(c.xxh128)}
+	case aws.ToString(c.xxh64) != "":
+		return &storage.Checksum{Algorithm: "XXHASH64", Value: aws.ToString(c.xxh64)}
+	case aws.ToString(c.xxh3) != "":
+		return &storage.Checksum{Algorithm: "XXHASH3", Value: aws.ToString(c.xxh3)}
 	}
 	return nil
 }
@@ -774,8 +795,18 @@ func (d *Driver) CompleteMultipart(ctx context.Context, ref storage.MultipartRef
 		Key:       ref.Key,
 		ETag:      trimETag(aws.ToString(output.ETag)),
 		VersionID: aws.ToString(output.VersionId),
-		Checksum: checksumFrom(output.ChecksumCRC32, output.ChecksumCRC32C,
-			output.ChecksumCRC64NVME, output.ChecksumSHA1, output.ChecksumSHA256),
+		Checksum: checksumFrom(s3Checksums{
+			crc32:  output.ChecksumCRC32,
+			crc32c: output.ChecksumCRC32C,
+			crc64:  output.ChecksumCRC64NVME,
+			sha1:   output.ChecksumSHA1,
+			sha256: output.ChecksumSHA256,
+			sha512: output.ChecksumSHA512,
+			md5:    output.ChecksumMD5,
+			xxh3:   output.ChecksumXXHASH3,
+			xxh64:  output.ChecksumXXHASH64,
+			xxh128: output.ChecksumXXHASH128,
+		}),
 	}
 	if sizesKnown {
 		info.Size = total
@@ -825,8 +856,18 @@ func (d *Driver) HeadObject(ctx context.Context, bucket, key string) (*storage.O
 		StorageClass: storageClass,
 		Archived:     isArchived(storageClass),
 		VersionID:    aws.ToString(output.VersionId),
-		Checksum: checksumFrom(output.ChecksumCRC32, output.ChecksumCRC32C,
-			output.ChecksumCRC64NVME, output.ChecksumSHA1, output.ChecksumSHA256),
+		Checksum: checksumFrom(s3Checksums{
+			crc32:  output.ChecksumCRC32,
+			crc32c: output.ChecksumCRC32C,
+			crc64:  output.ChecksumCRC64NVME,
+			sha1:   output.ChecksumSHA1,
+			sha256: output.ChecksumSHA256,
+			sha512: output.ChecksumSHA512,
+			md5:    output.ChecksumMD5,
+			xxh3:   output.ChecksumXXHASH3,
+			xxh64:  output.ChecksumXXHASH64,
+			xxh128: output.ChecksumXXHASH128,
+		}),
 	}
 	if output.Metadata != nil {
 		info.Metadata = output.Metadata

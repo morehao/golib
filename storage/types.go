@@ -38,7 +38,7 @@ type ObjectInfo struct {
 
 // Checksum 服务端返回的对象校验和。
 type Checksum struct {
-	Algorithm string // SHA256 / SHA1 / CRC32 / CRC32C / CRC64NVME
+	Algorithm string // SHA256 / SHA512 / SHA1 / MD5 / CRC32 / CRC32C / CRC64NVME / XXHASH3 / XXHASH64 / XXHASH128
 	Value     string // Base64 编码值（S3 语义）
 }
 
