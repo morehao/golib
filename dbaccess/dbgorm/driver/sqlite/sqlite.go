@@ -14,15 +14,20 @@
 // 实现要点：
 //
 //   - DSN 必须以 file: 开头，否则 _txlock/_timefmt/_pragma 会被驱动静默忽略
-//     （ncruces driver.go:176-185）。非内存路径统一补 file: 前缀，内存库统一
-//     改写为 file::memory:。
-//   - 只要 query 里出现任意 _pragma，驱动就放弃自己 60s 的 busy timeout
-//     （driver.go:184、:249）。因此必须自己注入 busy_timeout，否则并发写会
-//     直接退化为 SQLITE_BUSY。
-//   - busy_timeout 必须排在所有 PRAGMA 之前（driver.go:83-85），所以它是
-//     前置插入，而不是"已存在 _pragma 就跳过"的短路。
+//     （ncruces driver.go 的 newConn 解析 query 前会丢弃非 file: 的 DSN）。非内存
+//     路径统一补 file: 前缀，内存库统一改写为 file::memory:。
+//   - busy timeout：ncruces/go-sqlite3 v0.38 起，驱动在**执行任何 PRAGMA 之前**
+//     无条件设置默认 60s busy timeout（driver.go "A default busy timeout of 1
+//     minute is set before any PRAGMAs are executed"）。历史版本（v0.34）只要
+//     query 里出现任意 _pragma 就会放弃默认 busy timeout，故本包主动注入
+//     busy_timeout 兜底——这一注入在 v0.38 下已属冗余，但保留以兼容旧驱动、且
+//     显式优于隐式；调用方显式设置时本包不覆盖。
+//   - busy_timeout 必须排在所有 PRAGMA 之前（v0.38 driver.go 亦明确默认 busy
+//     timeout 先于 PRAGMA），所以它是前置插入，而不是"已存在 _pragma 就跳过"的短路。
 //   - 文件库默认注入 _txlock=immediate，避免 BEGIN DEFERRED 在读写锁升级时
 //     绕过 busy_timeout 直接报 "database is locked"；显式传入 _txlock 时不覆盖。
+//     v0.38 起驱动本身缺省 txLock=immediate，本注入同样变为冗余但无害。
+//     注意：v0.38 起传入非法的 _txlock 值会在 Open 期直接报错（旧版静默接受）。
 //   - 内存库统一改写为 file:/<库名>?vfs=memdb，否则连接池中每条连接都是一个
 //     独立的空库，容易出现 "no such table"。驱动编译时带 SQLITE_OMIT_SHARED_CACHE
 //     （官方推荐，见 https://sqlite.org/compile.html#omit_shared_cache），
@@ -74,6 +79,8 @@ const (
 	defaultTxLock = "immediate"
 
 	// busyTimeout 对齐 mattn/go-sqlite3 隐式的 5000ms busy timeout，前置注入。
+	// 注：ncruces/go-sqlite3 v0.38 起驱动已在执行 PRAGMA 前默认设置 60s busy
+	// timeout，此处注入成为显式兜底（保留以兼容旧驱动，且显式优于隐式）。
 	busyTimeout = "busy_timeout(5000)"
 )
 
@@ -312,9 +319,9 @@ func hasBusyTimeout(params []dsnParam) bool {
 // hoistBusyTimeout 把调用方设置的 busy_timeout pragma 移到最前。
 //
 // 驱动把所有 _pragma 按 query 顺序拼成一段 PRAGMA 脚本一次执行
-// （conn.go:124-131），而 busy timeout 应当先于其它 PRAGMA 生效
-// （driver.go:83-85 "busy timeout and locking mode should be the first
-// PRAGMAs set"），所以这里不能只做就地翻译。
+// （ncruces driver.go 拼装 conn 时统一处理），而 busy timeout 应当先于其它
+// PRAGMA 生效（v0.38 driver.go 明确"A default busy timeout ... set before any
+// PRAGMAs are executed"），所以这里不能只做就地翻译。
 func hoistBusyTimeout(params []dsnParam) []dsnParam {
 	idx := busyTimeoutIndex(params)
 	if idx <= 0 {
