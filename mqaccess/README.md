@@ -9,7 +9,7 @@ Go 消息队列访问层的统一「**操作日志封装**」。提供 NATS、Ro
 
 - **顶层 `mqaccess`**：跨引擎真一致的部分——公共 Option（`WithLogConfig` / `WithCallerSkip`）、
   日志「**记录层**」（`Logger` / `Record`）、trace/request_id 透传的三步走约定（`InjectTrace` / `ExtractTrace`）。
-- **`mqaccess/nats`**：NATS 客户端（core + 基础可用的 JetStream 薄封装），忠实暴露 NATS 语义。
+- **`mqaccess/nats`**：NATS 客户端（core；JetStream 预留），忠实暴露 NATS 语义。
 - **`mqaccess/rocketmq`**：RocketMQ 生产/消费者，忠实暴露 RocketMQ 语义（`SendResult` / `ConsumeResult`）。
 - **`mqaccess/rabbitmq`**：RabbitMQ 客户端（基于 `amqp091-go`），忠实暴露 exchange/queue 声明、`Delivery.Ack/Nack`、prefetch、publisher confirm 语义。
 
@@ -54,7 +54,7 @@ type Config struct {
     Service        string        // 服务名（必填，落日志 service，也作为默认 NATS Name）
     URL            string        // nats://127.0.0.1:4222；可逗号分隔多个做故障转移
     Name           string        // 客户端名（可选，默认取 Service）
-    JetStream      bool          // 是否启用 JetStream；开启后客户端初始化 JS 上下文（见 §1.1）
+    JetStream      bool          // 预留开关；本期 core publish/subscribe 优先
     ConnectTimeout time.Duration // 建连超时，<=0 用默认 5s
     User, Password string        // 基本认证（可选）
     Token          string        // Token 认证（可选）
@@ -101,66 +101,6 @@ c, err := mqnats.New(cfg, mqaccess.WithLogConfig(customLogCfg))
 // 业务在 mq 调用前又套了封装层时，可微调 caller：
 c, err = mqnats.New(cfg, mqaccess.WithCallerSkip(5))
 ```
-
-#### 1.1 JetStream（基础可用版）
-
-在 core 之上提供一层**薄封装**（`nats/jetstream.go`）：`EnsureStream` / `EnsureConsumer` 只是
-`CreateOrUpdateStream` / `CreateOrUpdateConsumer` 的透传，配置原样交给 jetstream 包；`PublishJS` /
-`SubscribeJS` 额外补「链路注入 + 埋点」。**须先置 `cfg.JetStream=true`**，否则相关方法统一返回
-`jetstream is not enabled` 错误（不静默降级）。
-
-```go
-import "github.com/nats-io/nats.go/jetstream"
-
-c, err := mqnats.New(&mqnats.Config{
-    Service:   "order-svc",
-    URL:       "nats://127.0.0.1:4222",
-    JetStream: true, // 开启后 Client 初始化 JS 上下文
-})
-if err != nil {
-    panic(err)
-}
-defer c.Close()
-
-// JS() 返回 jetstream.JetStream（未开启时为 nil，调用方需自行判断）
-_ = c.JS()
-
-// 声明/更新 stream 与 consumer（配置原样透传 jetstream）
-stream, err := c.EnsureStream(ctx, jetstream.StreamConfig{
-    Name:     "ORDERS",
-    Subjects: []string{"order.>"},
-})
-if err != nil {
-    panic(err)
-}
-consumer, err := c.EnsureConsumer(ctx, "ORDERS", jetstream.ConsumerConfig{
-    Durable:       "order-worker",
-    FilterSubject: "order.created",
-    AckPolicy:     jetstream.AckExplicitPolicy,
-})
-if err != nil {
-    panic(err)
-}
-
-// 发布：注入 trace 后同步等待服务端 PubAck，埋点 op="publish_js"
-if err := c.PublishJS(ctx, "order.created", []byte(`{"id":1}`), nil); err != nil {
-    panic(err)
-}
-
-// 订阅：阻塞消费，cb 返回 nil→Ack、返回 error/panic→Nak（重投）
-err = c.SubscribeJS(ctx, consumer, func(ctx context.Context, msg jetstream.Msg) error {
-    // ctx 已从 msg headers 还原 trace/request_id，业务日志自动串联
-    return handle(msg.Data()) // return nil → 本层 Ack；非 nil → 本层 Nak
-})
-if err != nil && !errors.Is(err, context.Canceled) {
-    panic(err)
-}
-```
-
-> **ack 约定（本层接管）**：`SubscribeJS` 负责 ack 生命周期——handler 正常返回 → `msg.Ack()`；
-> handler 返回非 nil error 或 panic → `msg.Nak()` 触发 redelivery（保守策略：宁可重投不静默丢消息）。
-> **handler 内不要再自行 Ack/Nak/Term**，否则与之冲突。需要 `Term`/延迟重投等精确控制时，
-> 请直接用 `consumer.Consume` 自行处理 ack。`SubscribeJS` 是阻塞的，`ctx` 取消即退出。
 
 ---
 
@@ -217,33 +157,6 @@ if err := cons.Start(); err != nil { // 非阻塞，内部拉取
     panic(err)
 }
 defer cons.Close()
-```
-
-延迟消息 / 顺序消息 / 消费过滤：
-
-```go
-// 延迟消息：delayLevel 从 1 开始（1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h）；
-// 内部走 primitive.Message.WithDelayTimeLevel（写 DELAY 属性），broker 到点才投递。<=0 即立即投递。
-res, err := p.SendSyncWithTraceDelay(ctx, "order-topic", []byte(`{"id":1}`), 3) // 10s 后投递
-fmt.Println(res.Status, res.MsgID)
-
-// 顺序消息：内部走 WithShardingKey + 生产者的 hash queue selector，
-// 同一 shardingKey 落到同一队列，从而保证 broker 上的写入顺序。shardingKey 为空即退化为普通发送。
-res, err = p.SendSyncOrderly(ctx, "order-topic", []byte(`{"id":1}`), "order-123") // 按订单号保序
-
-// 消费过滤：用 NewConsumerWithOptions + WithMessageSelector 透传 MessageSelector，
-// 不传时订阅全部。NewConsumer 保持原签名不变。
-cons, err = rocketmq.NewConsumerWithOptions(&rocketmq.Config{
-    Service: "order-svc", NameServer: "127.0.0.1:9876", GroupName: "order-consumer",
-}, "order-topic", handler,
-    []rocketmq.ConsumerOption{
-        // tag 过滤
-        rocketmq.WithMessageSelector(consumer.MessageSelector{
-            Type: consumer.TAG, Expression: "tagA || tagB",
-        }),
-        // 或 sql92 过滤（按消息属性）：consumer.SQL92 + "a > 10 AND b IS NOT NULL"
-    },
-)
 ```
 
 #### 自定义日志配置
@@ -329,49 +242,6 @@ _ = c.HealthCheck(ctx)
 > handler 返回 error 且未自行 ack 时，本层按 `RequeueOnError` 做一次 `d.Nack(false, requeue)`。
 > 若 `AutoAck=true`，broker 一投递即视为成功，与 handler 结果无关，本层不会再调用 Ack/Nack。
 
-自动重连与真实 service：
-
-```go
-// ConsumerConfig 新增的重连字段：
-//   Reconnect           是否断线后自动重连（默认由「是否持有连接工厂」决定，见下）
-//   ReconnectSet        标记 Reconnect 是否被显式设置（区分零值与显式 false）
-//   ReconnectMinBackoff 指数退避初始间隔，<=0 用默认 500ms
-//   ReconnectMaxBackoff 指数退避上限，<=0 用默认 30s
-//
-// NewConsumerFromClient：用 Client 的真实 cfg.Service 落日志，并注入连接工厂复用 Client 的 dial 逻辑，
-// 从而具备重连能力——这是多服务复用、需要自动重连时应优先用的构造方式。
-// 该类构造默认开启重连；显式关闭用 ReconnectSet=true + Reconnect=false。
-cons, err := rabbitmq.NewConsumerFromClient(c, &rabbitmq.ConsumerConfig{
-    Queue:               q.Name,
-    Prefetch:            10,
-    AutoAck:             false,
-    ReconnectMinBackoff: 500 * time.Millisecond, // 可选，<=0 用默认
-    ReconnectMaxBackoff: 30 * time.Second,       // 可选，<=0 用默认
-}, func(ctx context.Context, d amqp.Delivery) error {
-    if err := handle(d.Body); err != nil {
-        return err
-    }
-    return d.Ack(false)
-})
-if err != nil {
-    panic(err)
-}
-if err := cons.Start(); err != nil {
-    panic(err)
-}
-defer cons.Shutdown()
-
-// NewConsumerWithService：已有原生 conn、但有真实服务名可分时用，日志 service 显式指定（不启用重连）。
-//   cons, err := rabbitmq.NewConsumerWithService(conn, "order-svc", cfg, handler)
-```
-
-> **构造函数与重连/ service 语义对照**（`NewConsumer` 的签名与行为保持不变，向后兼容）：
-> - `NewConsumer(conn, cfg, handler, opts...)`：只拿到 conn、拿不到 cfg，**无法重建连接 → 不重连**；
->   日志 service 沿用兜底值 `rabbitmq-consumer`（保持旧行为）。
-> - `NewConsumerFromClient(client, cfg, handler, opts...)`：用 `client.cfg.Service` 落日志 + 注入连接工厂，
->   **默认开启重连**（指数退避，可配 min/max）；显式关闭用 `ReconnectSet=true` + `Reconnect=false`。
-> - `NewConsumerWithService(conn, service, cfg, handler, opts...)`：指定日志 service，**不重连**。
-
 #### 自定义日志配置
 
 ```go
@@ -386,12 +256,11 @@ c, err := rabbitmq.New(cfg, mqaccess.WithLogConfig(customLogCfg), mqaccess.WithC
 
 | 引擎 | 发布 op | 消费 op |
 |---|---|---|
-| NATS core | `publish` | `consume` |
-| NATS JetStream | `publish_js` | `consume_js` |
+| NATS | `publish` | `consume` |
 | RocketMQ | `send` | `consume` |
 | RabbitMQ | `publish` | `consume` |
 
-caller 校准到业务调用行：NATS core 为 2 帧、RocketMQ 同步发送为 4 帧（按各自链路校准，可用
+caller 校准到业务调用行：NATS 为 2 帧、RocketMQ 同步发送为 4 帧（按各自链路校准，可用
 `WithCallerSkip` 微调）。异步发送在回调里按**真实 broker 结果**记录；异步消费回调运行在引擎
 goroutine 上，caller 指向运行时，无法落到业务行。
 消费侧 `app.request.duration_ms` 记录的是 **handler 处理耗时**（不是 broker RTT）；NATS core 为
@@ -407,7 +276,7 @@ goroutine 上，caller 指向运行时，无法落到业务行。
 
 - 生产端：`PublishWithTrace` / `SendSyncWithTrace` / `SendAsyncWithTrace` 会把 ctx 的
   `traceparent`/`tracestate` + `request_id` 写进消息（NATS header / RocketMQ properties / RabbitMQ `amqp.Table` headers）。
-- 消费端：`Subscribe` / `SubscribeJS` / 各引擎消费回调会先还原 trace/request_id 到 ctx，业务日志（glog）自动带上 `trace.id`。
+- 消费端：`Subscribe` / 消费回调会先还原 trace/request_id 到 ctx，业务日志（glog）自动带上 `trace.id`。
 - carrier 的底层容器三引擎各不相同（NATS `map[string][]string`、RocketMQ `map[string]string`、
   RabbitMQ `map[string]interface{}`），trace 适配器各写各的；共享的是「注入→透传→还原 + InjectTraceFields」
   三步约定（顶层 `mqaccess/trace.go`）。

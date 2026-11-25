@@ -4,8 +4,6 @@
 //   - 顶层只放跨引擎真一致的东西：公共 Option、日志「记录层」、trace/request_id 透传的三步走约定。
 //   - 每个引擎一个子目录（mqaccess/nats、mqaccess/rocketmq、mqaccess/rabbitmq），各自忠实暴露引擎语义，
 //     不共享统一的 Producer/Consumer 接口，也不做 driver 注册表。
-//   - mqaccess/nats 在 core（Publish/Subscribe）之外，已提供基础可用的 JetStream 薄封装
-//     （见 nats/jetstream.go：JS() / EnsureStream / EnsureConsumer / PublishJS / SubscribeJS，本层接管 ack）。
 //
 // 之所以不做统一消息接口：gorm 的多引擎是借 gorm.Dialector 统一抽象、storage 是借 S3 协议统一；
 // 消息队列没有这种上游统一接口，硬抽 Producer/Consumer 只会抽出「最小公约数」，把
