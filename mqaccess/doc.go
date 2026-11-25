@@ -14,4 +14,13 @@
 //   - 「记录层」在本包（Logger / Record）：日志字段、callerSkip 校准、公共 Option——跨引擎一致。
 //   - 「埋点层」在各引擎子包：在哪个点打、怎么拿到成功/失败因引擎而异
 //     （NATS 包 PublishMsg 判 err；RocketMQ 用 primitive.Interceptor），必须各写各的。
+//
+// 封装边界（重要，别再往里加）：
+//   - 本包只封「官方客户端给不了、又跨引擎一致」的两件事——统一操作日志（含 caller 校准）
+//     与 trace/request_id 透传，外加连接/生命周期/健康检查这层薄壳。
+//   - 引擎私有的传输语义一律交给官方 SDK，不在本库二次封装：NATS JetStream（用 nats.go/jetstream）、
+//     消息延迟/顺序/消费过滤（用 rocketmq-client-go 原生）、连接断线重连（用 amqp091 生态常规做法）、
+//     消费端 ack/offset/rebalance 等，都不在本库实现。
+//   - 判据：「跨引擎能给出同一个正确语义」的才封；「只能假装一致、实则掩盖差异」或「官方已有成熟实现」
+//     的一律不封、直接透出官方能力。历史上曾一度加入 JetStream/自研重连/延迟顺序等封装，已按此边界收敛移除。
 package mqaccess
