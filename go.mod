@@ -35,6 +35,7 @@ require (
 	github.com/nats-io/nkeys v0.4.7
 	github.com/ncruces/go-sqlite3 v0.38.0
 	github.com/ncruces/go-sqlite3/gormlite v0.34.0
+	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cast v1.10.0
