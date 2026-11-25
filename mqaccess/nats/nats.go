@@ -15,7 +15,6 @@ import (
 	"github.com/morehao/golib/gconstant"
 	"github.com/morehao/golib/mqaccess"
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // defaultCallerSkip 是本引擎的 caller 校准值：
@@ -28,9 +27,6 @@ type Client struct {
 	conn   *nats.Conn
 	logger *mqaccess.Logger
 	cfg    *Config
-
-	// js 是 JetStream 上下文，仅在 cfg.JetStream=true 时非 nil（见 New 与 JS()）。
-	js jetstream.JetStream
 
 	// closed 在连接真正关闭后（Drain 完成或被关闭）被关闭，用于让 Close 等待排空结束。
 	closed chan struct{}
@@ -101,35 +97,19 @@ func New(cfg *Config, opts ...mqaccess.Option) (*Client, error) {
 		return nil, fmt.Errorf("nats: flush after connect: %w", err)
 	}
 
-	// cfg.JetStream=true 时基于已建好的连接初始化 JetStream 上下文；
-	// 失败必须关闭连接后返回，避免泄漏半初始化的 conn。
-	// cfg.JetStream=false 时行为与 core 完全一致（js 保持 nil）。
-	var js jetstream.JetStream
-	if cfg.JetStream {
-		js, err = jetstream.New(conn)
-		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("nats: init jetstream: %w", err)
-		}
-	}
+	// JetStream 预留：本期 core 优先，暂不初始化 JS context。
+	// TODO: cfg.JetStream 为 true 时初始化 JetStream 上下文与相关 API。
 
 	return &Client{
 		conn:   conn,
 		logger: logger,
 		cfg:    cfg,
-		js:     js,
 		closed: closed,
 	}, nil
 }
 
 // Conn 暴露底层 *nats.Conn，便于业务使用 JetStream/Request 等本包未封装的能力。
 func (c *Client) Conn() *nats.Conn { return c.conn }
-
-// JS 返回 JetStream 上下文。
-//
-// 仅在 cfg.JetStream=true 时非 nil；未启用时返回 nil，调用方需自行判断
-// （本包不替业务静默兜底，忠实暴露 JetStream 语义）。
-func (c *Client) JS() jetstream.JetStream { return c.js }
 
 // Publish 向 subject 发布一条带 header 的消息。
 //
@@ -170,7 +150,7 @@ func (c *Client) PublishWithTrace(ctx context.Context, subject string, data []by
 // 耗时语义：这里记录的是「handler 处理时长」（cb 从进入到返回的耗时），
 // 不是 broker RTT（core 订阅没有服务端往返的确认步骤），也不要把它误读成「订阅耗时」——
 // 订阅本身早已建立，日志反映的是逐条消息的处理成本。op 用 "consume" 与 Publish 的 "publish"
-// 对称，字段 db.operation.content 记录 subject。
+// 以及其它引擎消费侧的 "consume" 对齐，字段 db.operation.content 记录 subject。
 //
 // 成功/失败语义：core NATS 是「至多一次」投递，没有 ack/nak 概念，也拿不到 broker 的处理结果；
 // 因此这里恒记成功（err=nil）。回调即使内部出错也由业务自行记录，本层不臆造失败。
@@ -182,7 +162,6 @@ func (c *Client) Subscribe(subject string, cb func(ctx context.Context, msg *nat
 		ctx := mqaccess.ExtractTrace(context.Background(), natsHeaderCarrier(msg.Header))
 		start := time.Now()
 		cb(ctx, msg)
-		// 耗时 = handler 处理时长；core 无 ack 失败概念，故 err 恒为 nil。
 		c.logger.Record(ctx, "consume", start, nil, gconstant.KeyDbOperationContent, msg.Subject)
 	})
 }

@@ -42,10 +42,6 @@ func NewProducer(cfg *Config, opts ...mqaccess.Option) (*Producer, error) {
 	producerOpts := []producer.Option{
 		producer.WithNameServer(primitive.NamesrvAddr{cfg.NameServer}),
 		producer.WithGroupName(cfg.GroupName),
-		// 顺序消息依赖 shardingKey 做队列选择：hash 选择器对带 shardingKey 的消息
-		// 按 key 哈希固定队列，使同 key 消息落到同一队列、保持顺序（见 SendSyncOrderly）。
-		// 不带 shardingKey 的消息该选择器退化为随机选队列，与默认行为一致。
-		producer.WithQueueSelector(producer.NewHashQueueSelector()),
 		producer.WithInterceptor(p.producerInterceptor()),
 	}
 	if cfg.SendMsgTimeout > 0 {
@@ -136,53 +132,6 @@ func (p *Producer) SendSyncWithTrace(ctx context.Context, topic string, body []b
 		ctx = context.Background()
 	}
 	msg := primitive.NewMessage(topic, body)
-	injectTraceToMessage(ctx, msg)
-	return p.p.SendSync(ctx, msg)
-}
-
-// SendSyncWithTraceDelay 同步发送一条延迟消息，并把当前 ctx 的链路信息注入消息 properties。
-//
-// 延迟语义按其 v2.1.2 实际 API 设置：调用 primitive.Message.WithDelayTimeLevel(level)，
-// 该方法在 v2.1.2 里是往消息 properties 写 DELAY（primitive.PropertyDelayTimeLevel）
-// 属性（见 primitive/message.go 的 WithDelayTimeLevel），而不是走独立字段；
-// broker 收到后按该级别投递，消费端到点才能拉到，是服务端延迟消息。
-//
-// delayLevel 取值从 1 开始，对应延迟时长：
-// 1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h。
-// 传 <=0 等价于不设置延迟（立即投递），此时退化为普通同步发送。
-//
-// trace 注入与拦截器埋点和 SendSyncWithTrace 完全一致（延迟属性不影响埋点路径）。
-func (p *Producer) SendSyncWithTraceDelay(ctx context.Context, topic string, body []byte, delayLevel int) (*primitive.SendResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	msg := primitive.NewMessage(topic, body)
-	if delayLevel > 0 {
-		msg.WithDelayTimeLevel(delayLevel)
-	}
-	injectTraceToMessage(ctx, msg)
-	return p.p.SendSync(ctx, msg)
-}
-
-// SendSyncOrderly 同步发送一条顺序消息，并把当前 ctx 的链路信息注入消息 properties。
-//
-// 顺序语义按其 v2.1.2 实际 API 透传：调用 primitive.Message.WithShardingKey(shardingKey)
-// 写入 SHARDING_KEY（primitive.PropertyShardingKey）属性。v2.1.2 里并没有独立的
-// SendSyncWithShardingKey / SendSyncOrderly 方法，顺序发送是「由 shardingKey 做队列选择」
-// 实现的——生产者在创建时挂 producer.NewHashQueueSelector（见 NewProducer），
-// 该选择器对带 shardingKey 的消息按 key 做 FNV 哈希固定落到同一队列；
-// 同一 shardingKey 的消息因此进入同一队列，天然保持 broker 上的写入顺序（即顺序消息）。
-//
-// shardingKey 为空时退化为普通同步发送（哈希选择器随机选队列，不保证顺序）。
-// trace 注入与拦截器埋点和 SendSyncWithTrace 完全一致。
-func (p *Producer) SendSyncOrderly(ctx context.Context, topic string, body []byte, shardingKey string) (*primitive.SendResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	msg := primitive.NewMessage(topic, body)
-	if shardingKey != "" {
-		msg.WithShardingKey(shardingKey)
-	}
 	injectTraceToMessage(ctx, msg)
 	return p.p.SendSync(ctx, msg)
 }
