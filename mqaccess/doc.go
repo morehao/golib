@@ -23,4 +23,8 @@
 //     消费端 ack/offset/rebalance 等，都不在本库实现。
 //   - 判据：「跨引擎能给出同一个正确语义」的才封；「只能假装一致、实则掩盖差异」或「官方已有成熟实现」
 //     的一律不封、直接透出官方能力。历史上曾一度加入 JetStream/自研重连/延迟顺序等封装，已按此边界收敛移除。
+//
+// 官方内部日志（可选）：各引擎官方客户端内部的诊断日志默认丢弃/打 stderr，可通过
+// SetBrokerInternalLog 显式桥接到 glog（带 db.system=mq、mq.engine 标签）；不调用则不改变任何行为。
+// NATS 官方无内部 logger 接口，不适用。
 package mqaccess

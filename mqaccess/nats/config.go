@@ -20,10 +20,6 @@ type Config struct {
 	// Name 是客户端名称（nats.Name），便于服务端监控/排障；为空时回退到 Service。
 	Name string
 
-	// JetStream 标记是否启用 JetStream。本期 core publish/subscribe 优先，
-	// 置 true 暂不改变连接行为（预留开关，见 nats.go 中的说明）。
-	JetStream bool
-
 	// ConnectTimeout 是建连超时；<=0 时用默认值（defaultConnectTimeout）。
 	ConnectTimeout time.Duration
 

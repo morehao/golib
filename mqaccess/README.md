@@ -9,7 +9,7 @@ Go 消息队列访问层的统一「**操作日志封装**」。提供 NATS、Ro
 
 - **顶层 `mqaccess`**：跨引擎真一致的部分——公共 Option（`WithLogConfig` / `WithCallerSkip`）、
   日志「**记录层**」（`Logger` / `Record`）、trace/request_id 透传的三步走约定（`InjectTrace` / `ExtractTrace`）。
-- **`mqaccess/nats`**：NATS 客户端（core；JetStream 预留），忠实暴露 NATS 语义。
+- **`mqaccess/nats`**：NATS core 客户端（Publish/Subscribe），忠实暴露 NATS 语义。JetStream 请直接用官方 `nats.go/jetstream`。
 - **`mqaccess/rocketmq`**：RocketMQ 生产/消费者，忠实暴露 RocketMQ 语义（`SendResult` / `ConsumeResult`）。
 - **`mqaccess/rabbitmq`**：RabbitMQ 客户端（基于 `amqp091-go`），忠实暴露 exchange/queue 声明、`Delivery.Ack/Nack`、prefetch、publisher confirm 语义。
 
@@ -54,7 +54,6 @@ type Config struct {
     Service        string        // 服务名（必填，落日志 service，也作为默认 NATS Name）
     URL            string        // nats://127.0.0.1:4222；可逗号分隔多个做故障转移
     Name           string        // 客户端名（可选，默认取 Service）
-    JetStream      bool          // 预留开关；本期 core publish/subscribe 优先
     ConnectTimeout time.Duration // 建连超时，<=0 用默认 5s
     User, Password string        // 基本认证（可选）
     Token          string        // Token 认证（可选）
@@ -256,21 +255,57 @@ c, err := rabbitmq.New(cfg, mqaccess.WithLogConfig(customLogCfg), mqaccess.WithC
 
 | 引擎 | 发布 op | 消费 op |
 |---|---|---|
-| NATS | `publish` | `consume` |
+| NATS | `publish` | ——（core 无 ack，不记消费日志） |
 | RocketMQ | `send` | `consume` |
 | RabbitMQ | `publish` | `consume` |
 
 caller 校准到业务调用行：NATS 为 2 帧、RocketMQ 同步发送为 4 帧（按各自链路校准，可用
 `WithCallerSkip` 微调）。异步发送在回调里按**真实 broker 结果**记录；异步消费回调运行在引擎
 goroutine 上，caller 指向运行时，无法落到业务行。
-消费侧 `app.request.duration_ms` 记录的是 **handler 处理耗时**（不是 broker RTT）；NATS core 为
-至多一次投递、无 ack/nak 概念，故其 `consume` 日志不体现消费失败。典型字段：
+消费侧 `app.request.duration_ms` 记录的是 **handler 处理耗时**（不是 broker RTT）。NATS core 为
+至多一次投递、无 ack/nak 概念，消费日志无有效信息量，故**不记录**。典型字段：
 
 ```json
 {"level":"debug","msg":"mq publish success","service":"order-svc","server.address":"nats://127.0.0.1:4222",
  "db.operation":"publish","app.request.duration_ms":0.04,"app.response.code":0,
  "db.operation.content":"order.created","trace.id":"...","span.id":"..."}
 ```
+
+## 官方内部日志桥接（可选）
+
+`mqaccess` 自己的「操作日志」由 `Logger.Record` 负责（上表）。除此之外，各官方客户端内部还会打
+「库自身状态/报错」类日志（协议错误、心跳超时、rebalance、offset 异常……），默认被丢弃或打到标准输出。
+需要把这类内部日志也导进 `glog` 时，启动阶段调用一次：
+
+```go
+// logger 为任意 glog.Logger；传 nil 表示静默（内部日志丢弃）。
+mqaccess.SetBrokerInternalLog(someGlogLogger)
+```
+
+- **显式 opt-in**：不调用时各官方库保持默认行为，`mqaccess` 不改变任何现有行为。
+- **进程级全局、启动时调用一次**：底层是 `amqp091.SetLogger` / `rlog.SetLogger`，非并发安全，勿运行中反复切换。
+- 桥接进来的日志带 `db.system=mq` 与 `mq.engine=<rabbitmq|rocketmq>` 标签，与业务操作日志区分。
+- **NATS 不适用**：NATS 官方客户端没有内部 logger 接口，无可桥接内容。
+- 级别映射：amqp091 只有 `Printf`（无级别）→ 统一 Info（含 "error" 升 Warn）；rocketmq 按其
+  Debug/Info/Warning/Error/Fatal → glog 对应级别。
+
+## 健康检查说明
+
+- **NATS**：`Client.HealthCheck` 用 `FlushWithContext` 探测；ctx 无 deadline 时本包补默认超时。
+- **RabbitMQ**：`Client.HealthCheck` 开一个临时 channel 探测；连接已关闭会直接报错。
+- **RocketMQ**：本包**不提供** `HealthCheck`（避免臆造）。需要探测请用官方 `admin.NewAdmin` +
+  `FetchAllTopicList` 自行实现。
+
+## 引擎私有语义请直接用官方 SDK
+
+`mqaccess` 只封装「连接/生命周期 + 操作日志 + trace 透传 + caller 校准」这一横切薄层。
+以下引擎私有能力**不在本库封装**，请直接用官方客户端（本库均通过 `Conn()` / `Connection()` 等暴露底层对象）：
+
+| 能力 | 官方入口 |
+|---|---|
+| NATS JetStream | `github.com/nats-io/nats.go/jetstream` |
+| RocketMQ 延迟 / 顺序 / 消费过滤（TAG/SQL92） | `github.com/apache/rocketmq-client-go/v2`（`WithDelayTimeLevel` / `WithShardingKey` / `consumer.MessageSelector`） |
+| RabbitMQ 断线重连 | 官方 `amqp091-go` 生态常规做法 |
 
 ## 上下文传递
 
