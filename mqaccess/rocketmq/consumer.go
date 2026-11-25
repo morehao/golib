@@ -25,11 +25,46 @@ type Consumer struct {
 	handler Handler
 }
 
+// ConsumerOption 是 NewConsumer 的可选配置项。
+//
+// 采用函数式选项而非扩展 NewConsumer 签名，保证旧调用（NewConsumer(cfg, topic, handler, opts...)）
+// 完全不受影响，默认仍为空 MessageSelector（订阅全部 tag）。
+type ConsumerOption func(*consumerConfig)
+
+// consumerConfig 承载 NewConsumer 的引擎内可选设置。
+type consumerConfig struct {
+	selector consumer.MessageSelector
+}
+
+// WithMessageSelector 设置订阅的消息过滤器，透传给 rocketmq 的 consumer.MessageSelector。
+//
+// 支持两类过滤（忠实透传 v2.1.2 的 ExpressionType）：
+//   - tag 过滤：consumer.MessageSelector{Type: consumer.TAG, Expression: "tagA || tagB"}
+//   - sql92 过滤：consumer.MessageSelector{Type: consumer.SQL92,
+//     Expression: "a > 10 AND b IS NOT NULL"}（按消息属性过滤）
+//
+// 不调用该方法时 selector 为零值（Type==""、Expression==""），
+// 由 rocketmq 视作订阅全部消息，与旧行为一致。
+func WithMessageSelector(selector consumer.MessageSelector) ConsumerOption {
+	return func(c *consumerConfig) { c.selector = selector }
+}
+
 // NewConsumer 构造一个 RocketMQ 推送消费者并订阅 topic。
 //
 // handler 内已包了一层：先从消息 properties 还原 trace 到 ctx，再调用户 handler，
 // 并埋一条 consume 日志（含 ConsumeResult）；handler 的 ConsumeResult 原样透出。
+//
+// 订阅的消息过滤器通过 ConsumerOption（见 WithMessageSelector）传入；不传时订阅全部。
 func NewConsumer(cfg *Config, topic string, handler Handler, opts ...mqaccess.Option) (*Consumer, error) {
+	return NewConsumerWithOptions(cfg, topic, handler, nil, opts...)
+}
+
+// NewConsumerWithOptions 与 NewConsumer 相同，额外接受订阅侧的可选配置（如消息过滤器）。
+//
+// 拆出独立入口是为了在不改动 NewConsumer 签名的前提下暴露 filter 能力；
+// 两个入口最终共用同一套构造逻辑。
+func NewConsumerWithOptions(cfg *Config, topic string, handler Handler,
+	copts []ConsumerOption, opts ...mqaccess.Option) (*Consumer, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -38,6 +73,12 @@ func NewConsumer(cfg *Config, topic string, handler Handler, opts ...mqaccess.Op
 	}
 	if handler == nil {
 		return nil, fmt.Errorf("rocketmq: handler is required")
+	}
+	cc := &consumerConfig{}
+	for _, co := range copts {
+		if co != nil {
+			co(cc)
+		}
 	}
 	o := mqaccess.ApplyOptions(opts...)
 	logger, err := mqaccess.NewLogger(cfg.Service, cfg.NameServer, o.LoggerConfig(),
@@ -66,7 +107,7 @@ func NewConsumer(cfg *Config, topic string, handler Handler, opts ...mqaccess.Op
 	}
 	c.pc = pc
 
-	if err := pc.Subscribe(topic, consumer.MessageSelector{}, c.wrapHandler()); err != nil {
+	if err := pc.Subscribe(topic, cc.selector, c.wrapHandler()); err != nil {
 		// Subscribe 失败时回收已创建的 push consumer，避免泄漏客户端资源。
 		_ = pc.Shutdown()
 		return nil, fmt.Errorf("rocketmq: subscribe topic %q: %w", topic, err)
