@@ -84,7 +84,11 @@ const (
 	RocketMQGroupName  = "ROCKETMQ_GROUP_NAME"
 	RocketMQTopic      = "ROCKETMQ_TOPIC"
 
+	RabbitMQURL   = "RABBITMQ_URL"
+	RabbitMQQueue = "RABBITMQ_QUEUE"
+
 	// 默认连接串（本机 docker 约定对齐 .env.example）。
 	DefaultNATSURL            = "nats://127.0.0.1:4222"
 	DefaultRocketMQNameServer = "127.0.0.1:9876"
+	DefaultRabbitMQURL        = "amqp://admin:admin123@127.0.0.1:5672/"
 )

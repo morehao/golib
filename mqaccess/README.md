@@ -1,6 +1,6 @@
 # mqaccess
 
-Go 消息队列访问层的统一「**操作日志封装**」。提供 NATS、RocketMQ 两个引擎的便捷客户端，内置与
+Go 消息队列访问层的统一「**操作日志封装**」。提供 NATS、RocketMQ、RabbitMQ 三个引擎的便捷客户端，内置与
 `dbaccess`（dbredis/dbgorm）一致的操作日志、trace/request_id 透传与连通性探测。
 
 ## 概述
@@ -11,6 +11,7 @@ Go 消息队列访问层的统一「**操作日志封装**」。提供 NATS、Ro
   日志「**记录层**」（`Logger` / `Record`）、trace/request_id 透传的三步走约定（`InjectTrace` / `ExtractTrace`）。
 - **`mqaccess/nats`**：NATS 客户端（core；JetStream 预留），忠实暴露 NATS 语义。
 - **`mqaccess/rocketmq`**：RocketMQ 生产/消费者，忠实暴露 RocketMQ 语义（`SendResult` / `ConsumeResult`）。
+- **`mqaccess/rabbitmq`**：RabbitMQ 客户端（基于 `amqp091-go`），忠实暴露 exchange/queue 声明、`Delivery.Ack/Nack`、prefetch、publisher confirm 语义。
 
 > **为什么不抽统一的 Producer/Consumer 接口？** gorm 的多引擎是借 `gorm.Dialector` 统一抽象、storage 是借
 > S3 协议统一；消息队列**没有这种上游统一接口**。硬抽一个 `Producer/Consumer` 只会抽出「最小公约数」，
@@ -166,6 +167,89 @@ p, err := rocketmq.NewProducer(cfg, mqaccess.WithLogConfig(customLogCfg), mqacce
 
 ---
 
+## 3. RabbitMQ（`mqaccess/rabbitmq`）
+
+#### 安装
+
+```bash
+import "github.com/morehao/golib/mqaccess/rabbitmq"
+```
+
+#### 配置说明
+
+```go
+type Config struct {
+    Service     string        // 服务名（必填）
+    URL         string        // AMQP 连接串，优先使用；如 amqp://admin:admin123@127.0.0.1:5672/
+    Host        string        // URL 为空时用下列字段拼 AMQP URI
+    Port        int           // <=0 用 5672
+    User, Password string     // AMQP 认证
+    Vhost       string        // 虚拟主机，空用 "/"
+    TLSConfig   *tls.Config   // 非空则 amqps + TLS
+    DialTimeout time.Duration // 建连超时，<=0 用默认 5s
+    Heartbeat   time.Duration // 心跳，<=0 用默认 10s
+}
+```
+
+#### 使用示例
+
+```go
+c, err := rabbitmq.New(&rabbitmq.Config{Service: "order-svc", URL: "amqp://admin:admin123@127.0.0.1:5672/"})
+if err != nil {
+    panic(err)
+}
+defer c.Close()
+
+// 声明（透传 amqp 语义；4.4 起 transient non-exclusive queue 默认禁用，用 durable 队列）
+q, err := c.QueueDeclare("order.created", true, false, false, false, nil)
+// 也可 c.ExchangeDeclare / c.QueueBind / c.Channel()
+
+// 发布：PublishWithTrace 会先把 ctx 的 trace/request_id 注入 msg.Headers 再发，
+// 内部走 publisher confirm，未获 broker 确认返回错误。exchange 传 "" 即默认 exchange，routingKey 用队列名。
+err = c.PublishWithTrace(ctx, "", q.Name, amqp.Publishing{
+    ContentType:  "application/json",
+    DeliveryMode: amqp.Persistent,
+    MessageId:    "msg-1",
+    Body:         []byte(`{"id":1}`),
+})
+
+// 消费：独立 channel，手动 ack（AutoAck=false 默认）。ack 语义完全由 handler 掌握。
+cons, err := rabbitmq.NewConsumer(c.Connection(), &rabbitmq.ConsumerConfig{
+    Queue:    q.Name,
+    Prefetch: 10,   // Qos 预取数；<=0 用 broker 默认
+    AutoAck:  false, // 推荐手动确认
+    // RequeueOnError: true, // handler 返回 error 时 Nack + requeue（默认 false，直接丢弃/进死信）
+}, func(ctx context.Context, d amqp.Delivery) error {
+    // 此处 ctx 的 request_id / trace 已从消息头还原，业务日志自动串联
+    if err := handle(d.Body); err != nil {
+        return err // 返回 error → 本层按 RequeueOnError 决定是否 Nack（handler 未自行 ack 时）
+    }
+    return d.Ack(false) // 成功自行 ack
+}, mqaccess.WithCallerSkip(5))
+if err != nil {
+    panic(err)
+}
+if err := cons.Start(); err != nil { // 非阻塞，内部 goroutine 拉取
+    panic(err)
+}
+defer cons.Shutdown()
+
+// 仅验证连通
+_ = c.HealthCheck(ctx)
+```
+
+> **ack 归属（透出不接管）**：`AutoAck=false`（默认）时本层不替调用方 ack，由 handler 自行 `d.Ack/Nack/Reject`。
+> handler 返回 error 且未自行 ack 时，本层按 `RequeueOnError` 做一次 `d.Nack(false, requeue)`。
+> 若 `AutoAck=true`，broker 一投递即视为成功，与 handler 结果无关，本层不会再调用 Ack/Nack。
+
+#### 自定义日志配置
+
+```go
+c, err := rabbitmq.New(cfg, mqaccess.WithLogConfig(customLogCfg), mqaccess.WithCallerSkip(5))
+```
+
+---
+
 ## 自动日志记录
 
 每次 publish / subscribe / send / consume 都会打一条结构化日志（成功 `debug`，失败 `error`），
@@ -183,7 +267,8 @@ goroutine 上，caller 指向运行时，无法落到业务行。
 ## 上下文传递
 
 - 生产端：`PublishWithTrace` / `SendSyncWithTrace` / `SendAsyncWithTrace` 会把 ctx 的
-  `traceparent`/`tracestate` + `request_id` 写进消息（NATS header / RocketMQ properties）。
+  `traceparent`/`tracestate` + `request_id` 写进消息（NATS header / RocketMQ properties / RabbitMQ `amqp.Table` headers）。
 - 消费端：`Subscribe` / 消费回调会先还原 trace/request_id 到 ctx，业务日志（glog）自动带上 `trace.id`。
-- carrier 的底层容器两引擎不同（NATS `map[string][]string` vs RocketMQ `map[string]string`），
-  trace 适配器各写各的；共享的是「注入→透传→还原 + InjectTraceFields」三步约定（顶层 `mqaccess/trace.go`）。
+- carrier 的底层容器三引擎各不相同（NATS `map[string][]string`、RocketMQ `map[string]string`、
+  RabbitMQ `map[string]interface{}`），trace 适配器各写各的；共享的是「注入→透传→还原 + InjectTraceFields」
+  三步约定（顶层 `mqaccess/trace.go`）。
