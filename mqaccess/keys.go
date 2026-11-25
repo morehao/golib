@@ -9,4 +9,11 @@ const (
 	KeyMqMessageStatus = "mq.message.status"
 	// KeyMqConsumeResult 是 RocketMQ 消费结果（consumer.ConsumeResult，ConsumeSuccess=0）。
 	KeyMqConsumeResult = "mq.message.consume_result"
+
+	// KeyMqEngine 标识内部日志来自哪个引擎（nats / rocketmq / rabbitmq）。
+	// 仅用于「官方客户端内部日志桥接」（见 brokerlog.go），与业务操作日志区分。
+	KeyMqEngine = "mq.engine"
+	// KeyMqSystem 是内部日志的组件大类标记，固定为 "mq"。
+	// 对齐 OpenTelemetry 的 db.system 语义，便于与数据库类日志区分。
+	KeyMqSystem = "db.system"
 )

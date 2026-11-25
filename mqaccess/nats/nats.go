@@ -97,8 +97,8 @@ func New(cfg *Config, opts ...mqaccess.Option) (*Client, error) {
 		return nil, fmt.Errorf("nats: flush after connect: %w", err)
 	}
 
-	// JetStream 预留：本期 core 优先，暂不初始化 JS context。
-	// TODO: cfg.JetStream 为 true 时初始化 JetStream 上下文与相关 API。
+	// 本包只封装 core NATS（Publish/Subscribe）。JetStream（持久化、ack 语义）请
+	// 直接使用官方 nats.go/jetstream：本包通过 Conn() 暴露底层 *nats.Conn，可据此构造 JS 上下文。
 
 	return &Client{
 		conn:   conn,
@@ -143,26 +143,20 @@ func (c *Client) PublishWithTrace(ctx context.Context, subject string, data []by
 	return c.Publish(ctx, subject, data, headers)
 }
 
-// Subscribe 订阅 subject，每条消息回调前先还原链路 ctx 并埋 consume 日志。
+// Subscribe 订阅 subject，每条消息回调前先还原链路 ctx。
 //
-// 回调内：ctx = ExtractTrace（还原 span + trace 字段）→ 计时 → cb → 埋点。
+// 回调内：ctx = ExtractTrace（还原 span + trace 字段）→ cb。
 //
-// 耗时语义：这里记录的是「handler 处理时长」（cb 从进入到返回的耗时），
-// 不是 broker RTT（core 订阅没有服务端往返的确认步骤），也不要把它误读成「订阅耗时」——
-// 订阅本身早已建立，日志反映的是逐条消息的处理成本。op 用 "consume" 与 Publish 的 "publish"
-// 以及其它引擎消费侧的 "consume" 对齐，字段 db.operation.content 记录 subject。
-//
-// 成功/失败语义：core NATS 是「至多一次」投递，没有 ack/nak 概念，也拿不到 broker 的处理结果；
-// 因此这里恒记成功（err=nil）。回调即使内部出错也由业务自行记录，本层不臆造失败。
+// 不记录消费日志：core NATS 是「至多一次」投递，没有 ack/nak 概念，也拿不到 broker 的处理结果；
+// 一条「恒成功、耗时仅为 handler 处理时长」的 consume 日志信息量低且易误导，故本层不记。
+// 需要消费侧可观测性（ack/重投/耗时）请直接使用官方 nats.go/jetstream，或由业务在回调内自行记录。
 func (c *Client) Subscribe(subject string, cb func(ctx context.Context, msg *nats.Msg)) (*nats.Subscription, error) {
 	if cb == nil {
 		return nil, fmt.Errorf("nats: subscribe callback is nil")
 	}
 	return c.conn.Subscribe(subject, func(msg *nats.Msg) {
 		ctx := mqaccess.ExtractTrace(context.Background(), natsHeaderCarrier(msg.Header))
-		start := time.Now()
 		cb(ctx, msg)
-		c.logger.Record(ctx, "consume", start, nil, gconstant.KeyDbOperationContent, msg.Subject)
 	})
 }
 
