@@ -14,6 +14,7 @@ type Config struct {
 	Service string
 
 	// URL 是 NATS 服务端地址，如 nats://127.0.0.1:4222；可逗号分隔多个做故障转移。
+	// 留空时由 nats.Connect 使用其默认地址（127.0.0.1:4222）。
 	URL string
 
 	// Name 是客户端名称（nats.Name），便于服务端监控/排障；为空时回退到 Service。
@@ -35,8 +36,9 @@ type Config struct {
 	// Token 用于 Token 认证。
 	Token string
 
-	// NKeySeed 是 NKey 种子串（可选，需 nats.NkeyOptionFromSeed 解析）。
-	NKeySeed string
+	// NKeySeedFile 是 NKey 种子**文件路径**（注意不是种子内容）。
+	// 底层 nats.NkeyOptionFromSeed 按路径读取种子文件，传入种子串会读取失败。
+	NKeySeedFile string
 
 	// TLSConfig 自定义 TLS 配置；为 nil 时不启用 TLS。
 	TLSConfig *tls.Config
@@ -47,4 +49,6 @@ const (
 	defaultConnectTimeout = 5 * time.Second
 	// defaultName 是 Name 与 Service 都为空时的兜底客户端名（正常情况下 Service 已校验非空）。
 	defaultName = "golib-mqaccess-nats"
+	// defaultDrainTimeout 是 Close 等待 Drain 完成的上限，超时后强制关闭并返回错误。
+	defaultDrainTimeout = 30 * time.Second
 )

@@ -23,8 +23,6 @@ type Consumer struct {
 	pc      rocketmq.PushConsumer
 	topic   string
 	handler Handler
-
-	interceptor primitive.Interceptor
 }
 
 // NewConsumer 构造一个 RocketMQ 推送消费者并订阅 topic。
@@ -42,18 +40,17 @@ func NewConsumer(cfg *Config, topic string, handler Handler, opts ...mqaccess.Op
 		return nil, fmt.Errorf("rocketmq: handler is required")
 	}
 	o := mqaccess.ApplyOptions(opts...)
-	logger, err := mqaccess.NewLogger(cfg.Service, cfg.NameServer, o.LoggerConfig(), o.CallerSkip())
+	logger, err := mqaccess.NewLogger(cfg.Service, cfg.NameServer, o.LoggerConfig(),
+		mqaccess.ResolveCallerSkip(o.CallerSkip(), defaultCallerSkip))
 	if err != nil {
 		return nil, err
 	}
 
 	c := &Consumer{cfg: cfg, logger: logger, topic: topic, handler: handler}
-	c.interceptor = c.consumerInterceptor()
 
 	consumerOpts := []consumer.Option{
 		consumer.WithNameServer(primitive.NamesrvAddr{cfg.NameServer}),
 		consumer.WithGroupName(cfg.GroupName),
-		consumer.WithInterceptor(c.interceptor),
 	}
 	if cfg.AccessKey != "" || cfg.SecretKey != "" {
 		consumerOpts = append(consumerOpts, consumer.WithCredentials(primitive.Credentials{
@@ -70,51 +67,58 @@ func NewConsumer(cfg *Config, topic string, handler Handler, opts ...mqaccess.Op
 	c.pc = pc
 
 	if err := pc.Subscribe(topic, consumer.MessageSelector{}, c.wrapHandler()); err != nil {
+		// Subscribe 失败时回收已创建的 push consumer，避免泄漏客户端资源。
+		_ = pc.Shutdown()
 		return nil, fmt.Errorf("rocketmq: subscribe topic %q: %w", topic, err)
 	}
 	return c, nil
 }
 
-// wrapHandler 返回订阅回调，内层完成 trace 还原 + consume 埋点。
+// wrapHandler 返回订阅回调：内层完成 trace 还原 + consume 埋点。
+//
+// 埋点只在这里做一次（不再挂 consumer 拦截器，避免失败时重复打日志）。
+// 库默认 ConsumeMessageBatchMaxSize=1，但这里仍按批处理：只处理首批一条会把同批其余
+// 消息「未处理却整批 ack」，属于丢消息；因此逐条处理并聚合结果——任一消息失败则整批
+// 返回失败（代价是重试时可能重复投递已成功的消息，符合 RocketMQ 批量语义的取舍）。
 func (c *Consumer) wrapHandler() func(context.Context, ...*primitive.MessageExt) (consumer.ConsumeResult, error) {
 	return func(ctx context.Context, msgs ...*primitive.MessageExt) (consumer.ConsumeResult, error) {
 		if len(msgs) == 0 {
 			return consumer.ConsumeSuccess, nil
 		}
-		msg := msgs[0]
-		// 从消息 properties 还原链路信息到 ctx，使后续业务日志自动带 trace。
-		ctx = extractTraceFromMessage(ctx, &msg.Message)
 
-		start := time.Now()
-		result, err := c.handler(ctx, msg)
+		result := consumer.ConsumeSuccess
+		var firstErr error
+		for _, msg := range msgs {
+			if msg == nil {
+				continue
+			}
+			// 从消息 properties 还原链路信息到 ctx，使后续业务日志自动带 trace。
+			msgCtx := extractTraceFromMessage(ctx, &msg.Message)
 
-		content := msg.Topic
-		if msg.MsgId != "" {
-			content = msg.MsgId
+			start := time.Now()
+			r, err := c.handler(msgCtx, msg)
+
+			content := msg.Topic
+			if msg.MsgId != "" {
+				content = msg.MsgId
+			}
+			c.logger.Record(msgCtx, "consume", start, err,
+				gconstant.KeyDbOperationContent, content,
+				mqaccess.KeyMqConsumeResult, int(r),
+			)
+
+			if err != nil {
+				if firstErr == nil {
+					firstErr, result = err, r
+				}
+				continue
+			}
+			if r != consumer.ConsumeSuccess && firstErr == nil {
+				result = r
+			}
 		}
-		c.logger.Record(ctx, "consume", start, err,
-			gconstant.KeyDbOperationContent, content,
-			"mq.message.consume_result", int(result),
-		)
-		// 原样透出 handler 的 ConsumeResult（不吞），它就是 ack 语义。
-		return result, err
-	}
-}
-
-// consumerInterceptor 返回消费者的中间件式拦截器。
-//
-// 消费结果由 wrapHandler 的返回值承载（真实 ack 语义在 Subscribe 回调里），
-// 这里只做兜底耗时 / 失败观察，从 reply 断言 *consumer.ConsumeResultHolder 拿结果。
-func (c *Consumer) consumerInterceptor() primitive.Interceptor {
-	return func(ctx context.Context, req, reply interface{}, next primitive.Invoker) error {
-		start := time.Now()
-		err := next(ctx, req, reply)
-		if err != nil {
-			// 失败（handler 返回 error）由 wrapHandler 已埋点；这里仅在无订阅回调可埋时兜底。
-			c.logger.Record(ctx, "consume", start, err)
-		}
-		_ = reply // 结果在 wrapHandler 返回值中已记录
-		return err
+		// 原样透出聚合后的 ConsumeResult（不吞），它就是 ack 语义。
+		return result, firstErr
 	}
 }
 

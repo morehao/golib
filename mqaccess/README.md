@@ -57,7 +57,7 @@ type Config struct {
     ConnectTimeout time.Duration // 建连超时，<=0 用默认 5s
     User, Password string        // 基本认证（可选）
     Token          string        // Token 认证（可选）
-    NKeySeed       string        // NKey 种子（可选）
+    NKeySeedFile   string        // NKey 种子文件路径（可选；注意是文件路径，不是种子内容）
     TLSConfig      *tls.Config   // 自定义 TLS（可选）
 }
 ```
@@ -87,7 +87,11 @@ if err := c.PublishWithTrace(ctx, "order.created", []byte(`{"id":1}`), map[strin
 _ = c.HealthCheck(ctx)
 ```
 
-> `HealthCheck` / `FlushWithContext` 要求 ctx 带 deadline；传入无 deadline 的 ctx 时本包会自动补默认超时。
+> `HealthCheck` 要求 ctx 带 deadline；不传时本包会补默认超时。直接经 `Conn()` 调底层
+> `FlushWithContext` 时没有这层兜底，需自行带 deadline。
+>
+> `Close` 是「排空后关闭」：先 `Drain` 并等待连接真正关闭（上限 30s，超时强制关闭并返回错误），
+> 重复调用是幂等的。
 
 #### 自定义日志配置
 
@@ -165,7 +169,9 @@ p, err := rocketmq.NewProducer(cfg, mqaccess.WithLogConfig(customLogCfg), mqacce
 ## 自动日志记录
 
 每次 publish / subscribe / send / consume 都会打一条结构化日志（成功 `debug`，失败 `error`），
-caller 校准到业务调用行（异步消费回调除外，回调在引擎 goroutine 上执行，caller 指向运行时）。
+caller 校准到业务调用行：NATS 为 2 帧、RocketMQ 同步发送为 4 帧（按各自链路校准，可用
+`WithCallerSkip` 微调）。异步发送在回调里按**真实 broker 结果**记录；异步消费回调运行在引擎
+goroutine 上，caller 指向运行时，无法落到业务行。
 典型字段：
 
 ```json
@@ -176,8 +182,8 @@ caller 校准到业务调用行（异步消费回调除外，回调在引擎 gor
 
 ## 上下文传递
 
-- 生产端：`PublishWithTrace` / `SendSyncWithTrace` 会把 ctx 的 `traceparent`/`tracestate` + `request_id`
-  写进消息（NATS header / RocketMQ properties）。
+- 生产端：`PublishWithTrace` / `SendSyncWithTrace` / `SendAsyncWithTrace` 会把 ctx 的
+  `traceparent`/`tracestate` + `request_id` 写进消息（NATS header / RocketMQ properties）。
 - 消费端：`Subscribe` / 消费回调会先还原 trace/request_id 到 ctx，业务日志（glog）自动带上 `trace.id`。
 - carrier 的底层容器两引擎不同（NATS `map[string][]string` vs RocketMQ `map[string]string`），
   trace 适配器各写各的；共享的是「注入→透传→还原 + InjectTraceFields」三步约定（顶层 `mqaccess/trace.go`）。
