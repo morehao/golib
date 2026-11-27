@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,14 +172,15 @@ func validateConfig(c *Config) error {
 //	submitted == true  => 新建了一条任务
 //	submitted == false => 命中既有 UniqKey，task 为既有任务（可能已是终态）
 func (c *Manager) Submit(ctx context.Context, spec *gasync.AsyncTaskSpec) (*gasync.AsyncTask, bool, error) {
-	return c.submit(ctx, spec, -1)
+	// Submit 恒创建独立任务：chain_id=NULL、step=0、prev_step=-1。步骤链只能经 SubmitAfter 追加。
+	return c.submit(ctx, spec)
 }
 
-// submit 是 Submit 的内部实现；prevStep 为任务链前序步骤（-1 表示独立任务/首步）。
+// submit 是 Submit 的内部实现（独立任务）。步骤链见 SubmitAfter。
 //
 // prev_step 必须随 INSERT 一起落库：先插 -1 再 UPDATE 会留出「下一步绕过链守卫被提前认领」
 // 的窗口，且 UPDATE 失败时任务已投递、无法回滚。
-func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevStep int) (*gasync.AsyncTask, bool, error) {
+func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec) (*gasync.AsyncTask, bool, error) {
 	if spec == nil || spec.Type == "" {
 		return nil, false, gasync.ErrEmptyType
 	}
@@ -194,7 +196,7 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 		scope = ""
 	}
 
-	row, delayMs, err := c.buildSubmitRow(spec, prevStep)
+	row, delayMs, err := c.buildSubmitRow(spec, "", 0, -1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -207,7 +209,8 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 	row.CreatedBy = spec.ActorID
 	row.LastActorID = spec.ActorID
 
-	submitted, err := c.insertAsyncTask(ctx, row, delayMs)
+	// 插入（可选在事务 tx 内）。runner 为 nil 时用 c.db。
+	submitted, err := c.insertAsyncTask(ctx, nil, row, delayMs)
 	if err != nil {
 		return nil, false, err
 	}
@@ -219,33 +222,10 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 			return nil, false, err
 		}
 	} else {
-		// 冲突：回查既有行；回查为空（并发提交者回滚/副本延迟）重试插入一次。
-		if row.UniqKey == nil {
-			// 没有幂等键却报冲突：只可能是主键撞车，无法回查。
-			return nil, false, gasync.ErrUniqKeyRace
-		}
-		asyncTask, err = c.findByUniqKey(ctx, row.ScopeKey, *row.UniqKey)
-		if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
-			retried, rerr := c.insertAsyncTask(ctx, row, delayMs)
-			if rerr != nil {
-				return nil, false, rerr
-			}
-			if !retried {
-				// 仍冲突但回查不到 → 幂等键竞争。
-				asyncTask, err = c.findByUniqKey(ctx, row.ScopeKey, *row.UniqKey)
-				if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
-					return nil, false, gasync.ErrUniqKeyRace
-				}
-				if err != nil {
-					return nil, false, err
-				}
-			} else {
-				asyncTask, err = c.dbSrc.Store().GetAsyncTask(ctx, row.ID)
-				if err != nil {
-					return nil, false, err
-				}
-			}
-		} else if err != nil {
+		// 冲突：独立任务（chainID 空）不会命中 UNIQUE(chain_id,step)（NULL 不冲突），
+		// 只可能是主键撞车或幂等键冲突。
+		asyncTask, err = c.resolveSubmitConflict(ctx, nil, row, delayMs, "")
+		if err != nil {
 			return nil, false, err
 		}
 	}
@@ -260,7 +240,9 @@ func (c *Manager) submit(ctx context.Context, spec *gasync.AsyncTaskSpec, prevSt
 }
 
 // buildSubmitRow 把 AsyncTaskSpec 转成待插入的 CoreAsyncTask 行（只写显式值，其余走列默认）。
-func (c *Manager) buildSubmitRow(spec *gasync.AsyncTaskSpec, prevStep int) (*db.CoreAsyncTask, int64 /*delayMs*/, error) {
+//
+// chainID：空串 → 独立任务（落 SQL NULL）；非空 → 链成员。step：步骤序号（独立任务 0）。
+func (c *Manager) buildSubmitRow(spec *gasync.AsyncTaskSpec, chainID string, step, prevStep int) (*db.CoreAsyncTask, int64 /*delayMs*/, error) {
 	now := timeNow()
 	row := &db.CoreAsyncTask{
 		ID:          genUUID(),
@@ -271,8 +253,8 @@ func (c *Manager) buildSubmitRow(spec *gasync.AsyncTaskSpec, prevStep int) (*db.
 		Priority:    int32(spec.Priority),
 		BizType:     spec.BizType,
 		BizID:       spec.BizID,
-		ChainID:     spec.ChainID,
-		Step:        int32(spec.Step),
+		ChainID:     db.UniqKeyPtr(chainID), // 空串 → nil（SQL NULL），独立任务不参与链唯一
+		Step:        int32(step),
 		PrevStep:    int32(prevStep), // 默认 -1（独立任务）；SubmitAfter 传上游 step
 		Generation:  1,
 		Attempt:     0,
@@ -303,8 +285,12 @@ func (c *Manager) buildSubmitRow(spec *gasync.AsyncTaskSpec, prevStep int) (*db.
 }
 
 // insertAsyncTask 执行一次「冲突忽略」插入。返回 submitted=true 表示新建；
-// false 表示命中唯一键冲突（未插入）。
-func (c *Manager) insertAsyncTask(ctx context.Context, row *db.CoreAsyncTask, delayMs int64) (bool, error) {
+// false 表示命中唯一键冲突（未插入）。runner 为 nil 时用 c.db，否则在给定事务内执行。
+func (c *Manager) insertAsyncTask(ctx context.Context, runner *gorm.DB, row *db.CoreAsyncTask, delayMs int64) (bool, error) {
+	dbExec := c.db
+	if runner != nil {
+		dbExec = runner
+	}
 	prefix, suffix := c.dialect.InsertIgnoreClause()
 
 	nextRunExpr := "?"
@@ -325,7 +311,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
  %s, '', 0, ?, '', NULLIF(?, ''))%s`,
 		prefix, db.CoreAsyncTaskTableName, c.dialect.EmptyKeyExpr(), nextRunExpr, suffix)
 
-	res := c.db.WithContext(ctx).Exec(sql,
+	res := dbExec.WithContext(ctx).Exec(sql,
 		row.ID, row.AppID, row.CreatedAt, row.UpdatedAt, row.ScopeKey, row.TaskType, row.Status, row.Priority,
 		payloadOrEmpty(row), // NULLIF(?, '')
 		row.UniqKey,
@@ -340,8 +326,46 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), %s,
 	return res.RowsAffected > 0, nil
 }
 
-// findByUniqKey 按 (scope_key, uniq_key) 回查**活跃期**任务，不存在返回 ErrAsyncTaskNotFound。
+// resolveSubmitConflict 处理「插入返回 0 行」的冲突，按冲突种类分别处置：
 //
+//   - 有 uniq_key：幂等键冲突 → 回查既有活跃行（回查为空说明并发者回滚/副本延迟，
+//     重试插入一次；仍冲突则报 ErrUniqKeyRace）。
+//   - 无 uniq_key 且 chainID 非空：步骤冲突（UNIQUE(chain_id, step)）→ 返回 ErrStepConflict，
+//     绝不当作幂等键竞争，也不返回错行。
+//   - 无 uniq_key 且 chainID 为空：主键撞车 → ErrUniqKeyRace（无法回查）。
+func (c *Manager) resolveSubmitConflict(ctx context.Context, runner *gorm.DB, row *db.CoreAsyncTask, delayMs int64, chainID string) (*gasync.AsyncTask, error) {
+	if row.UniqKey == nil {
+		if chainID != "" {
+			return nil, gasync.ErrStepConflict
+		}
+		return nil, gasync.ErrUniqKeyRace
+	}
+	asyncTask, err := c.findByUniqKey(ctx, row.ScopeKey, *row.UniqKey)
+	if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
+		retried, rerr := c.insertAsyncTask(ctx, runner, row, delayMs)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if !retried {
+			asyncTask, err = c.findByUniqKey(ctx, row.ScopeKey, *row.UniqKey)
+			if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
+				return nil, gasync.ErrUniqKeyRace
+			}
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			asyncTask, err = c.dbSrc.Store().GetAsyncTask(ctx, row.ID)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	return asyncTask, nil
+}
+
 // 幂等语义为「活跃期域内唯一」：只有 pending/running 的那一行才算幂等命中；终态行一律
 // 视为可重建（Submit 冲突后会重试插入一次，让终态同键能建出新任务）。
 // 复合唯一键（部分索引/生成列）保证同域同键至多一条活跃行，故至多返回一行。
@@ -361,42 +385,124 @@ func (c *Manager) findByUniqKey(ctx context.Context, scope, key string) (*gasync
 
 // SubmitAfter 提交「上游任务成功后才执行」的下一步（步骤化任务链）。
 //
-// 行为：读取上游任务；若上游 chain_id 为空则以其 ID 作为 chain_id（首步即上游）；
-// 本步 Step=上游.Step+1、PrevStep=上游.Step、ChainID=上游.ChainID(或上游ID)；
-// 认领侧守卫保证「前序 step 已 succeeded」前本步不会被认领。
-// 上游不存在返回 ErrAsyncTaskNotFound。
+// 线性链语义：每步只有一个后继。行为：
+//   - 锁定并读取上游任务（防并发追加出两个后继）：若上游 chain_id 为 NULL，则以它的 ID 作为
+//     链标识并把它自身纳链（chain_id=上游ID，仍 step=0）；
+//   - 检查上游是否已有后继：已有且业务幂等键相同 → 返回原任务（幂等）；已有但键不同 → 步骤冲突；
+//   - 本步 Step=上游.Step+1、PrevStep=上游.Step。UNIQUE(chain_id, step) 兜底并发。
+//
+// 「纳链 + 无后继检查 + 插入」在同一事务内完成，插入失败（含步骤冲突）时纳链一起回滚。
+// 上游不存在返回 ErrAsyncTaskNotFound；并发追加不同后继返回 ErrStepConflict。
 func (c *Manager) SubmitAfter(ctx context.Context, upstreamID string, spec *gasync.AsyncTaskSpec) (*gasync.AsyncTask, bool, error) {
 	if spec == nil || spec.Type == "" {
 		return nil, false, gasync.ErrEmptyType
 	}
-	up, err := c.dbSrc.Store().GetAsyncTask(ctx, upstreamID)
+	if len(spec.Payload) > c.cfg.MaxPayloadBytes {
+		return nil, false, gasync.ErrPayloadTooLarge
+	}
+
+	var childID string
+	var submitted bool
+	err := c.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 锁上游行（SELECT ... FOR UPDATE），避免两个并发 SubmitAfter 各插入一个后继。
+		var up db.CoreAsyncTask
+		lockSQL := fmt.Sprintf("SELECT * FROM %s WHERE id = ?%s", db.CoreAsyncTaskTableName, c.dialect.RowLockClause())
+		if err := tx.Raw(lockSQL, upstreamID).Scan(&up).Error; err != nil {
+			return err
+		}
+		if up.ID == "" {
+			return gasync.ErrAsyncTaskNotFound
+		}
+		upScope, enforced, serr := c.resolveScope(ctx)
+		if serr != nil {
+			return serr
+		}
+		if enforced && up.ScopeKey != upScope {
+			return gasync.ErrAsyncTaskNotFound
+		}
+
+		// 链标识：上游已有 chain_id 用它的；否则以它的 ID 作链并把上游自身纳链。
+		var chainID string
+		if up.ChainID != nil && *up.ChainID != "" {
+			chainID = *up.ChainID
+		} else {
+			chainID = up.ID
+			if uerr := tx.Model(&db.CoreAsyncTask{}).
+				Where("id = ? AND chain_id IS NULL", up.ID).
+				Update("chain_id", chainID).Error; uerr != nil {
+				return uerr
+			}
+		}
+		step := int(up.Step) + 1
+
+		// 检查上游是否已有后继（同 chain 同 step）。
+		var existCnt int64
+		if cerr := tx.Model(&db.CoreAsyncTask{}).
+			Where("chain_id = ? AND step = ?", chainID, step).
+			Count(&existCnt).Error; cerr != nil {
+			return cerr
+		}
+		if existCnt > 0 {
+			// 已有后继：同业务幂等键 → 返回原任务；否则步骤冲突。
+			if spec.UniqKey != "" {
+				var existing db.CoreAsyncTask
+				eerr := tx.Where("chain_id = ? AND step = ? AND scope_key = ? AND uniq_key = ?", chainID, step, up.ScopeKey, spec.UniqKey).
+					Take(&existing).Error
+				if eerr == nil {
+					childID = existing.ID
+					submitted = false
+					return nil
+				}
+				if !errors.Is(eerr, gorm.ErrRecordNotFound) {
+					return eerr
+				}
+			}
+			return gasync.ErrStepConflict
+		}
+
+		// 构建并插入子任务（复用 submit 的行构建，但直接落 tx）。
+		row, delayMs, berr := c.buildSubmitRow(spec, chainID, step, int(up.Step))
+		if berr != nil {
+			return berr
+		}
+		row.ScopeKey = up.ScopeKey
+		if app, ok := gormplugin.AppFrom(ctx); ok {
+			row.AppID = app
+		}
+		// 作用域 write path 与 Submit 一致：未强制时清空。
+		if !enforced {
+			row.ScopeKey = ""
+		}
+		row.CreatedBy = spec.ActorID
+		row.LastActorID = spec.ActorID
+
+		ok, ierr := c.insertAsyncTask(ctx, tx, row, delayMs)
+		if ierr != nil {
+			return ierr
+		}
+		if !ok {
+			// 唯一键兜底：并发下另一个后继抢先插入（UNIQUE(chain_id, step) 命中）。
+			return gasync.ErrStepConflict
+		}
+		childID = row.ID
+		submitted = true
+		return nil
+	})
 	if err != nil {
 		return nil, false, err
 	}
-	// 防跨域拼链：强制状态下，上游作用域必须与本步解析出的作用域一致。
-	// （读已带作用域条件，这里再显式校验一次，防止灰度/多来源下口径错位。）
-	if scope, enforced, serr := c.resolveScope(ctx); serr != nil {
-		return nil, false, serr
-	} else if enforced && up.Scope != scope {
-		return nil, false, gasync.ErrAsyncTaskNotFound
+
+	// 事务提交后读回（幂等命中或新建都读库）。
+	asyncTask, gerr := c.dbSrc.Store().GetAsyncTask(ctx, childID)
+	if gerr != nil {
+		return nil, false, gerr
 	}
-	chainID := up.ChainID
-	if chainID == "" {
-		// 上游本身是首步/独立任务：以它的 ID 作为链标识，并把上游自身的 chain_id 补成该值，
-		// 保证链内「根」与「后续步骤」的 chain_id 口径一致（否则守卫子查询找不到根）。
-		chainID = up.ID
-		if uerr := c.db.WithContext(ctx).Model(&db.CoreAsyncTask{}).
-			Where("id = ? AND (chain_id = '' OR chain_id IS NULL)", up.ID).
-			Update("chain_id", chainID).Error; uerr != nil {
-			return nil, false, uerr
+	if c.notifier != nil && submitted {
+		if nerr := c.notifier.Notify(ctx, spec.Type); nerr != nil {
+			return asyncTask, true, gasync.ErrNotify
 		}
 	}
-	merged := *spec // 复制，避免改调用方结构
-	merged.ChainID = chainID
-	merged.Step = up.Step + 1
-
-	// prev_step 与插入同一条语句落库：插入即可被认领，不能存在「先 -1 再改」的窗口。
-	return c.submit(ctx, &merged, up.Step)
+	return asyncTask, submitted, nil
 }
 
 // Get 按 ID 取任务。
@@ -495,8 +601,8 @@ func (c *Manager) Replay(ctx context.Context, id string, opts ...ReplayOption) (
 SET status = 'pending', generation = generation + 1, attempt = 0,
     next_run_at = %s, lease_until = NULL, worker_id = '', started_at = NULL,
     finished_at = NULL, duration_ms = 0%s
-WHERE id = ? AND scope_key = ? AND status IN ('succeeded','failed','canceled','skipped')`,
-		db.CoreAsyncTaskTableName, now, setActor)
+WHERE id = ? AND scope_key = ? AND status IN (%s)`,
+		db.CoreAsyncTaskTableName, now, setActor, terminalStatusesInClause())
 	if ro.hasActorID {
 		args = append(args, ro.actorID)
 	}
@@ -665,14 +771,25 @@ func (c *Manager) Close() error {
 	return nil
 }
 
-// isTerminal 判断状态是否为终态。
-func isTerminal(s gasync.Status) bool {
-	switch s {
-	case gasync.StatusSucceeded, gasync.StatusFailed, gasync.StatusCanceled, gasync.StatusSkipped, gasync.StatusTimeout:
-		return true
-	default:
-		return false
+// terminalStatusesInClause 由 db.TerminalStatuses() 生成 SQL IN 子句的引号列表，
+// 保证 Replay 的可重放状态集与 isTerminal / 回收清理用的是同一份终态集合（含 timeout）。
+func terminalStatusesInClause() string {
+	sts := db.TerminalStatuses()
+	quoted := make([]string, len(sts))
+	for i, s := range sts {
+		quoted[i] = "'" + s + "'"
 	}
+	return strings.Join(quoted, ",")
+}
+
+// isTerminal 判断状态是否为终态（与 db.TerminalStatuses() 同源，含 timeout）。
+func isTerminal(s gasync.Status) bool {
+	for _, t := range db.TerminalStatuses() {
+		if string(s) == t {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveMaxAttempts 解析本轮最大尝试次数：显式值优先，否则配置默认。

@@ -90,3 +90,75 @@ func migrateActiveUniqPartial(db *gorm.DB) error {
 	}
 	return nil
 }
+
+// 任务链「链内步骤唯一」约束。
+//
+// 背景：线性链要求「同一 chain 内每个 step 至多一行」（每步只有一个后继）。独立任务的
+// chain_id 为 NULL，天然不参与「链内唯一」；链成员 chain_id 非空、step 从小到大。
+//
+// 不能用一个普通的 UNIQUE(chain_id, step)：那样多条独立任务 (NULL, 0) 会「靠 NULL 互异」
+// 侥幸共存——虽在三方言成立，但把语义与 RDBMS 的 NULL 比较细节耦合，且和本仓库既有的
+// 「部分唯一索引 / 生成列」风格（见 MigrateActiveUniqIndex）不一致。故改用它同款手法：
+//   - PostgreSQL / SQLite：部分唯一索引，WHERE chain_id IS NOT NULL（只圈链成员）；
+//   - MySQL：不支持部分索引，用 STORED 生成列 chain_step_active（chain_id 为 NULL 时取 NULL，
+//     否则取 chain_id:step），唯一索引建在生成列上——独立任务不进唯一。
+//
+// 该约束在 AutoMigrate 之后由本函数按方言补建；普通索引 idx_core_async_task_chain_id_step
+// 仍由 model.go tag 交给 AutoMigrate。
+
+const (
+	// ChainUniqIndexName 链内步骤唯一索引名。
+	ChainUniqIndexName = "uk_core_async_task_chain_step"
+	// chainStepGeneratedColumn 是 MySQL 的生成列名（仅 MySQL 使用）。
+	chainStepGeneratedColumn = "chain_step_active"
+)
+
+// MigrateChainUniqIndex 按方言补建「链内步骤唯一」约束（幂等，可重复调用）。
+// 应在 AutoMigrate 之后调用；manager.AutoMigrate 已代为调用本函数。
+func MigrateChainUniqIndex(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("gasync: db is required")
+	}
+	d := DetectDialect(db.Dialector.Name())
+	if d == DialectMySQL {
+		return migrateChainUniqMySQL(db)
+	}
+	return migrateChainUniqPartial(db)
+}
+
+// migrateChainUniqMySQL 补建生成列 + 唯一索引（MySQL 无部分索引）。
+// 生成列：chain_id 为 NULL（独立任务）→ NULL（不参与唯一），否则 CONCAT(chain_id, ':', step)。
+func migrateChainUniqMySQL(db *gorm.DB) error {
+	if !db.Migrator().HasColumn(CoreAsyncTaskTableName, chainStepGeneratedColumn) {
+		expr := "IF(chain_id IS NULL, NULL, CONCAT(chain_id, ':', step))"
+		ddl := fmt.Sprintf(
+			"ALTER TABLE %s ADD COLUMN %s VARCHAR(200) GENERATED ALWAYS AS (%s) STORED",
+			CoreAsyncTaskTableName, chainStepGeneratedColumn, expr)
+		if err := db.Exec(ddl).Error; err != nil {
+			return fmt.Errorf("gasync: add generated column %s: %w", chainStepGeneratedColumn, err)
+		}
+	}
+	if !db.Migrator().HasIndex(CoreAsyncTaskTableName, ChainUniqIndexName) {
+		ddl := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s)",
+			ChainUniqIndexName, CoreAsyncTaskTableName, chainStepGeneratedColumn)
+		if err := db.Exec(ddl).Error; err != nil {
+			return fmt.Errorf("gasync: create unique index %s: %w", ChainUniqIndexName, err)
+		}
+	}
+	return nil
+}
+
+// migrateChainUniqPartial 为 PostgreSQL / SQLite 补建部分唯一索引。
+// WHERE chain_id IS NOT NULL 只圈链成员，独立任务不参与唯一。
+func migrateChainUniqPartial(db *gorm.DB) error {
+	if db.Migrator().HasIndex(CoreAsyncTaskTableName, ChainUniqIndexName) {
+		return nil
+	}
+	ddl := fmt.Sprintf(
+		"CREATE UNIQUE INDEX %s ON %s (chain_id, step) WHERE chain_id IS NOT NULL",
+		ChainUniqIndexName, CoreAsyncTaskTableName)
+	if err := db.Exec(ddl).Error; err != nil {
+		return fmt.Errorf("gasync: create partial unique index %s: %w", ChainUniqIndexName, err)
+	}
+	return nil
+}

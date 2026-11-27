@@ -190,7 +190,7 @@ func (s *Source) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 	if task == nil || task.ID == "" {
 		return gasync.ErrAsyncTaskNotFound
 	}
-	body, _ := json.Marshal(wire.HeartbeatRequest{TaskID: task.ID, WorkerID: s.cfg.WorkerID})
+	body, _ := json.Marshal(wire.HeartbeatRequest{TaskID: task.ID, WorkerID: s.cfg.WorkerID, Generation: task.Generation, Attempt: task.Attempt})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+wire.PathHeartbeat, bytes.NewReader(body))
 	if err != nil {
 		return s.renewFailed(err)
@@ -237,7 +237,7 @@ func (s *Source) Release(ctx context.Context, task *gasync.AsyncTask) error {
 	if task == nil || task.ID == "" {
 		return nil
 	}
-	body, _ := json.Marshal(wire.ReleaseRequest{TaskID: task.ID, WorkerID: s.cfg.WorkerID})
+	body, _ := json.Marshal(wire.ReleaseRequest{TaskID: task.ID, WorkerID: s.cfg.WorkerID, Generation: task.Generation, Attempt: task.Attempt})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.cfg.BaseURL+wire.PathRelease, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -288,14 +288,19 @@ func (s *Source) Save(ctx context.Context, task *gasync.AsyncTask, r gasync.Resu
 	}
 
 	var taskID, workerID string
+	var generation, attempt int
 	if task != nil {
 		taskID = task.ID
+		generation = task.Generation
+		attempt = task.Attempt
 	}
 	workerID = s.cfg.WorkerID
 
 	body, _ := json.Marshal(wire.CallbackRequest{
 		TaskID:     taskID,
 		WorkerID:   workerID,
+		Generation: generation,
+		Attempt:    attempt,
 		Status:     string(r.Outcome),
 		Failure:    string(r.Failure),
 		Result:     r.Payload,

@@ -56,11 +56,23 @@ func (c *Center) Fetch(ctx context.Context, req wire.FetchRequest) (*wire.FetchR
 }
 
 // Heartbeat 续租。非持有者或任务已终态返回 gasync.ErrLeaseLost（远端据此取消执行）。
+//
+// 归属凭证取「请求携带的」generation/attempt，而非库中当前值：同一 worker 重新认领后，
+// 旧尝试的迟到心跳必须失权（否则会把新尝试的租约续上）。
 func (c *Center) Heartbeat(ctx context.Context, req wire.HeartbeatRequest) error {
+	if strings.TrimSpace(req.TaskID) == "" || strings.TrimSpace(req.WorkerID) == "" {
+		return fmt.Errorf("%w: task_id and worker_id are required", gasync.ErrInvalidConfig)
+	}
+	if req.Generation <= 0 || req.Attempt <= 0 {
+		return fmt.Errorf("%w: generation and attempt are required", gasync.ErrInvalidConfig)
+	}
 	task, err := c.owned(ctx, req.TaskID, req.WorkerID)
 	if err != nil {
 		return err
 	}
+	// 以请求快照覆盖归属身份：Renew 的 SQL 条件用这两个值。
+	task.Generation = req.Generation
+	task.Attempt = req.Attempt
 	return c.src.Renew(ctx, task)
 }
 
@@ -78,16 +90,23 @@ func (c *Center) Callback(ctx context.Context, req wire.CallbackRequest) error {
 	if strings.TrimSpace(req.TaskID) == "" || strings.TrimSpace(req.WorkerID) == "" {
 		return fmt.Errorf("%w: task_id and worker_id are required", gasync.ErrInvalidConfig)
 	}
+	if req.Generation <= 0 || req.Attempt <= 0 {
+		return fmt.Errorf("%w: generation and attempt are required", gasync.ErrInvalidConfig)
+	}
 	task, err := c.m.Get(ctx, req.TaskID)
 	if err != nil {
 		return err
 	}
 	if task.Status != gasync.StatusRunning {
-		return nil // 已结算：幂等
+		return nil // 已结算（含已回到 pending 的重试）：幂等 ACK
 	}
 	if task.WorkerID != req.WorkerID {
 		return gasync.ErrLeaseLost
 	}
+	// 归属凭证以请求快照为准：Save 的 lockOwnership 用 generation/attempt 作条件，
+	// 迟到旧尝试（尝试号已过期）会命中 0 行 → ErrLeaseLost，不推进当前尝试。
+	task.Generation = req.Generation
+	task.Attempt = req.Attempt
 	res := gasync.Result{
 		Outcome:  outcome,
 		Failure:  gasync.FailureKind(req.Failure),
@@ -109,6 +128,9 @@ func (c *Center) Release(ctx context.Context, req wire.ReleaseRequest) error {
 	if strings.TrimSpace(req.TaskID) == "" {
 		return fmt.Errorf("%w: task_id is required", gasync.ErrInvalidConfig)
 	}
+	if req.WorkerID == "" || req.Generation <= 0 || req.Attempt <= 0 {
+		return fmt.Errorf("%w: worker_id, generation and attempt are required", gasync.ErrInvalidConfig)
+	}
 	task, err := c.m.Get(ctx, req.TaskID)
 	if errors.Is(err, gasync.ErrAsyncTaskNotFound) {
 		return nil
@@ -119,6 +141,9 @@ func (c *Center) Release(ctx context.Context, req wire.ReleaseRequest) error {
 	if task.Status != gasync.StatusRunning || task.WorkerID != req.WorkerID {
 		return nil
 	}
+	// 归属凭证以请求快照为准：旧尝试的迟到释放命中 0 行（幂等无操作），不释放新尝试的租约。
+	task.Generation = req.Generation
+	task.Attempt = req.Attempt
 	return c.src.Release(ctx, task)
 }
 

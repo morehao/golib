@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS core_async_task (
     id              varchar(36)  NOT NULL,
     created_at      timestamptz,
     updated_at      timestamptz,
+    app_id          varchar(64)  DEFAULT '' NOT NULL,
     scope_key       varchar(64)  DEFAULT '' NOT NULL,
     task_type       varchar(128) NOT NULL,
     status          varchar(16)  DEFAULT 'pending' NOT NULL,
@@ -21,7 +22,7 @@ CREATE TABLE IF NOT EXISTS core_async_task (
     last_actor_id   varchar(64)  DEFAULT '' NOT NULL,
     biz_type        varchar(64)  DEFAULT '' NOT NULL,
     biz_id          varchar(64)  DEFAULT '' NOT NULL,
-    chain_id        varchar(36)  DEFAULT '' NOT NULL,
+    chain_id        varchar(36),
     step            integer      DEFAULT 0 NOT NULL,
     prev_step       integer      DEFAULT -1 NOT NULL,
     generation      integer      DEFAULT 1 NOT NULL,
@@ -53,7 +54,7 @@ COMMENT ON COLUMN core_async_task.created_by IS '提交者快照（触发者，�
 COMMENT ON COLUMN core_async_task.last_actor_id IS '最近触发者快照（如重放者）';
 COMMENT ON COLUMN core_async_task.biz_type IS '业务类型';
 COMMENT ON COLUMN core_async_task.biz_id IS '业务 ID';
-COMMENT ON COLUMN core_async_task.chain_id IS '任务链 ID（空=独立任务）';
+COMMENT ON COLUMN core_async_task.chain_id IS '任务链 ID（NULL=独立任务）';
 COMMENT ON COLUMN core_async_task.step IS '步骤序号';
 COMMENT ON COLUMN core_async_task.prev_step IS '前序步骤序号（-1=首步）';
 COMMENT ON COLUMN core_async_task.generation IS '重放轮次';
@@ -73,6 +74,7 @@ COMMENT ON COLUMN core_async_task.trace_id IS 'TraceID';
 COMMENT ON COLUMN core_async_task.labels IS '业务维度标签（JSON，如 {"app_group":"x","company_id":"1"}）';
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_core_async_task_active_uniq ON core_async_task (scope_key, uniq_key) WHERE uniq_key IS NOT NULL AND status IN ('pending','running');
+CREATE UNIQUE INDEX IF NOT EXISTS uk_core_async_task_chain_step ON core_async_task (chain_id, step) WHERE chain_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_core_async_task_scope_uniq_key ON core_async_task (scope_key, uniq_key);
 CREATE INDEX IF NOT EXISTS idx_core_async_task_claim ON core_async_task (task_type, status, priority DESC, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_core_async_task_task_type_status_created_at ON core_async_task (task_type, status, created_at);
@@ -85,6 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_core_async_task_chain_id_step ON core_async_task 
 CREATE TABLE IF NOT EXISTS core_async_task_run (
     id              varchar(36)  NOT NULL,
     created_at      timestamptz,
+    app_id          varchar(64)  DEFAULT '' NOT NULL,
     async_task_id   varchar(36)  NOT NULL,
     generation      integer      DEFAULT 1 NOT NULL,
     attempt         integer      NOT NULL,
@@ -103,6 +106,7 @@ CREATE TABLE IF NOT EXISTS core_async_task_run (
 COMMENT ON TABLE  core_async_task_run IS '单次尝试记录';
 COMMENT ON COLUMN core_async_task_run.id IS '尝试 ID（UUID v4）';
 COMMENT ON COLUMN core_async_task_run.created_at IS '创建时间';
+COMMENT ON COLUMN core_async_task_run.app_id IS '业务线标识';
 COMMENT ON COLUMN core_async_task_run.async_task_id IS '所属任务 ID';
 COMMENT ON COLUMN core_async_task_run.generation IS '所属重放轮次';
 COMMENT ON COLUMN core_async_task_run.attempt IS '本轮第几次尝试';

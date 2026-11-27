@@ -74,6 +74,10 @@ func resetRealDB(t *testing.T, db *gorm.DB) {
 	if err := MigrateActiveUniqIndex(db); err != nil {
 		t.Fatalf("migrate active uniq index: %v", err)
 	}
+	// 链内步骤唯一约束同样由迁移后补建（部分索引 / 生成列）。
+	if err := MigrateChainUniqIndex(db); err != nil {
+		t.Fatalf("migrate chain uniq index: %v", err)
+	}
 }
 
 // seedAsyncTasks 插入 n 条到点的 pending 任务。

@@ -29,10 +29,16 @@ var (
 	ErrWorkerAlreadyRunning = errors.New("gasync: worker already running")
 	// ErrWorkerStopped Worker 已停机（Shutdown 后再 Run）。
 	ErrWorkerStopped = errors.New("gasync: worker stopped")
+	// ErrShutdownTimeout 停机时在途任务未在总预算（ShutdownTimeout 与调用方 deadline 较早值）内排空。
+	// 未释放的租约由 TTL 接管；调用方可据此区分「正常排空」与「预算耗尽」。
+	ErrShutdownTimeout = errors.New("gasync: shutdown timeout")
 	// ErrNoType Worker 未注册任何任务类型即 Run。
 	ErrNoType = errors.New("gasync: no task type registered")
 	// ErrUniqKeyRace 幂等键冲突回查为空的重试后仍失败（并发提交者回滚或副本延迟）。
 	ErrUniqKeyRace = errors.New("gasync: uniq key race")
+	// ErrStepConflict 步骤冲突：SubmitAfter 追加的 (chain_id, step) 已存在（并发追加了不同后继）。
+	// 线性链只允许一个后继；同一有效业务幂等键指向同一后继的重复追加应返回原任务，而非本错误。
+	ErrStepConflict = errors.New("gasync: chain step conflict")
 	// ErrLeaseLost 已失去任务所有权（被接管 / 被取消 / 已进入终态）。
 	//
 	// 语义：Renew/Save 返回它时，调用方必须停止执行并放弃业务钩子——

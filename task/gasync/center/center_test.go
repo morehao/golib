@@ -76,21 +76,26 @@ func TestCenter_FetchHeartbeatCallback(t *testing.T) {
 	}
 
 	// 3. 续租：非持有者被拒绝，持有者成功。
-	if err := c.Heartbeat(ctx, wire.HeartbeatRequest{TaskID: task.ID, WorkerID: "w-other"}); !errors.Is(err, gasync.ErrLeaseLost) {
+	// 认领身份（generation/attempt）取自本次认领的快照；两个请求都必须携带，
+	// 否则会先被必填校验拦下（得到 ErrInvalidConfig 而非 ErrLeaseLost）。
+	gen, attempt := out.Task.Generation, out.Task.Attempt
+	if err := c.Heartbeat(ctx, wire.HeartbeatRequest{TaskID: task.ID, WorkerID: "w-other", Generation: gen, Attempt: attempt}); !errors.Is(err, gasync.ErrLeaseLost) {
 		t.Fatalf("非持有者心跳 err = %v, want ErrLeaseLost", err)
 	}
-	if err := c.Heartbeat(ctx, wire.HeartbeatRequest{TaskID: task.ID, WorkerID: "w-remote"}); err != nil {
+	if err := c.Heartbeat(ctx, wire.HeartbeatRequest{TaskID: task.ID, WorkerID: "w-remote", Generation: gen, Attempt: attempt}); err != nil {
 		t.Fatalf("持有者心跳: %v", err)
 	}
 
 	// 4. 回传失败（可重试）→ 任务回 pending、attempt 保留。
 	if err := c.Callback(ctx, wire.CallbackRequest{
-		TaskID: task.ID, WorkerID: "w-other", Status: string(gasync.OutcomeFailed), Error: "wrong worker",
+		TaskID: task.ID, WorkerID: "w-other", Generation: gen, Attempt: attempt,
+		Status: string(gasync.OutcomeFailed), Error: "wrong worker",
 	}); !errors.Is(err, gasync.ErrLeaseLost) {
 		t.Fatalf("非持有者回传 err = %v, want ErrLeaseLost", err)
 	}
 	if err := c.Callback(ctx, wire.CallbackRequest{
-		TaskID: task.ID, WorkerID: "w-remote", Status: string(gasync.OutcomeFailed),
+		TaskID: task.ID, WorkerID: "w-remote", Generation: gen, Attempt: attempt,
+		Status:  string(gasync.OutcomeFailed),
 		Failure: string(gasync.FailureHandler), Error: "boom", DurationMS: 5,
 	}); err != nil {
 		t.Fatalf("callback failed: %v", err)
@@ -122,8 +127,10 @@ func TestCenter_FetchHeartbeatCallback(t *testing.T) {
 	if out3.Task.Attempt != 2 {
 		t.Fatalf("attempt = %d, want 2", out3.Task.Attempt)
 	}
+	gen3, attempt3 := out3.Task.Generation, out3.Task.Attempt
 	if err := c.Callback(ctx, wire.CallbackRequest{
-		TaskID: task.ID, WorkerID: "w-remote", Status: string(gasync.OutcomeSucceeded), DurationMS: 7,
+		TaskID: task.ID, WorkerID: "w-remote", Generation: gen3, Attempt: attempt3,
+		Status: string(gasync.OutcomeSucceeded), DurationMS: 7,
 	}); err != nil {
 		t.Fatalf("callback succeeded: %v", err)
 	}
@@ -134,7 +141,8 @@ func TestCenter_FetchHeartbeatCallback(t *testing.T) {
 
 	// 6. 重复回调：已终态 → 幂等 nil（避免远端无谓重试）。
 	if err := c.Callback(ctx, wire.CallbackRequest{
-		TaskID: task.ID, WorkerID: "w-remote", Status: string(gasync.OutcomeSucceeded),
+		TaskID: task.ID, WorkerID: "w-remote", Generation: gen3, Attempt: attempt3,
+		Status: string(gasync.OutcomeSucceeded),
 	}); err != nil {
 		t.Fatalf("重复回调应幂等: %v", err)
 	}
@@ -150,7 +158,8 @@ func TestCenter_ReleaseMakesTaskClaimable(t *testing.T) {
 	if err != nil || !out.Available {
 		t.Fatalf("fetch: %+v err=%v", out, err)
 	}
-	if err := c.Release(ctx, wire.ReleaseRequest{TaskID: task.ID, WorkerID: "w1"}); err != nil {
+	gen, attempt := out.Task.Generation, out.Task.Attempt
+	if err := c.Release(ctx, wire.ReleaseRequest{TaskID: task.ID, WorkerID: "w1", Generation: gen, Attempt: attempt}); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	got, _ := m.Get(ctx, task.ID)
@@ -164,8 +173,8 @@ func TestCenter_ReleaseMakesTaskClaimable(t *testing.T) {
 	if out2.Task.Attempt != 2 {
 		t.Fatalf("attempt = %d, want 2", out2.Task.Attempt)
 	}
-	// 幂等：重复 Release 不报错。
-	if err := c.Release(ctx, wire.ReleaseRequest{TaskID: task.ID, WorkerID: "w1"}); err != nil {
+	// 幂等：重复 Release 不报错（此时归属已不是 w1，旧快照释放命中 0 行）。
+	if err := c.Release(ctx, wire.ReleaseRequest{TaskID: task.ID, WorkerID: "w1", Generation: gen, Attempt: attempt}); err != nil {
 		t.Fatalf("重复 release: %v", err)
 	}
 }
@@ -176,11 +185,13 @@ func TestCenter_CallbackMapsFailureKind(t *testing.T) {
 	ctx := context.Background()
 	task := submit(t, m, &gasync.AsyncTaskSpec{Type: "t", MaxAttempts: 1})
 
-	if _, err := c.Fetch(ctx, wire.FetchRequest{TaskType: "t", WorkerID: "w1"}); err != nil {
+	out, err := c.Fetch(ctx, wire.FetchRequest{TaskType: "t", WorkerID: "w1"})
+	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if err := c.Callback(ctx, wire.CallbackRequest{
-		TaskID: task.ID, WorkerID: "w1", Status: string(gasync.OutcomeFailed),
+		TaskID: task.ID, WorkerID: "w1", Generation: out.Task.Generation, Attempt: out.Task.Attempt,
+		Status:  string(gasync.OutcomeFailed),
 		Failure: string(gasync.FailureTimeout), Error: "deadline exceeded", DurationMS: 30,
 	}); err != nil {
 		t.Fatalf("callback: %v", err)
@@ -219,19 +230,22 @@ func TestCenter_CancelStopsRemoteExecution(t *testing.T) {
 	ctx := context.Background()
 	task := submit(t, m, &gasync.AsyncTaskSpec{Type: "t"})
 
-	if _, err := c.Fetch(ctx, wire.FetchRequest{TaskType: "t", WorkerID: "w1"}); err != nil {
+	out, err := c.Fetch(ctx, wire.FetchRequest{TaskType: "t", WorkerID: "w1"})
+	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
+	gen, attempt := out.Task.Generation, out.Task.Attempt
 	if _, err := m.Cancel(ctx, task.ID); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	// 取消清空了 worker_id/lease，归属校验失权。
-	if err := c.Heartbeat(ctx, wire.HeartbeatRequest{TaskID: task.ID, WorkerID: "w1"}); !errors.Is(err, gasync.ErrLeaseLost) {
+	// 取消清空了 worker_id/lease，归属校验失权（请求仍携带认领快照，先过必填校验再判归属）。
+	if err := c.Heartbeat(ctx, wire.HeartbeatRequest{TaskID: task.ID, WorkerID: "w1", Generation: gen, Attempt: attempt}); !errors.Is(err, gasync.ErrLeaseLost) {
 		t.Fatalf("取消后心跳 err = %v, want ErrLeaseLost", err)
 	}
 	// 迟到回传：终态 → 幂等 ACK，不复活任务。
 	if err := c.Callback(ctx, wire.CallbackRequest{
-		TaskID: task.ID, WorkerID: "w1", Status: string(gasync.OutcomeSucceeded),
+		TaskID: task.ID, WorkerID: "w1", Generation: gen, Attempt: attempt,
+		Status: string(gasync.OutcomeSucceeded),
 	}); err != nil {
 		t.Fatalf("终态回传应幂等: %v", err)
 	}

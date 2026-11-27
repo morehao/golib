@@ -110,7 +110,7 @@ LIMIT ?%s`, CoreAsyncTaskTableName, s.dialect.colLT("lease_until"), lock)
 		return nil, err
 	}
 
-	merged := interleaveByID(r1, r2, want)
+	merged := mergeCandidates(r1, r2, want)
 	if len(merged) == 0 {
 		return nil, nil
 	}
@@ -145,12 +145,16 @@ WHERE id IN (%s) AND status IN ('pending','running')`,
 	return merged, nil
 }
 
-// interleaveByID 交替合并两支候选（r1/r2 各挑一条轮流取），去重后取前 want 条。
+// mergeCandidates 合并两支候选：**过期 running（r2，可接管）优先于 pending（r1）**，去重后取前 want 条。
 //
-// 交替而非拼接，是为了让「租约过期可接管」的候选在有 pending 压力时也能被认领到。
-func interleaveByID(r1, r2 []*CoreAsyncTask, want int) []*CoreAsyncTask {
+// 为什么 rescue 优先而非简单交替：Worker 的 Fetch 走 ClaimFor(want=1)，每次只领一条。旧实现的
+// 「交替取」在 want=1 时先 pick(r1[0]) 即满，r2 永远轮不到——pending 持续积压时过期 running
+// 会长期饿死（本该被抢救的行卡在 running）。过期 running 的数量受既有在途任务约束，远小于
+// pending 积压，优先抢救它不会饿死新任务；这是无跨调用可变状态、并发下确定性的修法。
+// want≥2 时同样先铺满 r2 再补 r1，各组保留原排序。
+func mergeCandidates(r1, r2 []*CoreAsyncTask, want int) []*CoreAsyncTask {
 	seen := make(map[string]struct{}, len(r1)+len(r2))
-	out := make([]*CoreAsyncTask, 0, len(r1)+len(r2))
+	out := make([]*CoreAsyncTask, 0, want)
 	pick := func(r *CoreAsyncTask) {
 		if r == nil || len(out) >= want {
 			return
@@ -161,13 +165,13 @@ func interleaveByID(r1, r2 []*CoreAsyncTask, want int) []*CoreAsyncTask {
 		seen[r.ID] = struct{}{}
 		out = append(out, r)
 	}
-	for i := 0; len(out) < want && (i < len(r1) || i < len(r2)); i++ {
-		if i < len(r1) {
-			pick(r1[i])
-		}
-		if i < len(r2) {
-			pick(r2[i])
-		}
+	// 先抢救过期 running（r2）。
+	for _, r := range r2 {
+		pick(r)
+	}
+	// 再补 pending（r1）。
+	for _, r := range r1 {
+		pick(r)
 	}
 	return out
 }
