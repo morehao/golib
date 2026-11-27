@@ -31,14 +31,19 @@ func TestDDLMatchesModel(t *testing.T) {
 			t.Errorf("%s: 缺少 uk_core_async_task_chain_step（UNIQUE(chain_id, step)）", f)
 		}
 		// chain_id 可空：MySQL 用 `chain_id` varchar(36) DEFAULT NULL；PG 用 chain_id varchar(36),
-		// 二者都不应出现「chain_id」紧跟 NOT NULL。
+		// 二者都不应出现「chain_id」紧跟 NOT NULL。只看列定义行——跳过索引/谓词行
+		// （如部分唯一索引的 WHERE chain_id IS NOT NULL）。
 		for _, line := range strings.Split(s, "\n") {
 			l := strings.TrimSpace(line)
 			if !strings.Contains(l, "chain_id") || strings.HasPrefix(l, "--") {
 				continue
 			}
-			if strings.Contains(l, "NOT NULL") {
-				t.Errorf("%s: chain_id 行不应 NOT NULL（独立任务需落 NULL）: %q", f, l)
+			up := strings.ToUpper(l)
+			if strings.Contains(up, "INDEX") || strings.Contains(up, "WHERE") || strings.Contains(up, "KEY ") {
+				continue // 索引/谓词行不参与列可空性判定
+			}
+			if strings.Contains(up, "NOT NULL") {
+				t.Errorf("%s: chain_id 列不应 NOT NULL（独立任务需落 NULL）: %q", f, l)
 			}
 		}
 	}

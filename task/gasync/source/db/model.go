@@ -51,11 +51,14 @@ type CoreAsyncTask struct {
 
 	// 任务链（步骤化）。独立任务：chain_id=NULL、step=0、prev_step=-1。
 	//
-	// chain_id 用 *string：独立任务落 SQL NULL（不用「等于自身 ID」的哨兵）。UNIQUE(chain_id, step)
-	// 依赖三方言唯一索引中 NULL 互异，故多条独立任务 (NULL, step) 可共存；链成员 chain_id 非空、
-	// 各 step 唯一。去掉 not null;default:''，使 NULL 能真实落库。
-	ChainID  *string `gorm:"column:chain_id;type:varchar(36);index:idx_core_async_task_chain_id_step,priority:1;uniqueIndex:uk_core_async_task_chain_step,priority:1;comment:任务链 ID（NULL=独立任务）"`
-	Step     int32   `gorm:"column:step;not null;default:0;index:idx_core_async_task_chain_id_step,priority:2;uniqueIndex:uk_core_async_task_chain_step,priority:2;comment:步骤序号"`
+	// chain_id 用 *string：独立任务落 SQL NULL（不用「等于自身 ID」的哨兵）。
+	// 「链内步骤唯一」由部分唯一索引 uk_core_async_task_chain_step 施加（PG/SQLite 部分索引
+	// WHERE chain_id IS NOT NULL；MySQL 生成列 chain_step_active），**只圈链成员**，独立任务
+	// 不参与、不靠 NULL 互异。该约束无法用 GORM uniqueIndex tag 表达，由 MigrateChainUniqIndex
+	// 在 AutoMigrate 之后按方言补建。普通索引 idx_core_async_task_chain_id_step 仍由 tag 交给
+	// AutoMigrate（供链前序 step 判成功的子查询使用）。
+	ChainID  *string `gorm:"column:chain_id;type:varchar(36);index:idx_core_async_task_chain_id_step,priority:1;comment:任务链 ID（NULL=独立任务）"`
+	Step     int32   `gorm:"column:step;not null;default:0;index:idx_core_async_task_chain_id_step,priority:2;comment:步骤序号"`
 	PrevStep int32   `gorm:"column:prev_step;not null;default:-1;comment:前序步骤序号（-1=首步）"`
 
 	Generation  int32 `gorm:"column:generation;not null;default:1;comment:重放轮次"`

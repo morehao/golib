@@ -359,7 +359,7 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 
 ## 进阶能力
 
-- **步骤化任务链**：`manager.SubmitAfter(ctx, 上游ID, spec)` 是追加后继的**唯一入口**——线性链（每步只有一个后继）；`Submit` 恒创建独立任务（`chain_id=NULL`）。`SubmitAfter` 在事务内完成「首次纳链 + 检查无后继 + 插入」，`UNIQUE(chain_id, step)` 兜底防并发重复；并发追加**不同**后继返回 `ErrStepConflict`，相同业务幂等键重复追加返回原任务。认领侧保证前序 step 已 `succeeded`；`manager.Config.FailFastChain=true` 时某步失败级联取消同链后续（默认关闭）。
+- **步骤化任务链**：`manager.SubmitAfter(ctx, 上游ID, spec)` 是追加后继的**唯一入口**——线性链（每步只有一个后继）；`Submit` 恒创建独立任务（`chain_id=NULL`）。`SubmitAfter` 在事务内完成「首次纳链 + 检查无后继 + 插入」，链内步骤唯一约束兜底防并发重复；并发追加**不同**后继返回 `ErrStepConflict`，相同业务幂等键重复追加返回原任务。认领侧保证前序 step 已 `succeeded`；`manager.Config.FailFastChain=true` 时某步失败级联取消同链后续（默认关闭）。
 - **类型级启停**：`manager.Disable/Enable` 写 `core_async_task_type`（**无行=启用**，fail-open），disabled 期间该类型任务**不被认领、停在 pending 不丢**，Enable 后自动恢复；worker 经 `manager.TypeGate(ttl)` 注入感知（带缓存）。
 - **每类型并发**：`WithHandlerConcurrency(n)` 覆写该类型执行槽数，未设回落全局 `Concurrency`。
 - **超时独立状态**：执行超时落 `StatusTimeout`（`Stats.Timeout` 计数）。
@@ -382,7 +382,7 @@ func (s *Source) Store() Store        // 只读查询（GetAsyncTask/ListAsyncTa
 
 建表默认由 `manager.New` / `manager.AutoMigrate`（或 `source/db` + 显式 `AutoMigrate`）按 `source/db/model.go` 的字段生成。需要手工建表（共库 / 无 DDL 权限）时，可用终局版 DDL：[`ddl/mysql.sql`](ddl/mysql.sql)（MySQL 8.0+）、[`ddl/postgres.sql`](ddl/postgres.sql)（PostgreSQL 12+），见 [`ddl/README.md`](ddl/README.md)——与 `AutoMigrate` 产物逐列一致，只描述终局结构、不含分阶段迁移/回滚。任务族通用的建表约定见 [`task/README.md`](../README.md#建表与迁移)。索引名一律带表前缀（`idx_core_async_task_*` / `uk_core_async_task_*`），PostgreSQL 下索引名 schema 级唯一。
 
-任务表索引：`idx_core_async_task_claim`、`idx_core_async_task_task_type_status_created_at`、`idx_core_async_task_status_lease_until`、`idx_core_async_task_status_finished_at`、`idx_core_async_task_biz_type_biz_id`、`idx_core_async_task_chain_id_step`、`idx_core_async_task_scope_created_by_created_at`、`idx_core_async_task_scope_uniq_key`（幂等回查用）、`uk_core_async_task_active_uniq`（活跃期唯一）、`uk_core_async_task_chain_step`（`UNIQUE(chain_id, step)`，线性链唯一后继；独立任务 chain_id=NULL，三方言唯一索引中 NULL 互异，多条可共存）。其中 `uk_core_async_task_active_uniq` 无法用 gorm tag 表达（部分索引 / 生成列），由 `db.MigrateActiveUniqIndex` 在 `AutoMigrate` 之后按方言补建——**手工建表时必须一并创建**，否则幂等会退化为全局唯一、终态后无法重建同键。`uk_core_async_task_chain_step` 是普通复合唯一索引，由 gorm tag 在 `AutoMigrate` 时直接建立。
+任务表索引：`idx_core_async_task_claim`、`idx_core_async_task_task_type_status_created_at`、`idx_core_async_task_status_lease_until`、`idx_core_async_task_status_finished_at`、`idx_core_async_task_biz_type_biz_id`、`idx_core_async_task_chain_id_step`、`idx_core_async_task_scope_created_by_created_at`、`idx_core_async_task_scope_uniq_key`（幂等回查用）、`uk_core_async_task_active_uniq`（活跃期唯一）、`uk_core_async_task_chain_step`（链内步骤唯一：同一 chain 内 step 至多一行，线性链唯一后继）。`uk_core_async_task_active_uniq` 与 `uk_core_async_task_chain_step` 都无法用 gorm tag 表达（部分索引 / 生成列），由 `db.MigrateActiveUniqIndex` / `db.MigrateChainUniqIndex` 在 `AutoMigrate` 之后按方言补建——**手工建表时必须一并创建**。两者手法一致：仅圈「链成员 / 活跃行」参与唯一，独立任务（`chain_id IS NULL`）与非活跃行不进唯一约束，**不依赖唯一索引中 NULL 互异的隐式行为**：PostgreSQL / SQLite 用部分唯一索引（`WHERE chain_id IS NOT NULL` / `WHERE uniq_key IS NOT NULL AND status IN (...)`），MySQL 用 STORED 生成列（`chain_step_active` / `uniq_key_active`，不满足条件时取 NULL）+ 该列的唯一索引。
 
 ## 作用域（scope）
 

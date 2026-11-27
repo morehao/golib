@@ -23,5 +23,8 @@ func AutoMigrate(gormDB *gorm.DB) error {
 	if err := (tablekit.Migrator{Component: "gasync", Models: SchemaModels()}).Migrate(gormDB); err != nil {
 		return err
 	}
-	return db.MigrateActiveUniqIndex(gormDB)
+	if err := db.MigrateActiveUniqIndex(gormDB); err != nil {
+		return err
+	}
+	return db.MigrateChainUniqIndex(gormDB)
 }
