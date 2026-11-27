@@ -120,6 +120,10 @@ type WakeSource interface {
 // 单次失败可能只是数据库瞬时抖动，连续失败才按失权处理（与 remote 侧约定一致）。
 const renewMaxConsecutiveFailures = 2
 
+// releaseGrace 是「预算耗尽后放租约」的固定短宽限：Release 只是一次快速 DB UPDATE，
+// 给它一段不占用等待预算的短窗口；未在窗口内释放的租约由 TTL 接管。
+const releaseGrace = 2 * time.Second
+
 // handlerEntry 是某任务类型的注册项：处理器 + 选项 + 该类型的默认值。
 type handlerEntry struct {
 	handler Handler
@@ -361,6 +365,11 @@ func (w *Worker) Run(ctx context.Context) error {
 //
 // 停机导致的在途取消不会写成终态 canceled：那会吞掉剩余重试次数；
 // 改为调用 Source.Release 把租约置为已过期，让其它实例（或本进程重启后）重跑。
+//
+// 时间预算：总期限取「调用方 ctx 的 deadline」与 ShutdownTimeout 的较早值，并同时响应
+// 调用方主动取消。等待在途与随后的放租约共用同一预算——预算耗尽即停止等待、放弃放租约
+// （未释放的租约由 TTL 接管），不会出现「等满 ShutdownTimeout 后再额外花 3s 放租约」。
+// 预算耗尽（而非正常排空）时返回包装 ErrShutdownTimeout 的错误，供调用方区分。
 func (w *Worker) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -383,16 +392,21 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 	exited := w.exited
 	w.mu.Unlock()
 
+	// 总截止时间：ShutdownTimeout 与调用方 deadline 取较早。
+	deadline := time.Now().Add(w.cfg.ShutdownTimeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+	budgetCtx, budgetCancel := context.WithDeadline(ctx, deadline)
+	defer budgetCancel()
+
 	// 1. 先停认领：取消取任务 ctx，让 fetcher 与空闲槽退出。
 	w.fetchStop.Store(true)
 	if fetchCancel != nil {
 		fetchCancel()
 	}
 
-	// 2. 等在途任务收尾，最多 ShutdownTimeout（或调用方 ctx 更早结束）。
-	timer := time.NewTimer(w.cfg.ShutdownTimeout)
-	defer timer.Stop()
-
+	// 2. 等在途任务收尾，最多到 deadline（budgetCtx 已合并调用方 ctx 与 ShutdownTimeout）。
 	done := make(chan struct{})
 	go func() {
 		if exited != nil {
@@ -401,25 +415,44 @@ func (w *Worker) Shutdown(ctx context.Context) error {
 		close(done)
 	}()
 
+	timedOut := false
 	select {
 	case <-done:
-	case <-timer.C:
-	case <-ctx.Done():
+	case <-budgetCtx.Done():
+		timedOut = true
 	}
 
-	// 3. 对仍未收尾的任务放租约（Release 把 lease_until 置为现在），让接管方尽快接手。
-	w.releaseInflight()
+	// 预算耗尽：取消执行上下文让响应 ctx 的 handler 尽快结束，但**不再等待**（严格守住总期限）。
+	// 未收尾的租约交给下面的释放或 TTL；对外以 ErrShutdownTimeout 表明「未在预算内排空」。
+	if timedOut && baseCancel != nil {
+		baseCancel()
+	}
 
-	// 4. 收尾：释放执行上下文（未收尾任务的 goroutine 会感知取消而结束）。
+	// 3. 放租约：在剩余预算内进行；预算已尽时用一段固定的短宽限（Release 只是一次快速
+	// DB UPDATE，不影响总期限的语义，因为它是停机收尾动作而非等待）。未释放的租约由 TTL 接管。
+	releaseDeadline := deadline
+	if timedOut {
+		if grace := time.Now().Add(releaseGrace); grace.After(releaseDeadline) {
+			releaseDeadline = grace
+		}
+	}
+	releaseCtx, releaseCancel := context.WithDeadline(context.WithoutCancel(ctx), releaseDeadline)
+	w.releaseInflight(releaseCtx)
+	releaseCancel()
+
+	// 4. 收尾：释放执行上下文（若上面未取消则在此取消；未收尾任务的 goroutine 会感知取消而结束）。
 	if baseCancel != nil {
 		baseCancel()
 	}
 
+	if timedOut {
+		return fmt.Errorf("%w: in-flight tasks did not drain within budget", gasync.ErrShutdownTimeout)
+	}
 	return nil
 }
 
-// releaseInflight 对仍标记为在途的任务调用 src.Release 放弃租约。
-func (w *Worker) releaseInflight() {
+// releaseInflight 对仍标记为在途的任务调用 src.Release 放弃租约，受 budgetCtx 剩余时间约束。
+func (w *Worker) releaseInflight(budgetCtx context.Context) {
 	w.mu.Lock()
 	tasks := make([]*gasync.AsyncTask, 0, len(w.inflightTasks))
 	for asyncTask := range w.inflightTasks {
@@ -428,16 +461,21 @@ func (w *Worker) releaseInflight() {
 	w.mu.Unlock()
 
 	for _, t := range tasks {
-		w.releaseTask(t)
+		if budgetCtx.Err() != nil {
+			// 剩余预算已尽：剩余租约交由 TTL 接管。
+			return
+		}
+		w.releaseTask(budgetCtx, t)
 	}
 }
 
 // releaseTask 放弃单条任务的租约；失败只记日志（接手方最晚等租约过期也会拿到）。
-func (w *Worker) releaseTask(t *gasync.AsyncTask) {
+// 单条释放的超时取 budgetCtx 的剩余时间与 3s 之中较短者。
+func (w *Worker) releaseTask(budgetCtx context.Context, t *gasync.AsyncTask) {
 	if t == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(budgetCtx, 3*time.Second)
 	defer cancel()
 	if err := w.src.Release(ctx, t); err != nil {
 		w.logger.Warnw(ctx, "gasync worker release lease failed",
@@ -509,13 +547,13 @@ func (w *Worker) fetchLoop(taskType string, ready chan chan *gasync.AsyncTask) {
 
 		// 3. 交付给持有的槽（缓冲 1，必不阻塞）。停机则放租约退出。
 		if w.fetchCtx.Err() != nil {
-			w.releaseTask(asyncTask)
+			w.releaseTask(context.Background(), asyncTask)
 			return
 		}
 		select {
 		case slot <- asyncTask:
 		case <-w.fetchCtx.Done():
-			w.releaseTask(asyncTask)
+			w.releaseTask(context.Background(), asyncTask)
 			return
 		}
 	}
@@ -538,7 +576,7 @@ func (w *Worker) slotLoop(taskType string, jobs chan *gasync.AsyncTask, ready ch
 		select {
 		case asyncTask := <-jobs:
 			if asyncTask != nil {
-				w.releaseTask(asyncTask)
+				w.releaseTask(context.Background(), asyncTask)
 			}
 		default:
 		}

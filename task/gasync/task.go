@@ -64,6 +64,7 @@ type AsyncTask struct {
 	BizType     string
 	BizID       string
 	// ChainID 任务链 ID（空串=独立任务）。同一条业务链的多个 step 共享同一 ChainID。
+	// 落库时独立任务写 SQL NULL（非空串）；本字段对外仍以空串表示"无链"。
 	ChainID string
 	// Step 步骤序号，从 0 开始；独立任务恒为 0。
 	Step int
@@ -161,10 +162,8 @@ type AsyncTaskSpec struct {
 	ActorID string
 	BizType string
 	BizID   string
-	// ChainID 可选：指定任务链；为空时独立任务（SubmitAfter 会自动继承上游 ChainID）。
-	ChainID string
-	// Step 可选：步骤序号，默认 0。
-	Step int
+	// 注意：不再暴露 ChainID / Step。步骤链只经 SubmitAfter 追加（线性链，唯一后继），
+	// Submit 恒创建独立任务。链标识与序号由 SubmitAfter 内部按上游推导。
 	// Labels 可选：通用业务维度键值（如 app_group/company_id/uin），落 labels 列，可被 AsyncTaskCond 精确过滤。
 	Labels    map[string]string
 	RequestID string // 可选，覆盖从 ctx 取的 request id

@@ -233,6 +233,9 @@ func (d Dialect) rowLockClause() string {
 	}
 }
 
+// RowLockClause 导出包装：供 manager 在执行「读-判-写」事务（如 SubmitAfter 锁上游）时复用。
+func (d Dialect) RowLockClause() string { return d.rowLockClause() }
+
 // emptyKeyExpr 返回「空串归一为 NULL」的表达式，用于 uniq_key 写入。
 //
 // 直接写空串会让唯一索引把所有「不带幂等键」的任务视作同一个键，

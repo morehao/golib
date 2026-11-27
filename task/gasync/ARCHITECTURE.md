@@ -277,7 +277,7 @@ sequenceDiagram
 | `uniq_key` | varchar(128) null | 活跃期域内唯一，空串写 NULL |
 | `generation`/`attempt`/`max_attempts` | int | 重放轮次 / 本轮已试 / 上限 |
 | `lease_until` / `worker_id` | datetime / varchar | 租约到期 / 持有者（C1 真相列） |
-| `chain_id`/`step`/`prev_step` | varchar/int/int | 任务链；`prev_step=-1` 为首步 |
+| `chain_id`/`step`/`prev_step` | varchar/int/int | 任务链；`chain_id=NULL` 为独立任务，`prev_step=-1` 为首步 |
 | `next_run_at` | datetime | 最早可认领时间 |
 
 **索引与所服务的查询**（每条回指具体查询）：
@@ -291,6 +291,7 @@ sequenceDiagram
 | `idx_core_async_task_biz_type_biz_id` | 管理面按业务对象查（`AsyncTaskCond{BizType,BizID}`） |
 | `idx_core_async_task_scope_created_by_created_at` | 按 scope + created_by 拉「我的任务」倒序分页 |
 | `idx_core_async_task_chain_id_step` | 任务链前序 step 判成功（认领 ① 子查询） |
+| `uk_core_async_task_chain_step` | `UNIQUE(chain_id, step)`：线性链唯一后继（兜底并发追加）；独立任务 chain_id=NULL 不参与（三方言唯一索引中 NULL 互异） |
 | `idx_core_async_task_scope_uniq_key` | 幂等冲突回查（`findByUniqKey`，普通非唯一索引） |
 | `uk_core_async_task_active_uniq` | 活跃期唯一（PG 部分索引 / MySQL 生成列 `uniq_key_active`，仅 pending/running 非 NULL，故终态后同键可重建；由 `MigrateActiveUniqIndex` 补建） |
 

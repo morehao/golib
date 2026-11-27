@@ -49,10 +49,14 @@ type CoreAsyncTask struct {
 	BizType     string `gorm:"column:biz_type;type:varchar(64);not null;default:'';index:idx_core_async_task_biz_type_biz_id,priority:1;comment:业务类型"`
 	BizID       string `gorm:"column:biz_id;type:varchar(64);not null;default:'';index:idx_core_async_task_biz_type_biz_id,priority:2;comment:业务 ID"`
 
-	// 任务链（步骤化）。独立任务：chain_id=''、step=0、prev_step=-1。
-	ChainID  string `gorm:"column:chain_id;type:varchar(36);not null;default:'';index:idx_core_async_task_chain_id_step,priority:1;comment:任务链 ID（空=独立任务）"`
-	Step     int32  `gorm:"column:step;not null;default:0;index:idx_core_async_task_chain_id_step,priority:2;comment:步骤序号"`
-	PrevStep int32  `gorm:"column:prev_step;not null;default:-1;comment:前序步骤序号（-1=首步）"`
+	// 任务链（步骤化）。独立任务：chain_id=NULL、step=0、prev_step=-1。
+	//
+	// chain_id 用 *string：独立任务落 SQL NULL（不用「等于自身 ID」的哨兵）。UNIQUE(chain_id, step)
+	// 依赖三方言唯一索引中 NULL 互异，故多条独立任务 (NULL, step) 可共存；链成员 chain_id 非空、
+	// 各 step 唯一。去掉 not null;default:''，使 NULL 能真实落库。
+	ChainID  *string `gorm:"column:chain_id;type:varchar(36);index:idx_core_async_task_chain_id_step,priority:1;uniqueIndex:uk_core_async_task_chain_step,priority:1;comment:任务链 ID（NULL=独立任务）"`
+	Step     int32   `gorm:"column:step;not null;default:0;index:idx_core_async_task_chain_id_step,priority:2;uniqueIndex:uk_core_async_task_chain_step,priority:2;comment:步骤序号"`
+	PrevStep int32   `gorm:"column:prev_step;not null;default:-1;comment:前序步骤序号（-1=首步）"`
 
 	Generation  int32 `gorm:"column:generation;not null;default:1;comment:重放轮次"`
 	Attempt     int32 `gorm:"column:attempt;not null;default:0;comment:本轮已尝试次数"`

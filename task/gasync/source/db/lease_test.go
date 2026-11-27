@@ -15,7 +15,7 @@ func TestRenewOK(t *testing.T) {
 		TaskType: "invoice", Status: "running", Attempt: 1,
 		NextRunAt: time.Now().Add(-time.Minute), LeaseUntil: &past, WorkerID: "w1",
 	})
-	res, err := s.renew(ctx, id, "w1")
+	res, err := s.renew(ctx, id, "w1", "", 1, 1)
 	if err != nil {
 		t.Fatalf("renew: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestRenewLostToOtherWorker(t *testing.T) {
 		TaskType: "invoice", Status: "running", Attempt: 1,
 		NextRunAt: time.Now().Add(-time.Minute), LeaseUntil: &future, WorkerID: "w2",
 	})
-	res, err := s.renew(context.Background(), id, "w1")
+	res, err := s.renew(context.Background(), id, "w1", "", 1, 1)
 	if err != nil {
 		t.Fatalf("renew: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestRenewCanceled(t *testing.T) {
 		TaskType: "invoice", Status: "canceled", Attempt: 1,
 		NextRunAt: time.Now().Add(-time.Minute), WorkerID: "w1",
 	})
-	res, err := s.renew(context.Background(), id, "w1")
+	res, err := s.renew(context.Background(), id, "w1", "", 1, 1)
 	if err != nil {
 		t.Fatalf("renew: %v", err)
 	}

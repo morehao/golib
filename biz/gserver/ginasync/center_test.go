@@ -150,7 +150,10 @@ func TestCenterHTTP_ShutdownReleasesLease(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("远端 handler 未开始")
 	}
-	require.NoError(t, w.Shutdown(context.Background()))
+	// handler 阻塞在 <-ctx.Done()，不会「自然排空」；短 ShutdownTimeout 耗尽后取消执行上下文
+	// 并按新契约返回 ErrShutdownTimeout（预算内未排空），同时仍放租约让任务可被接管。
+	shutdownErr := w.Shutdown(context.Background())
+	require.ErrorIs(t, shutdownErr, gasync.ErrShutdownTimeout)
 
 	got, err := f.mgr.Get(ctx, task.ID)
 	require.NoError(t, err)
@@ -174,9 +177,15 @@ func TestCenterHTTP_HeartbeatOwnership(t *testing.T) {
 	claimed, err := f.mgr.FetchFor(ctx, "remote:owned", "w-owner")
 	require.NoError(t, err)
 	require.Equal(t, task.ID, claimed.ID)
+	// 认领快照：心跳必须携带 generation/attempt（否则先被必填校验判 400）。
+	gen, attempt := claimed.Generation, claimed.Attempt
+	require.Greater(t, gen, 0)
+	require.Greater(t, attempt, 0)
 
 	status := func(workerID string) int {
-		body, _ := json.Marshal(wire.HeartbeatRequest{TaskID: task.ID, WorkerID: workerID})
+		body, _ := json.Marshal(wire.HeartbeatRequest{
+			TaskID: task.ID, WorkerID: workerID, Generation: gen, Attempt: attempt,
+		})
 		resp, err := http.Post(f.base+wire.PathHeartbeat, "application/json", bytes.NewReader(body))
 		require.NoError(t, err)
 		defer func() { _ = resp.Body.Close() }()

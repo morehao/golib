@@ -125,7 +125,7 @@ func (w *Worker) process(taskType string, task *gasync.AsyncTask) {
 	if h == nil {
 		// 未注册类型不该被认领到；防御性放租约，避免占着不放。
 		w.logger.Errorw(w.baseCtx, "gasync worker handler missing", "task_type", taskType, "async_task_id", task.ID)
-		w.releaseTask(task)
+		w.releaseTask(context.Background(), task)
 		return
 	}
 	attempt := task.Attempt
@@ -229,7 +229,7 @@ func (w *Worker) process(taskType string, task *gasync.AsyncTask) {
 
 	// 停机导致的取消：不写终态（否则吞掉剩余重试次数），放租约让别的实例重跑。
 	if res.Outcome == gasync.OutcomeCanceled && w.fetchStop.Load() {
-		w.releaseTask(task)
+		w.releaseTask(context.Background(), task)
 		w.emit("released", task, attempt, res.Duration, err)
 		return
 	}

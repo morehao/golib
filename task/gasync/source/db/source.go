@@ -64,7 +64,7 @@ func (s *source) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 	if task == nil || task.ID == "" {
 		return nil
 	}
-	res, err := s.store.renew(ctx, task.ID, task.WorkerID, task.Scope)
+	res, err := s.store.renew(ctx, task.ID, task.WorkerID, task.Scope, task.Generation, task.Attempt)
 	if err != nil {
 		return err
 	}
@@ -80,14 +80,17 @@ func (s *source) Renew(ctx context.Context, task *gasync.AsyncTask) error {
 //
 // 清 worker_id 是必要的：被放弃的那次执行若稍后才返回，Save 的所有权校验会命中 0 行
 // 而返回 ErrLeaseLost，从而不会执行钩子。
+//
+// generation/attempt 一并作为条件：迟到的旧快照（同一 worker 已重新认领出下一次尝试）
+// 不得释放新尝试的租约——只命中「本次认领」那一行，未命中即幂等无操作。
 func (s *source) Release(ctx context.Context, task *gasync.AsyncTask) error {
 	if task == nil || task.ID == "" {
 		return nil
 	}
 	sql := fmt.Sprintf(`UPDATE %s SET lease_until = %s, worker_id = ''
-WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running'`,
+WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running' AND generation = ? AND attempt = ?`,
 		CoreAsyncTaskTableName, s.dialect.nowValueExpr())
-	return s.db.WithContext(ctx).Exec(sql, task.ID, task.WorkerID, task.Scope).Error
+	return s.db.WithContext(ctx).Exec(sql, task.ID, task.WorkerID, task.Scope, task.Generation, task.Attempt).Error
 }
 
 // Reap 运行一次回收（① 收口残留尝试行、② 判死次数用尽），返回处理的行数。

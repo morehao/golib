@@ -29,9 +29,12 @@ type Task struct {
 	// Scope 执行期需要建立的作用域（隔离维度）。缺省（旧中心）按平台值处理。
 	Scope string `json:"scope,omitempty"`
 	// AppID 业务线标识。执行期 worker 以它注入 handler ctx（gormplugin.WithApp）。
-	AppID       string `json:"app_id,omitempty"`
-	Priority    int    `json:"priority"`
-	Payload     []byte `json:"payload"`
+	AppID    string `json:"app_id,omitempty"`
+	Priority int    `json:"priority"`
+	Payload  []byte `json:"payload"`
+	// Generation / Attempt 标识「这次认领」的身份（ClaimRef 快照）。三处回传（Heartbeat/
+	// Callback/Release）必须原样带回，中心侧以它们作为数据库条件写入，迟到的旧快照会被拒。
+	Generation  int    `json:"generation"`
 	Attempt     int    `json:"attempt"`
 	MaxAttempts int    `json:"max_attempts"`
 	TimeoutMS   int64  `json:"timeout_ms"`
@@ -51,6 +54,7 @@ func FromAsyncTask(t *gasync.AsyncTask) *Task {
 		AppID:       t.AppID,
 		Priority:    t.Priority,
 		Payload:     t.Payload,
+		Generation:  t.Generation,
 		Attempt:     t.Attempt,
 		MaxAttempts: t.MaxAttempts,
 		TimeoutMS:   t.Timeout.Milliseconds(),
@@ -79,6 +83,7 @@ func (w *Task) ToAsyncTask() *gasync.AsyncTask {
 		AppID:       w.AppID,
 		Priority:    w.Priority,
 		Payload:     w.Payload,
+		Generation:  w.Generation,
 		Attempt:     w.Attempt,
 		MaxAttempts: w.MaxAttempts,
 		Timeout:     time.Duration(w.TimeoutMS) * time.Millisecond,
@@ -100,9 +105,13 @@ type FetchResponse struct {
 }
 
 // HeartbeatRequest 是 Heartbeat 的请求体。
+//
+// Generation / Attempt 必填：中心侧以它们作为续租的数据库条件，缺失即视为无效请求。
 type HeartbeatRequest struct {
-	TaskID   string `json:"task_id"`
-	WorkerID string `json:"worker_id"`
+	TaskID     string `json:"task_id"`
+	WorkerID   string `json:"worker_id"`
+	Generation int    `json:"generation"`
+	Attempt    int    `json:"attempt"`
 }
 
 // CallbackRequest 是 Callback 的请求体：一次执行结果的回传。
@@ -110,9 +119,13 @@ type HeartbeatRequest struct {
 // Status 取 gasync.Outcome（succeeded/failed/skipped/canceled），Failure 是可选的
 // 失败分类（handler_error/timeout/panic/...），有了它中心才能把 timeout 记成
 // StatusTimeout 而不是普通的 failed。DurationMS 是可选的本次执行耗时。
+//
+// Generation / Attempt 必填：中心侧以它们作为写结果的数据库条件，迟到旧快照会被拒。
 type CallbackRequest struct {
 	TaskID     string `json:"task_id"`
 	WorkerID   string `json:"worker_id"`
+	Generation int    `json:"generation"`
+	Attempt    int    `json:"attempt"`
 	Status     string `json:"status"`
 	Failure    string `json:"failure,omitempty"`
 	Result     []byte `json:"result,omitempty"`
@@ -121,9 +134,13 @@ type CallbackRequest struct {
 }
 
 // ReleaseRequest 是 Release 的请求体：主动放弃所有权。
+//
+// Generation / Attempt 必填：中心侧以它们作为释放的数据库条件，旧快照不得释放新尝试的租约。
 type ReleaseRequest struct {
-	TaskID   string `json:"task_id"`
-	WorkerID string `json:"worker_id"`
+	TaskID     string `json:"task_id"`
+	WorkerID   string `json:"worker_id"`
+	Generation int    `json:"generation"`
+	Attempt    int    `json:"attempt"`
 }
 
 // ParseOutcome 把回传的 status 解析成 Outcome。

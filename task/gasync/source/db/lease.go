@@ -31,20 +31,24 @@ var terminalStatuses = []string{
 	string(gasync.StatusTimeout),
 }
 
-// renew 续租一次：仅当仍是本 worker 持有且 running 时更新 lease_until=now+LeaseTTL。
+// TerminalStatuses 导出终态集合（同一份），供 manager 的 isTerminal 与 Replay 的 IN 子句
+// 同源驱动，避免「isTerminal 认 timeout、Replay 的 IN 却漏 timeout」这类漂移。
+func TerminalStatuses() []string { return terminalStatuses }
+
+// renew 续租一次：仅当仍是本 worker 持有、running、且 generation/attempt 与本快照一致时
+// 更新 lease_until=now+LeaseTTL。
 //
-// RowsAffected==0 说明已失权（被接管、被取消、已终态）。此时读回状态区分原因：
+// generation/attempt 条件保证同一 worker 重新认领出下一次尝试后，上一个尝试的迟到续租
+// 不会把新尝试的租约「续」上——旧快照一律 RowsAffected==0，按失权处理。
+//
+// RowsAffected==0 说明已失权（被接管、被取消、已终态、或旧快照）。此时读回状态区分原因：
 // canceled → RenewCanceled；其余 → RenewLeaseExpired。没有这条条件，
 // Cancel 在跨实例上完全无效（internals「续租」）。
-func (s *store) renew(ctx context.Context, id, workerID string, scope ...string) (RenewResult, error) {
-	sc := ""
-	if len(scope) > 0 {
-		sc = scope[0]
-	}
+func (s *store) renew(ctx context.Context, id, workerID, scope string, generation, attempt int) (RenewResult, error) {
 	sql := fmt.Sprintf(`UPDATE %s SET lease_until = %s
-WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running'`,
+WHERE id = ? AND worker_id = ? AND scope_key = ? AND status = 'running' AND generation = ? AND attempt = ?`,
 		CoreAsyncTaskTableName, s.dialect.afterExpr())
-	res := s.db.WithContext(ctx).Exec(sql, s.dialect.afterArg(s.leaseTTL), id, workerID, sc)
+	res := s.db.WithContext(ctx).Exec(sql, s.dialect.afterArg(s.leaseTTL), id, workerID, scope, generation, attempt)
 	if res.Error != nil {
 		return RenewOK, res.Error
 	}
@@ -80,8 +84,9 @@ func (s *store) reapStaleRuns(ctx context.Context, batch int) (int64, error) {
 	}
 	nowVal := s.dialect.nowValueExpr()
 
-	// ① SELECT 候选（关联 asyncTask 表判归属）。
-	selSQL := fmt.Sprintf(`SELECT r.id AS id, j.lease_until AS lease_until
+	// ① SELECT 候选（关联 asyncTask 表判归属）。带出 generation/attempt，供 UPDATE 时再校验，
+	// 防止「SELECT 到 UPDATE 之间该尝试被重新认领（attempt+1）」后被误收口。
+	selSQL := fmt.Sprintf(`SELECT r.id AS id, r.generation AS generation, r.attempt AS attempt, j.lease_until AS lease_until
 FROM %s r JOIN %s j
   ON j.id = r.async_task_id AND j.generation = r.generation
 WHERE r.status = 'running'
@@ -91,6 +96,8 @@ LIMIT ?`,
 
 	type staleRow struct {
 		ID         string
+		Generation int
+		Attempt    int
 		LeaseUntil *string
 	}
 	var stale []staleRow
@@ -101,15 +108,15 @@ LIMIT ?`,
 		return 0, nil
 	}
 
-	// 逐条带条件 UPDATE。
+	// 逐条带条件 UPDATE：除状态外再校验 generation/attempt，确保只收口「同一次尝试」。
 	var affected int64
 	for _, r := range stale {
 		// finished_at = LEAST(COALESCE(lease_until, now), now)
 		finExpr, args := s.leastLeaseOrNow(r.LeaseUntil, nowVal)
 		updSQL := fmt.Sprintf(`UPDATE %s
 SET status = 'failed', failure_kind = 'lease_expired', finished_at = %s
-WHERE id = ? AND status = 'running'`, CoreAsyncTaskRunTableName, finExpr)
-		args = append(args, r.ID)
+WHERE id = ? AND status = 'running' AND generation = ? AND attempt = ?`, CoreAsyncTaskRunTableName, finExpr)
+		args = append(args, r.ID, r.Generation, r.Attempt)
 		res := s.db.WithContext(ctx).Exec(updSQL, args...)
 		if res.Error != nil {
 			return affected, res.Error

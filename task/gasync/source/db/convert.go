@@ -28,6 +28,10 @@ func asyncTaskRowToDomain(r *CoreAsyncTask) *gasync.AsyncTask {
 	if r.UniqKey != nil {
 		uniq = *r.UniqKey
 	}
+	chainID := ""
+	if r.ChainID != nil {
+		chainID = *r.ChainID
+	}
 	j := &gasync.AsyncTask{
 		ID:          r.ID,
 		Type:        r.TaskType,
@@ -40,7 +44,7 @@ func asyncTaskRowToDomain(r *CoreAsyncTask) *gasync.AsyncTask {
 		LastActorID: r.LastActorID,
 		BizType:     r.BizType,
 		BizID:       r.BizID,
-		ChainID:     r.ChainID,
+		ChainID:     chainID,
 		Step:        int(r.Step),
 		PrevStep:    int(r.PrevStep),
 		Generation:  int(r.Generation),
